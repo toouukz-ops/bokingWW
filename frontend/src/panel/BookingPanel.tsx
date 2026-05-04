@@ -51,6 +51,22 @@ const CATALOG_DEFAULTS = [
     bookable: true
   }
 ] as const;
+const AMENITY_OPTIONS = [
+  "Wi-Fi",
+  "Кондиционер",
+  "Душ",
+  "Санузел",
+  "Холодильник",
+  "Телевизор",
+  "Фен",
+  "Полотенца",
+  "Постельное белье",
+  "Балкон",
+  "Вид на горы",
+  "Кухня",
+  "Чайник",
+  "Парковка"
+];
 
 function getMaxPanelWidth() {
   return Math.min(MAX_WIDTH, Math.floor(window.innerWidth * 0.62));
@@ -199,6 +215,14 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
     setRooms((currentRooms) =>
       currentRooms.map((room) => (room.id === activeRoom.id ? { ...room, ...patch } : room))
     );
+  }
+
+  function toggleAmenity(amenity: string) {
+    const amenities = parseAmenities(activeRoom.amenities);
+    const nextAmenities = amenities.includes(amenity)
+      ? amenities.filter((item) => item !== amenity)
+      : amenities.concat(amenity);
+    updateActiveRoom({ amenities: nextAmenities.join(", ") });
   }
 
   function moveActiveRoom(direction: -1 | 1) {
@@ -425,10 +449,28 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                 </label>
                 <label className="gpb-wide-label">
                   Удобства
+                  <div className="gpb-amenity-grid">
+                    {AMENITY_OPTIONS.map((amenity) => {
+                      const isActive = parseAmenities(activeRoom.amenities).includes(amenity);
+                      return (
+                        <button
+                          className={isActive ? "is-active" : ""}
+                          key={amenity}
+                          type="button"
+                          onClick={() => toggleAmenity(amenity)}
+                        >
+                          {amenity}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </label>
+                <label className="gpb-wide-label">
+                  Дополнительно
                   <input
-                    placeholder="Wi-Fi, кондиционер, душ, холодильник, телевизор"
-                    value={activeRoom.amenities}
-                    onChange={(event) => updateActiveRoom({ amenities: event.target.value })}
+                    placeholder="Например: теплый пол, отдельный вход"
+                    value={getCustomAmenities(activeRoom.amenities)}
+                    onChange={(event) => updateCustomAmenities(activeRoom.amenities, event.target.value, updateActiveRoom)}
                   />
                 </label>
                 <label className="gpb-wide-label">
@@ -575,4 +617,27 @@ function buildWhatsAppPreview(room: Room) {
   const description = room.description || "Уютный вариант для отдыха.";
   const amenities = room.amenities ? `\nУдобства: ${room.amenities}` : "";
   return `${room.title}\n${description}${amenities}\nЦена: ${price}`;
+}
+
+function parseAmenities(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getCustomAmenities(value: string) {
+  return parseAmenities(value)
+    .filter((item) => !AMENITY_OPTIONS.includes(item))
+    .join(", ");
+}
+
+function updateCustomAmenities(
+  currentAmenities: string,
+  customAmenities: string,
+  updateRoom: (patch: Partial<Room>) => void
+) {
+  const selectedAmenities = parseAmenities(currentAmenities).filter((item) => AMENITY_OPTIONS.includes(item));
+  const customItems = parseAmenities(customAmenities);
+  updateRoom({ amenities: selectedAmenities.concat(customItems).join(", ") });
 }

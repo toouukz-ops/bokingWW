@@ -1,0 +1,12 @@
+{
+  "name": "gpb-whatsapp-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install --prefix frontend && npm install --prefix backend",
+    "build": "npm run build --prefix frontend",
+    "dev:backend": "npm run dev --prefix backend",
+    "typecheck": "npm run typecheck --prefix frontend && npm run typecheck --prefix backend"
+  }
+}
+

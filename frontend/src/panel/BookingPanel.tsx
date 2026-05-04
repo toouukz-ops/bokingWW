@@ -147,7 +147,7 @@ export function BookingPanel() {
 function RoomCatalogModal({ onClose }: { onClose: () => void }) {
   const [rooms, setRooms] = useState<Room[]>(() => ROOM_NUMBERS.map(createEmptyRoom));
   const [selectedRoom, setSelectedRoom] = useState(ROOM_NUMBERS[0]);
-  const [loadState, setLoadState] = useState<"loading" | "ready" | "offline">("loading");
+  const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const activeRoom = rooms.find((room) => room.number === selectedRoom) ?? rooms[0];
 
@@ -157,7 +157,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
         setRooms(mergeRooms(items));
         setLoadState("ready");
       })
-      .catch(() => setLoadState("offline"));
+      .catch(() => setLoadState("ready"));
   }, []);
 
   function updateActiveRoom(patch: Partial<Room>) {
@@ -185,9 +185,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
           <div>
             <strong>Каталог номеров</strong>
             <span>
-              {loadState === "offline"
-                ? "Backend недоступен, сохранение не сработает."
-                : "Фото, видео, цены, вместимость и описание для ответов клиентам."}
+              Фото, видео, цены, вместимость и описание для ответов клиентам.
             </span>
           </div>
           <button type="button" onClick={onClose} title="Закрыть">

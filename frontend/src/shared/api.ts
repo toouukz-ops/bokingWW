@@ -1,6 +1,7 @@
 import type { BookingDraft, Room } from "./types";
 
 const API_BASE_URL = "http://127.0.0.1:8765";
+const LOCAL_ROOMS_STORAGE_KEY = "gpb-booking-rooms";
 
 export async function getHealth(): Promise<{ ok: boolean; service: string }> {
   const response = await fetch(`${API_BASE_URL}/api/health`);
@@ -25,23 +26,51 @@ export async function createDraftFromMessage(message: string): Promise<BookingDr
 }
 
 export async function getRooms(): Promise<Room[]> {
-  const response = await fetch(`${API_BASE_URL}/api/rooms`);
-  if (!response.ok) {
-    throw new Error(`Rooms request failed: ${response.status}`);
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/rooms`);
+    if (!response.ok) {
+      throw new Error(`Rooms request failed: ${response.status}`);
+    }
+    const rooms = (await response.json()) as Room[];
+    await saveLocalRooms(rooms);
+    return rooms;
+  } catch {
+    return getLocalRooms();
   }
-  return response.json();
 }
 
 export async function saveRoom(room: Room): Promise<Room> {
-  const response = await fetch(`${API_BASE_URL}/api/rooms/${encodeURIComponent(room.number)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(room)
-  });
+  const localRooms = await getLocalRooms();
+  await saveLocalRooms(localRooms.filter((item) => item.number !== room.number).concat(room));
 
-  if (!response.ok) {
-    throw new Error(`Room save failed: ${response.status}`);
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/rooms/${encodeURIComponent(room.number)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(room)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Room save failed: ${response.status}`);
+    }
+
+    return response.json();
+  } catch {
+    return room;
   }
+}
 
-  return response.json();
+function getLocalRooms(): Promise<Room[]> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([LOCAL_ROOMS_STORAGE_KEY], (result) => {
+      const rooms = result[LOCAL_ROOMS_STORAGE_KEY];
+      resolve(Array.isArray(rooms) ? rooms : []);
+    });
+  });
+}
+
+function saveLocalRooms(rooms: Room[]): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [LOCAL_ROOMS_STORAGE_KEY]: rooms }, () => resolve());
+  });
 }

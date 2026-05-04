@@ -18,3 +18,21 @@ export interface BookingDraft {
   prepayment?: number;
 }
 
+export type RoomStatus = "active" | "hidden" | "repair";
+
+export interface Room {
+  number: string;
+  title: string;
+  status: RoomStatus;
+  basePrice: number;
+  floor: string;
+  capacityAdults: number;
+  capacityChildren: number;
+  extraBeds: number;
+  beds: string;
+  description: string;
+  amenities: string;
+  adminNotes: string;
+  photoPaths: string[];
+  videoPaths: string[];
+}

@@ -1,4 +1,4 @@
-import type { BookingDraft } from "./types";
+import type { BookingDraft, Room } from "./types";
 
 const API_BASE_URL = "http://127.0.0.1:8765";
 
@@ -24,3 +24,24 @@ export async function createDraftFromMessage(message: string): Promise<BookingDr
   return response.json();
 }
 
+export async function getRooms(): Promise<Room[]> {
+  const response = await fetch(`${API_BASE_URL}/api/rooms`);
+  if (!response.ok) {
+    throw new Error(`Rooms request failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function saveRoom(room: Room): Promise<Room> {
+  const response = await fetch(`${API_BASE_URL}/api/rooms/${encodeURIComponent(room.number)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(room)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Room save failed: ${response.status}`);
+  }
+
+  return response.json();
+}

@@ -12,10 +12,12 @@ import {
   X
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { getHealth } from "../shared/api";
+import { getHealth, getRooms, saveRoom } from "../shared/api";
+import type { Room, RoomStatus } from "../shared/types";
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 960;
+const ROOM_NUMBERS = ["101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "115"];
 
 function getMaxPanelWidth() {
   return Math.min(MAX_WIDTH, Math.floor(window.innerWidth * 0.62));
@@ -143,8 +145,38 @@ export function BookingPanel() {
 }
 
 function RoomCatalogModal({ onClose }: { onClose: () => void }) {
-  const rooms = ["101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "115"];
-  const [selectedRoom, setSelectedRoom] = useState(rooms[0]);
+  const [rooms, setRooms] = useState<Room[]>(() => ROOM_NUMBERS.map(createEmptyRoom));
+  const [selectedRoom, setSelectedRoom] = useState(ROOM_NUMBERS[0]);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "offline">("loading");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const activeRoom = rooms.find((room) => room.number === selectedRoom) ?? rooms[0];
+
+  useEffect(() => {
+    getRooms()
+      .then((items) => {
+        setRooms(mergeRooms(items));
+        setLoadState("ready");
+      })
+      .catch(() => setLoadState("offline"));
+  }, []);
+
+  function updateActiveRoom(patch: Partial<Room>) {
+    setSaveState("idle");
+    setRooms((currentRooms) =>
+      currentRooms.map((room) => (room.number === activeRoom.number ? { ...room, ...patch } : room))
+    );
+  }
+
+  async function handleSave() {
+    setSaveState("saving");
+    try {
+      const savedRoom = await saveRoom(activeRoom);
+      setRooms((currentRooms) => currentRooms.map((room) => (room.number === savedRoom.number ? savedRoom : room)));
+      setSaveState("saved");
+    } catch {
+      setSaveState("error");
+    }
+  }
 
   return (
     <div className="gpb-modal-backdrop">
@@ -152,7 +184,11 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
         <header className="gpb-catalog-header">
           <div>
             <strong>Каталог номеров</strong>
-            <span>Фото, видео, цены, вместимость и описание для ответов клиентам.</span>
+            <span>
+              {loadState === "offline"
+                ? "Backend недоступен, сохранение не сработает."
+                : "Фото, видео, цены, вместимость и описание для ответов клиентам."}
+            </span>
           </div>
           <button type="button" onClick={onClose} title="Закрыть">
             <X size={20} />
@@ -163,116 +199,194 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
           <nav className="gpb-room-list" aria-label="Номера">
             {rooms.map((room) => (
               <button
-                className={room === selectedRoom ? "is-active" : ""}
-                key={room}
+                className={room.number === selectedRoom ? "is-active" : ""}
+                key={room.number}
                 type="button"
-                onClick={() => setSelectedRoom(room)}
+                onClick={() => setSelectedRoom(room.number)}
               >
                 <BedDouble size={18} />
-                <span>Номер {room}</span>
+                <span>{room.title || `Номер ${room.number}`}</span>
               </button>
             ))}
           </nav>
 
           <main className="gpb-room-editor">
-            <section className="gpb-editor-section">
-              <div className="gpb-editor-title">
-                <BedDouble size={20} />
-                <h2>Номер {selectedRoom}</h2>
-              </div>
+            <div className="gpb-room-editor-scroll">
+              <section className="gpb-editor-section">
+                <div className="gpb-editor-title">
+                  <BedDouble size={20} />
+                  <h2>Номер {activeRoom.number}</h2>
+                </div>
 
-              <div className="gpb-form-grid">
-                <label>
-                  Название
-                  <input defaultValue={`Номер ${selectedRoom}`} />
-                </label>
-                <label>
-                  Статус
-                  <select defaultValue="active">
-                    <option value="active">Активен</option>
-                    <option value="hidden">Скрыт</option>
-                    <option value="repair">Ремонт</option>
-                  </select>
-                </label>
-                <label>
-                  Базовая цена
-                  <input min="0" type="number" placeholder="20000" />
-                </label>
-                <label>
-                  Этаж
-                  <input placeholder="1 этаж" />
-                </label>
-              </div>
-            </section>
+                <div className="gpb-form-grid">
+                  <label>
+                    Название
+                    <input value={activeRoom.title} onChange={(event) => updateActiveRoom({ title: event.target.value })} />
+                  </label>
+                  <label>
+                    Статус
+                    <select
+                      value={activeRoom.status}
+                      onChange={(event) => updateActiveRoom({ status: event.target.value as RoomStatus })}
+                    >
+                      <option value="active">Активен</option>
+                      <option value="hidden">Скрыт</option>
+                      <option value="repair">Ремонт</option>
+                    </select>
+                  </label>
+                  <label>
+                    Базовая цена
+                    <input
+                      min="0"
+                      type="number"
+                      value={activeRoom.basePrice}
+                      onChange={(event) => updateActiveRoom({ basePrice: toNumber(event.target.value, 0) })}
+                    />
+                  </label>
+                  <label>
+                    Этаж
+                    <input value={activeRoom.floor} onChange={(event) => updateActiveRoom({ floor: event.target.value })} />
+                  </label>
+                </div>
+              </section>
 
-            <section className="gpb-editor-section">
-              <div className="gpb-editor-title">
-                <Users size={20} />
-                <h2>Вместимость</h2>
-              </div>
-              <div className="gpb-form-grid">
-                <label>
-                  Взрослые
-                  <input min="1" type="number" defaultValue="2" />
-                </label>
-                <label>
-                  Дети
-                  <input min="0" type="number" defaultValue="0" />
-                </label>
-                <label>
-                  Доп. места
-                  <input min="0" type="number" defaultValue="0" />
-                </label>
-                <label>
-                  Кровати
-                  <input placeholder="1 двуспальная" />
-                </label>
-              </div>
-            </section>
+              <section className="gpb-editor-section">
+                <div className="gpb-editor-title">
+                  <Users size={20} />
+                  <h2>Вместимость</h2>
+                </div>
+                <div className="gpb-form-grid">
+                  <label>
+                    Взрослые
+                    <input
+                      min="1"
+                      type="number"
+                      value={activeRoom.capacityAdults}
+                      onChange={(event) => updateActiveRoom({ capacityAdults: toNumber(event.target.value, 1) })}
+                    />
+                  </label>
+                  <label>
+                    Дети
+                    <input
+                      min="0"
+                      type="number"
+                      value={activeRoom.capacityChildren}
+                      onChange={(event) => updateActiveRoom({ capacityChildren: toNumber(event.target.value, 0) })}
+                    />
+                  </label>
+                  <label>
+                    Доп. места
+                    <input
+                      min="0"
+                      type="number"
+                      value={activeRoom.extraBeds}
+                      onChange={(event) => updateActiveRoom({ extraBeds: toNumber(event.target.value, 0) })}
+                    />
+                  </label>
+                  <label>
+                    Кровати
+                    <input value={activeRoom.beds} onChange={(event) => updateActiveRoom({ beds: event.target.value })} />
+                  </label>
+                </div>
+              </section>
 
-            <section className="gpb-editor-section">
-              <div className="gpb-editor-title">
-                <Image size={20} />
-                <h2>Медиа</h2>
-              </div>
-              <div className="gpb-media-grid">
-                <button type="button">
-                  <Image size={22} />
-                  <span>Добавить фото</span>
-                </button>
-                <button type="button">
-                  <Video size={22} />
-                  <span>Добавить видео</span>
-                </button>
-              </div>
-            </section>
+              <section className="gpb-editor-section">
+                <div className="gpb-editor-title">
+                  <Image size={20} />
+                  <h2>Медиа</h2>
+                </div>
+                <div className="gpb-media-grid">
+                  <button type="button">
+                    <Image size={22} />
+                    <span>Добавить фото</span>
+                  </button>
+                  <button type="button">
+                    <Video size={22} />
+                    <span>Добавить видео</span>
+                  </button>
+                </div>
+              </section>
 
-            <section className="gpb-editor-section">
-              <div className="gpb-editor-title">
-                <Banknote size={20} />
-                <h2>Описание и удобства</h2>
-              </div>
-              <label className="gpb-wide-label">
-                Короткое описание для WhatsApp
-                <textarea placeholder="Уютный номер, кондиционер, санузел, Wi-Fi..." />
-              </label>
-              <label className="gpb-wide-label">
-                Удобства
-                <input placeholder="Wi-Fi, кондиционер, душ, холодильник, телевизор" />
-              </label>
-              <label className="gpb-wide-label">
-                Заметки для администратора
-                <textarea placeholder="Не отправляется клиенту. Например: солнечная сторона, лучше предлагать семьям." />
-              </label>
-            </section>
+              <section className="gpb-editor-section">
+                <div className="gpb-editor-title">
+                  <Banknote size={20} />
+                  <h2>Описание и удобства</h2>
+                </div>
+                <label className="gpb-wide-label">
+                  Короткое описание для WhatsApp
+                  <textarea
+                    placeholder="Уютный номер, кондиционер, санузел, Wi-Fi..."
+                    value={activeRoom.description}
+                    onChange={(event) => updateActiveRoom({ description: event.target.value })}
+                  />
+                </label>
+                <label className="gpb-wide-label">
+                  Удобства
+                  <input
+                    placeholder="Wi-Fi, кондиционер, душ, холодильник, телевизор"
+                    value={activeRoom.amenities}
+                    onChange={(event) => updateActiveRoom({ amenities: event.target.value })}
+                  />
+                </label>
+                <label className="gpb-wide-label">
+                  Заметки для администратора
+                  <textarea
+                    placeholder="Не отправляется клиенту. Например: солнечная сторона, лучше предлагать семьям."
+                    value={activeRoom.adminNotes}
+                    onChange={(event) => updateActiveRoom({ adminNotes: event.target.value })}
+                  />
+                </label>
+              </section>
+            </div>
 
             <footer className="gpb-catalog-footer">
-              <button className="gpb-secondary" type="button">Отмена</button>
-              <button className="gpb-primary" type="button">Сохранить номер</button>
+              <span className={`gpb-save-state is-${saveState}`}>
+                {saveState === "saving"
+                  ? "Сохраняю..."
+                  : saveState === "saved"
+                    ? "Сохранено"
+                    : saveState === "error"
+                      ? "Ошибка сохранения"
+                      : loadState === "loading"
+                        ? "Загрузка каталога..."
+                        : ""}
+              </span>
+              <button className="gpb-secondary" type="button" onClick={onClose}>Закрыть</button>
+              <button className="gpb-primary" type="button" onClick={handleSave} disabled={saveState === "saving"}>
+                Сохранить номер
+              </button>
             </footer>
           </main>
         </div>
       </div>
     </div>
   );
+}
+
+function createEmptyRoom(number: string): Room {
+  return {
+    number,
+    title: `Номер ${number}`,
+    status: "active",
+    basePrice: 0,
+    floor: "",
+    capacityAdults: 2,
+    capacityChildren: 0,
+    extraBeds: 0,
+    beds: "",
+    description: "",
+    amenities: "",
+    adminNotes: "",
+    photoPaths: [],
+    videoPaths: []
+  };
+}
+
+function mergeRooms(loadedRooms: Room[]) {
+  return ROOM_NUMBERS.map((number) => loadedRooms.find((room) => room.number === number) ?? createEmptyRoom(number));
+}
+
+function toNumber(value: string, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }

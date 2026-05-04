@@ -248,6 +248,15 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-room-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.gpb-room-editor-scroll {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 20px;
 }
@@ -331,9 +340,13 @@ body.gpb-booking-panel-open #app {
 
 .gpb-catalog-footer {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 10px;
-  padding-bottom: 8px;
+  min-height: 68px;
+  padding: 12px 20px;
+  border-top: 1px solid #d8dee5;
+  background: #ffffff;
 }
 
 .gpb-catalog-footer .gpb-primary,
@@ -342,6 +355,25 @@ body.gpb-booking-panel-open #app {
   min-width: 150px;
   margin-top: 0;
   padding: 0 18px;
+}
+
+.gpb-primary:disabled {
+  cursor: default;
+  opacity: 0.68;
+}
+
+.gpb-save-state {
+  margin-right: auto;
+  color: #64707d;
+  font-size: 13px;
+}
+
+.gpb-save-state.is-saved {
+  color: #0f6b57;
+}
+
+.gpb-save-state.is-error {
+  color: #b42318;
 }
 
 @media (max-width: 900px) {

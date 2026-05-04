@@ -15,7 +15,7 @@ npm run dev
 npm run build
 ```
 
-После сборки откройте `chrome://extensions`, включите Developer mode и выберите `extension/dist` через Load unpacked.
+После сборки откройте `chrome://extensions`, включите Developer mode и выберите `frontend/dist` через Load unpacked.
 
 ## Что уже есть
 
@@ -23,4 +23,3 @@ npm run build
 - Content script для `https://web.whatsapp.com/*`.
 - Правая resizable-панель бронирования.
 - Проверка локального backend по `http://127.0.0.1:8765/api/health`.
-

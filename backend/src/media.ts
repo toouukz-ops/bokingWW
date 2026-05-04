@@ -1,11 +1,14 @@
 import type { MultipartFile } from "@fastify/multipart";
+import { execFile } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
+import { promisify } from "node:util";
 import sharp from "sharp";
 
 export const uploadsRoot = resolve("uploads");
+const execFileAsync = promisify(execFile);
 
 const allowedExtensions = new Set([
   ".jpg",
@@ -47,8 +50,11 @@ export async function saveRoomMediaFile(roomId: string, file: MultipartFile) {
   if (mediaType === "photo" && isHeicExtension(extension)) {
     const originalPath = join(roomFolder, `original-${Date.now()}-${sanitizeSegment(file.filename)}`);
     await pipeline(file.file, createWriteStream(originalPath));
-    await sharp(originalPath).rotate().jpeg({ quality: 90 }).toFile(destination);
-    await unlink(originalPath).catch(() => undefined);
+    try {
+      await convertHeicToJpeg(originalPath, destination);
+    } finally {
+      await unlink(originalPath).catch(() => undefined);
+    }
   } else {
     await pipeline(file.file, createWriteStream(destination));
   }
@@ -57,6 +63,14 @@ export async function saveRoomMediaFile(roomId: string, file: MultipartFile) {
     mediaType,
     path: `/uploads/rooms/${sanitizeSegment(roomId)}/${filename}`
   };
+}
+
+async function convertHeicToJpeg(sourcePath: string, destination: string) {
+  try {
+    await sharp(sourcePath).rotate().jpeg({ quality: 90 }).toFile(destination);
+  } catch {
+    await execFileAsync("sips", ["-s", "format", "jpeg", sourcePath, "--out", destination]);
+  }
 }
 
 export async function cropPhotoFile(roomId: string, publicPath: string, options: CropOptions) {

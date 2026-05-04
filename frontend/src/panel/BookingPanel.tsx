@@ -484,7 +484,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                   <div className="gpb-gallery">
                     {activeRoom.photoPaths.map((path, index) => (
                       <div className="gpb-gallery-item" key={path}>
-                        <img alt={`${activeRoom.title} фото ${index + 1}`} src={getMediaUrl(path)} />
+                        <MediaImage alt={`${activeRoom.title} фото ${index + 1}`} path={path} />
                         {index === 0 ? <span>Главное</span> : null}
                         <button type="button" onClick={() => handleMediaDelete(path)} title="Удалить фото">
                           <Trash2 size={16} />
@@ -493,7 +493,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                     ))}
                     {activeRoom.videoPaths.map((path) => (
                       <div className="gpb-gallery-item" key={path}>
-                        <video muted src={getMediaUrl(path)} />
+                        <MediaVideo path={path} />
                         <span>Видео</span>
                         <button type="button" onClick={() => handleMediaDelete(path)} title="Удалить видео">
                           <Trash2 size={16} />
@@ -577,7 +577,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
             <div className="gpb-preview-card">
               <div className="gpb-preview-media">
                 {activeRoom.photoPaths[0] ? (
-                  <img alt={activeRoom.title} src={getMediaUrl(activeRoom.photoPaths[0])} />
+                  <MediaImage alt={activeRoom.title} path={activeRoom.photoPaths[0]} />
                 ) : (
                   <Image size={28} />
                 )}
@@ -633,6 +633,81 @@ function createEmptyRoom(item: (typeof CATALOG_DEFAULTS)[number]): Room {
     photoPaths: [],
     videoPaths: []
   };
+}
+
+function MediaImage({ alt, path }: { alt: string; path: string }) {
+  const objectUrl = useMediaObjectUrl(path);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [path]);
+
+  if (!objectUrl || hasError) {
+    return (
+      <div className="gpb-media-placeholder">
+        <Image size={22} />
+        <span>{isHeicPath(path) ? "HEIC без превью" : "Нет превью"}</span>
+      </div>
+    );
+  }
+
+  return <img alt={alt} src={objectUrl} onError={() => setHasError(true)} />;
+}
+
+function MediaVideo({ path }: { path: string }) {
+  const objectUrl = useMediaObjectUrl(path);
+
+  if (!objectUrl) {
+    return (
+      <div className="gpb-media-placeholder">
+        <Video size={22} />
+        <span>Нет превью</span>
+      </div>
+    );
+  }
+
+  return <video muted src={objectUrl} />;
+}
+
+function useMediaObjectUrl(path: string) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    let nextObjectUrl: string | null = null;
+
+    async function loadMedia() {
+      try {
+        const response = await fetch(getMediaUrl(path));
+        if (!response.ok) {
+          throw new Error(`Media fetch failed: ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        nextObjectUrl = URL.createObjectURL(blob);
+        if (isMounted) {
+          setObjectUrl(nextObjectUrl);
+        }
+      } catch {
+        if (isMounted) {
+          setObjectUrl(null);
+        }
+      }
+    }
+
+    setObjectUrl(null);
+    loadMedia();
+
+    return () => {
+      isMounted = false;
+      if (nextObjectUrl) {
+        URL.revokeObjectURL(nextObjectUrl);
+      }
+    };
+  }, [path]);
+
+  return objectUrl;
 }
 
 function mergeRooms(loadedRooms: Room[]) {
@@ -702,6 +777,10 @@ function buildWhatsAppPreview(room: Room) {
   const description = room.description || "Уютный вариант для отдыха.";
   const amenities = room.amenities ? `\nУдобства: ${room.amenities}` : "";
   return `${room.title}\n${description}${amenities}\nЦена: ${price}`;
+}
+
+function isHeicPath(path: string) {
+  return /\.(heic|heif|hec)$/i.test(path);
 }
 
 function parseAmenities(value: string) {

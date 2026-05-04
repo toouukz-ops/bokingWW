@@ -511,6 +511,24 @@ body.gpb-booking-panel-open #app {
   object-fit: cover;
 }
 
+.gpb-media-placeholder {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  color: #64707d;
+  text-align: center;
+}
+
+.gpb-media-placeholder span {
+  position: static;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
 .gpb-gallery-item span {
   position: absolute;
   left: 8px;

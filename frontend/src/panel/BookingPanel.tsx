@@ -200,6 +200,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
   const [selectedRoomId, setSelectedRoomId] = useState(CATALOG_DEFAULTS[0].id);
   const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [mediaError, setMediaError] = useState("");
   const [isTechnicalOpen, setIsTechnicalOpen] = useState(false);
   const [focusedPriceRoomId, setFocusedPriceRoomId] = useState<string | null>(null);
   const [cropPath, setCropPath] = useState<string | null>(null);
@@ -218,6 +219,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
 
   function updateActiveRoom(patch: Partial<Room>) {
     setSaveState("idle");
+    setMediaError("");
     setRooms((currentRooms) =>
       currentRooms.map((room) => (room.id === activeRoom.id ? { ...room, ...patch } : room))
     );
@@ -264,12 +266,14 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
     if (!file) return;
 
     setSaveState("saving");
+    setMediaError("");
     try {
       const updatedRoom = await uploadRoomMedia(activeRoom, file);
       setRooms((currentRooms) => currentRooms.map((room) => (room.id === updatedRoom.id ? updatedRoom : room)));
       setSaveState("saved");
     } catch {
       setSaveState("error");
+      setMediaError("Не удалось загрузить файл. Проверьте, что backend запущен: npm run dev:backend");
     } finally {
       if (photoInputRef.current) photoInputRef.current.value = "";
       if (videoInputRef.current) videoInputRef.current.value = "";
@@ -278,12 +282,14 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
 
   async function handleMediaDelete(path: string) {
     setSaveState("saving");
+    setMediaError("");
     try {
       const updatedRoom = await deleteRoomMedia(activeRoom, path);
       setRooms((currentRooms) => currentRooms.map((room) => (room.id === updatedRoom.id ? updatedRoom : room)));
       setSaveState("saved");
     } catch {
       setSaveState("error");
+      setMediaError("Не удалось удалить файл. Проверьте, что backend запущен: npm run dev:backend");
     }
   }
 
@@ -480,6 +486,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                     <span>Добавить видео</span>
                   </button>
                 </div>
+                {mediaError ? <div className="gpb-media-error">{mediaError}</div> : null}
                 <input
                   accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,.hec"
                   hidden

@@ -224,6 +224,13 @@ body.gpb-booking-panel-open #app {
   padding: 12px;
 }
 
+.gpb-add-room-button {
+  border-color: #0f6b57 !important;
+  background: #0f6b57 !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+}
+
 .gpb-room-list button {
   display: flex;
   align-items: center;

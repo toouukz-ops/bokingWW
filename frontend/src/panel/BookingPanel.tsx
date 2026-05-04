@@ -3,6 +3,7 @@ import {
   BedDouble,
   CalendarDays,
   Crop,
+  Plus,
   Hotel,
   Image,
   ChevronLeft,
@@ -251,6 +252,18 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
     });
   }
 
+  function addRoom() {
+    setSaveState("idle");
+    setMediaError("");
+    setIsTechnicalOpen(true);
+    setRooms((currentRooms) => {
+      const nextNumber = getNextRoomNumber(currentRooms);
+      const room = createCustomRoom(nextNumber, currentRooms.length);
+      setSelectedRoomId(room.id);
+      return withSortOrder(currentRooms.concat(room));
+    });
+  }
+
   async function handleSave() {
     setSaveState("saving");
     try {
@@ -324,6 +337,10 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
 
         <div className="gpb-catalog-body">
           <nav className="gpb-room-list" aria-label="Номера">
+            <button className="gpb-add-room-button" type="button" onClick={addRoom}>
+              <Plus size={18} />
+              <span>Добавить номер</span>
+            </button>
             {rooms.map((room) => (
               <button
                 className={room.id === activeRoom.id ? "is-active" : ""}
@@ -822,6 +839,29 @@ function createEmptyRoom(item: (typeof CATALOG_DEFAULTS)[number]): Room {
   };
 }
 
+function createCustomRoom(number: string, sortOrder: number): Room {
+  return {
+    id: `room-custom-${Date.now()}`,
+    number,
+    title: `Номер ${number}`,
+    sortOrder,
+    category: "guest-room",
+    bookable: true,
+    status: "active",
+    basePrice: 0,
+    floor: "",
+    capacityAdults: 2,
+    capacityChildren: 0,
+    extraBeds: 0,
+    beds: "",
+    description: "",
+    amenities: "",
+    adminNotes: "",
+    photoPaths: [],
+    videoPaths: []
+  };
+}
+
 function MediaImage({ alt, path }: { alt: string; path: string }) {
   const objectUrl = useMediaObjectUrl(path);
   const [hasError, setHasError] = useState(false);
@@ -924,6 +964,15 @@ function withSortOrder(rooms: Room[]) {
     ...room,
     sortOrder: index
   }));
+}
+
+function getNextRoomNumber(rooms: Room[]) {
+  const maxNumber = rooms.reduce((max, room) => {
+    const value = Number(room.number);
+    return Number.isFinite(value) ? Math.max(max, value) : max;
+  }, 0);
+
+  return String(Math.max(maxNumber + 1, 116));
 }
 
 function getCategoryLabel(category: Room["category"]) {

@@ -3,7 +3,11 @@ import { useEffect, useMemo, useState } from "react";
 import { getHealth } from "../shared/api";
 
 const MIN_WIDTH = 320;
-const MAX_WIDTH = 720;
+const MAX_WIDTH = 960;
+
+function getMaxPanelWidth() {
+  return Math.min(MAX_WIDTH, Math.floor(window.innerWidth * 0.62));
+}
 
 export function BookingPanel() {
   const [isOpen, setIsOpen] = useState(true);
@@ -15,6 +19,22 @@ export function BookingPanel() {
       .then(() => setBackendState("online"))
       .catch(() => setBackendState("offline"));
   }, []);
+
+  useEffect(() => {
+    if (!isOpen) {
+      document.body.classList.remove("gpb-booking-panel-open");
+      document.documentElement.style.removeProperty("--gpb-booking-panel-width");
+      return;
+    }
+
+    document.body.classList.add("gpb-booking-panel-open");
+    document.documentElement.style.setProperty("--gpb-booking-panel-width", `${width}px`);
+
+    return () => {
+      document.body.classList.remove("gpb-booking-panel-open");
+      document.documentElement.style.removeProperty("--gpb-booking-panel-width");
+    };
+  }, [isOpen, width]);
 
   const statusText = useMemo(() => {
     if (backendState === "online") return "API online";
@@ -29,7 +49,7 @@ export function BookingPanel() {
 
     function onMove(moveEvent: PointerEvent) {
       const nextWidth = startWidth + startX - moveEvent.clientX;
-      setWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, nextWidth)));
+      setWidth(Math.min(getMaxPanelWidth(), Math.max(MIN_WIDTH, nextWidth)));
     }
 
     function onUp() {
@@ -103,4 +123,3 @@ export function BookingPanel() {
     </aside>
   );
 }
-

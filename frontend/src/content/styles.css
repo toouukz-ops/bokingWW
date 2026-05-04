@@ -4,11 +4,18 @@
   right: 0;
   z-index: 999999;
   height: 100vh;
+  width: var(--gpb-booking-panel-width, 0);
   pointer-events: none;
 }
 
 #gpb-booking-extension-root * {
   box-sizing: border-box;
+}
+
+body.gpb-booking-panel-open #app {
+  width: calc(100vw - var(--gpb-booking-panel-width, 420px)) !important;
+  max-width: calc(100vw - var(--gpb-booking-panel-width, 420px)) !important;
+  transition: width 120ms ease, max-width 120ms ease;
 }
 
 .gpb-panel {

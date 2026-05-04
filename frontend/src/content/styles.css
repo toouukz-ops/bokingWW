@@ -155,3 +155,215 @@ body.gpb-booking-panel-open #app {
   background: #ffffff;
   color: #25313d;
 }
+
+.gpb-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000000;
+  display: flex;
+  background: rgb(15 23 32 / 42%);
+  pointer-events: auto;
+}
+
+.gpb-catalog-modal {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  background: #f4f6f8;
+  color: #16202a;
+  font: 14px/1.4 Arial, sans-serif;
+}
+
+.gpb-catalog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 72px;
+  padding: 14px 20px;
+  border-bottom: 1px solid #d8dee5;
+  background: #ffffff;
+}
+
+.gpb-catalog-header strong {
+  display: block;
+  font-size: 18px;
+}
+
+.gpb-catalog-header span {
+  display: block;
+  margin-top: 2px;
+  color: #64707d;
+  font-size: 13px;
+}
+
+.gpb-catalog-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid #d7dce2;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #25313d;
+  cursor: pointer;
+}
+
+.gpb-catalog-body {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+
+.gpb-room-list {
+  overflow: auto;
+  border-right: 1px solid #d8dee5;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.gpb-room-list button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  margin-bottom: 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #25313d;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.gpb-room-list button.is-active {
+  border-color: #0f6b57;
+  background: #e8f4f1;
+  color: #0f6b57;
+  font-weight: 700;
+}
+
+.gpb-room-editor {
+  overflow: auto;
+  padding: 20px;
+}
+
+.gpb-editor-section {
+  margin-bottom: 16px;
+  padding: 18px;
+  border: 1px solid #d8dee5;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.gpb-editor-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.gpb-editor-title h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.gpb-form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.gpb-form-grid label,
+.gpb-wide-label {
+  display: grid;
+  gap: 6px;
+  color: #5c6670;
+  font-size: 12px;
+}
+
+.gpb-form-grid input,
+.gpb-form-grid select,
+.gpb-wide-label input,
+.gpb-wide-label textarea {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #cfd6dd;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #ffffff;
+  color: #16202a;
+  font: inherit;
+}
+
+.gpb-wide-label {
+  margin-top: 12px;
+}
+
+.gpb-wide-label textarea {
+  min-height: 86px;
+  resize: vertical;
+}
+
+.gpb-media-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.gpb-media-grid button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 96px;
+  border: 1px dashed #aeb8c3;
+  border-radius: 8px;
+  background: #f9fafb;
+  color: #42505d;
+  cursor: pointer;
+  font: inherit;
+}
+
+.gpb-catalog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+
+.gpb-catalog-footer .gpb-primary,
+.gpb-catalog-footer .gpb-secondary {
+  width: auto;
+  min-width: 150px;
+  margin-top: 0;
+  padding: 0 18px;
+}
+
+@media (max-width: 900px) {
+  .gpb-catalog-body {
+    grid-template-columns: 1fr;
+  }
+
+  .gpb-room-list {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid #d8dee5;
+  }
+
+  .gpb-room-list button {
+    min-width: 130px;
+    margin-bottom: 0;
+  }
+
+  .gpb-form-grid,
+  .gpb-media-grid {
+    grid-template-columns: 1fr;
+  }
+}

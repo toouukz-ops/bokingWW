@@ -199,6 +199,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
   const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [isTechnicalOpen, setIsTechnicalOpen] = useState(false);
+  const [focusedPriceRoomId, setFocusedPriceRoomId] = useState<string | null>(null);
   const activeRoom = rooms.find((room) => room.id === selectedRoomId) ?? rooms[0];
 
   useEffect(() => {
@@ -368,10 +369,12 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                 <label className="gpb-price-input">
                   Базовая цена
                   <input
-                    min="0"
-                    type="number"
-                    value={activeRoom.basePrice}
-                    onChange={(event) => updateActiveRoom({ basePrice: toNumber(event.target.value, 0) })}
+                    inputMode="numeric"
+                    type="text"
+                    value={getPriceInputValue(activeRoom.basePrice, focusedPriceRoomId === activeRoom.id)}
+                    onBlur={() => setFocusedPriceRoomId(null)}
+                    onChange={(event) => updateActiveRoom({ basePrice: parsePriceInput(event.target.value) })}
+                    onFocus={() => setFocusedPriceRoomId(activeRoom.id)}
                   />
                 </label>
                 <p>Позже здесь добавим цены по сезонам и конкретным датам.</p>
@@ -610,6 +613,17 @@ function getDefaultBookable(number: string) {
 function formatPrice(price: number) {
   if (!price) return "Не указана";
   return `${new Intl.NumberFormat("ru-RU").format(price)} тг`;
+}
+
+function getPriceInputValue(price: number, isFocused: boolean) {
+  if (isFocused && price === 0) return "";
+  if (!price) return "0";
+  return new Intl.NumberFormat("ru-RU").format(price);
+}
+
+function parsePriceInput(value: string) {
+  const digits = value.replace(/\D/g, "");
+  return digits ? Number(digits) : 0;
 }
 
 function buildWhatsAppPreview(room: Room) {

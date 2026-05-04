@@ -10,12 +10,13 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Settings,
+  Trash2,
   Users,
   Video,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { getHealth, getRooms, saveRoom } from "../shared/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { deleteRoomMedia, getHealth, getMediaUrl, getRooms, saveRoom, uploadRoomMedia } from "../shared/api";
 import type { CatalogItemCategory, Room, RoomStatus } from "../shared/types";
 
 const MIN_WIDTH = 320;
@@ -200,6 +201,8 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [isTechnicalOpen, setIsTechnicalOpen] = useState(false);
   const [focusedPriceRoomId, setFocusedPriceRoomId] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
   const activeRoom = rooms.find((room) => room.id === selectedRoomId) ?? rooms[0];
 
   useEffect(() => {
@@ -248,6 +251,34 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
       const roomsToSave = withSortOrder(rooms);
       const savedRooms = await Promise.all(roomsToSave.map((room) => saveRoom(room)));
       setRooms(withSortOrder(savedRooms));
+      setSaveState("saved");
+    } catch {
+      setSaveState("error");
+    }
+  }
+
+  async function handleMediaUpload(fileList: FileList | null) {
+    const file = fileList?.[0];
+    if (!file) return;
+
+    setSaveState("saving");
+    try {
+      const updatedRoom = await uploadRoomMedia(activeRoom, file);
+      setRooms((currentRooms) => currentRooms.map((room) => (room.id === updatedRoom.id ? updatedRoom : room)));
+      setSaveState("saved");
+    } catch {
+      setSaveState("error");
+    } finally {
+      if (photoInputRef.current) photoInputRef.current.value = "";
+      if (videoInputRef.current) videoInputRef.current.value = "";
+    }
+  }
+
+  async function handleMediaDelete(path: string) {
+    setSaveState("saving");
+    try {
+      const updatedRoom = await deleteRoomMedia(activeRoom, path);
+      setRooms((currentRooms) => currentRooms.map((room) => (room.id === updatedRoom.id ? updatedRoom : room)));
       setSaveState("saved");
     } catch {
       setSaveState("error");
@@ -426,15 +457,51 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                   <h2>Медиа</h2>
                 </div>
                 <div className="gpb-media-grid">
-                  <button type="button">
+                  <button type="button" onClick={() => photoInputRef.current?.click()}>
                     <Image size={22} />
                     <span>Добавить фото</span>
                   </button>
-                  <button type="button">
+                  <button type="button" onClick={() => videoInputRef.current?.click()}>
                     <Video size={22} />
                     <span>Добавить видео</span>
                   </button>
                 </div>
+                <input
+                  accept="image/jpeg,image/png,image/webp"
+                  hidden
+                  ref={photoInputRef}
+                  type="file"
+                  onChange={(event) => handleMediaUpload(event.target.files)}
+                />
+                <input
+                  accept="video/mp4,video/quicktime,video/x-m4v"
+                  hidden
+                  ref={videoInputRef}
+                  type="file"
+                  onChange={(event) => handleMediaUpload(event.target.files)}
+                />
+                {activeRoom.photoPaths.length || activeRoom.videoPaths.length ? (
+                  <div className="gpb-gallery">
+                    {activeRoom.photoPaths.map((path, index) => (
+                      <div className="gpb-gallery-item" key={path}>
+                        <img alt={`${activeRoom.title} фото ${index + 1}`} src={getMediaUrl(path)} />
+                        {index === 0 ? <span>Главное</span> : null}
+                        <button type="button" onClick={() => handleMediaDelete(path)} title="Удалить фото">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                    {activeRoom.videoPaths.map((path) => (
+                      <div className="gpb-gallery-item" key={path}>
+                        <video muted src={getMediaUrl(path)} />
+                        <span>Видео</span>
+                        <button type="button" onClick={() => handleMediaDelete(path)} title="Удалить видео">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </section>
 
               <section className="gpb-editor-section">
@@ -509,7 +576,11 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
           <aside className="gpb-preview-panel">
             <div className="gpb-preview-card">
               <div className="gpb-preview-media">
-                <Image size={28} />
+                {activeRoom.photoPaths[0] ? (
+                  <img alt={activeRoom.title} src={getMediaUrl(activeRoom.photoPaths[0])} />
+                ) : (
+                  <Image size={28} />
+                )}
               </div>
               <div className="gpb-preview-content">
                 <strong>{activeRoom.title}</strong>

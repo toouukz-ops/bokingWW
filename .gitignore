@@ -8,4 +8,4 @@ build/
 data/*.sqlite
 data/*.sqlite-shm
 data/*.sqlite-wal
-
+backend/uploads/

@@ -35,4 +35,14 @@ http://127.0.0.1:8765
 - `GET /api/health` - проверка, что backend работает.
 - `POST /api/booking/draft` - черновой разбор входящего сообщения.
 - `GET /api/rooms` - каталог номеров.
-- `PUT /api/rooms/:number` - сохранить номер.
+- `PUT /api/rooms/:id` - сохранить номер.
+- `POST /api/rooms/:id/media` - загрузить фото или видео.
+- `DELETE /api/rooms/:id/media` - удалить фото или видео.
+
+Медиафайлы хранятся локально:
+
+```txt
+backend/uploads/rooms/<room-id>/
+```
+
+В MongoDB сохраняются только пути к файлам.

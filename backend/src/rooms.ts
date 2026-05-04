@@ -61,6 +61,34 @@ export async function saveRoom(room: Room): Promise<Room> {
   return (await getRoom(room.id)) ?? room;
 }
 
+export async function addRoomMedia(id: string, mediaType: "photo" | "video", path: string): Promise<Room | null> {
+  const field = mediaType === "photo" ? "photoPaths" : "videoPaths";
+  await rooms.updateOne(
+    { id },
+    {
+      $addToSet: { [field]: path },
+      $set: { updatedAt: new Date() }
+    }
+  );
+
+  return getRoom(id);
+}
+
+export async function removeRoomMedia(id: string, path: string): Promise<Room | null> {
+  await rooms.updateOne(
+    { id },
+    {
+      $pull: {
+        photoPaths: path,
+        videoPaths: path
+      },
+      $set: { updatedAt: new Date() }
+    }
+  );
+
+  return getRoom(id);
+}
+
 function mapRoomDocument(document: RoomDocument): Room {
   return {
     id: document.id ?? document.number,

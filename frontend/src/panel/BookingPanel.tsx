@@ -467,14 +467,14 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                   </button>
                 </div>
                 <input
-                  accept="image/jpeg,image/png,image/webp"
+                  accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,.hec"
                   hidden
                   ref={photoInputRef}
                   type="file"
                   onChange={(event) => handleMediaUpload(event.target.files)}
                 />
                 <input
-                  accept="video/mp4,video/quicktime,video/x-m4v"
+                  accept="video/mp4,video/quicktime,video/x-m4v,.mov"
                   hidden
                   ref={videoInputRef}
                   type="file"

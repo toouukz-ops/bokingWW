@@ -6,7 +6,18 @@ import { pipeline } from "node:stream/promises";
 
 export const uploadsRoot = resolve("uploads");
 
-const allowedExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".m4v"]);
+const allowedExtensions = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".webp",
+  ".heic",
+  ".heif",
+  ".hec",
+  ".mp4",
+  ".mov",
+  ".m4v"
+]);
 
 export function getMediaType(file: MultipartFile): "photo" | "video" | null {
   if (file.mimetype.startsWith("image/")) return "photo";

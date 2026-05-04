@@ -4,6 +4,7 @@ import {
   CalendarDays,
   Hotel,
   Image,
+  Pencil,
   MoveDown,
   MoveUp,
   PanelRightClose,
@@ -181,6 +182,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
   const [selectedRoomId, setSelectedRoomId] = useState(CATALOG_DEFAULTS[0].id);
   const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [isTechnicalOpen, setIsTechnicalOpen] = useState(false);
   const activeRoom = rooms.find((room) => room.id === selectedRoomId) ?? rooms[0];
 
   useEffect(() => {
@@ -262,11 +264,17 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
 
           <main className="gpb-room-editor">
             <div className="gpb-room-editor-scroll">
-              <section className="gpb-editor-section">
-                <div className="gpb-editor-title">
+              <section className="gpb-editor-section gpb-identity-section">
+                <div className="gpb-editor-title gpb-identity-title">
                   <BedDouble size={20} />
-                  <h2>Номер {activeRoom.number}</h2>
+                  <div>
+                    <h2>{activeRoom.title}</h2>
+                    <span>{activeRoom.number} · {getCategoryLabel(activeRoom.category)}</span>
+                  </div>
                   <div className="gpb-order-actions">
+                    <button type="button" onClick={() => setIsTechnicalOpen((value) => !value)} title="Редактировать техданные">
+                      <Pencil size={16} />
+                    </button>
                     <button type="button" onClick={() => moveActiveRoom(-1)} title="Поднять выше">
                       <MoveUp size={16} />
                     </button>
@@ -276,66 +284,73 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                   </div>
                 </div>
 
-                <div className="gpb-form-grid">
-                  <label>
-                    Номер
-                    <input value={activeRoom.number} onChange={(event) => updateActiveRoom({ number: event.target.value })} />
-                  </label>
-                  <label>
-                    Название
-                    <input value={activeRoom.title} onChange={(event) => updateActiveRoom({ title: event.target.value })} />
-                  </label>
-                  <label>
-                    Тип
-                    <select
-                      value={activeRoom.category}
-                      onChange={(event) =>
-                        updateActiveRoom({
-                          category: event.target.value as Room["category"],
-                          bookable: event.target.value !== "staff-room"
-                        })
-                      }
-                    >
-                      <option value="guest-room">Гостевой номер</option>
-                      <option value="staff-room">Персонал</option>
-                      <option value="amenity">Зона/услуга</option>
-                    </select>
-                  </label>
-                  <label>
-                    Статус
-                    <select
-                      value={activeRoom.status}
-                      onChange={(event) => updateActiveRoom({ status: event.target.value as RoomStatus })}
-                    >
-                      <option value="active">Активен</option>
-                      <option value="hidden">Скрыт</option>
-                      <option value="repair">Ремонт</option>
-                    </select>
-                  </label>
-                  <label>
-                    Бронируется
-                    <select
-                      value={activeRoom.bookable ? "yes" : "no"}
-                      onChange={(event) => updateActiveRoom({ bookable: event.target.value === "yes" })}
-                    >
-                      <option value="yes">Да</option>
-                      <option value="no">Нет</option>
-                    </select>
-                  </label>
-                  <label>
-                    Базовая цена
-                    <input
-                      min="0"
-                      type="number"
-                      value={activeRoom.basePrice}
-                      onChange={(event) => updateActiveRoom({ basePrice: toNumber(event.target.value, 0) })}
-                    />
-                  </label>
-                  <label>
-                    Этаж
-                    <input value={activeRoom.floor} onChange={(event) => updateActiveRoom({ floor: event.target.value })} />
-                  </label>
+                {isTechnicalOpen ? (
+                  <div className="gpb-form-grid gpb-technical-grid">
+                    <label>
+                      Номер
+                      <input value={activeRoom.number} onChange={(event) => updateActiveRoom({ number: event.target.value })} />
+                    </label>
+                    <label>
+                      Название
+                      <input value={activeRoom.title} onChange={(event) => updateActiveRoom({ title: event.target.value })} />
+                    </label>
+                    <label>
+                      Тип
+                      <select
+                        value={activeRoom.category}
+                        onChange={(event) =>
+                          updateActiveRoom({
+                            category: event.target.value as Room["category"],
+                            bookable: event.target.value !== "staff-room"
+                          })
+                        }
+                      >
+                        <option value="guest-room">Гостевой номер</option>
+                        <option value="staff-room">Персонал</option>
+                        <option value="amenity">Зона/услуга</option>
+                      </select>
+                    </label>
+                    <label>
+                      Этаж
+                      <input value={activeRoom.floor} onChange={(event) => updateActiveRoom({ floor: event.target.value })} />
+                    </label>
+                  </div>
+                ) : null}
+              </section>
+
+              <section className={`gpb-editor-section gpb-booking-state ${activeRoom.bookable ? "is-bookable" : "is-closed"}`}>
+                <div>
+                  <strong>{activeRoom.bookable ? "Можно бронировать" : "Не бронируется"}</strong>
+                  <span>
+                    {activeRoom.bookable
+                      ? "Этот объект можно предлагать клиентам по датам."
+                      : "Агент не должен предлагать этот объект гостям."}
+                  </span>
                 </div>
+                <select
+                  value={activeRoom.bookable ? "yes" : "no"}
+                  onChange={(event) => updateActiveRoom({ bookable: event.target.value === "yes" })}
+                >
+                  <option value="yes">Бронируется</option>
+                  <option value="no">Не бронируется</option>
+                </select>
+              </section>
+
+              <section className="gpb-editor-section gpb-price-section">
+                <div className="gpb-editor-title">
+                  <Banknote size={20} />
+                  <h2>Цена</h2>
+                </div>
+                <label className="gpb-price-input">
+                  Базовая цена
+                  <input
+                    min="0"
+                    type="number"
+                    value={activeRoom.basePrice}
+                    onChange={(event) => updateActiveRoom({ basePrice: toNumber(event.target.value, 0) })}
+                  />
+                </label>
+                <p>Позже здесь добавим цены по сезонам и конкретным датам.</p>
               </section>
 
               <section className="gpb-editor-section">
@@ -445,6 +460,36 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
               </button>
             </footer>
           </main>
+
+          <aside className="gpb-preview-panel">
+            <div className="gpb-preview-card">
+              <div className="gpb-preview-media">
+                <Image size={28} />
+              </div>
+              <div className="gpb-preview-content">
+                <strong>{activeRoom.title}</strong>
+                <span>{activeRoom.number} · {getCategoryLabel(activeRoom.category)}</span>
+                <p>{activeRoom.description || "Описание появится здесь и будет использоваться для ответа в WhatsApp."}</p>
+                <dl>
+                  <div>
+                    <dt>Цена</dt>
+                    <dd>{formatPrice(activeRoom.basePrice)}</dd>
+                  </div>
+                  <div>
+                    <dt>Гости</dt>
+                    <dd>{activeRoom.capacityAdults} взр. · {activeRoom.capacityChildren} дет.</dd>
+                  </div>
+                  <div>
+                    <dt>Статус</dt>
+                    <dd>{activeRoom.bookable ? "можно предложить" : "не предлагать"}</dd>
+                  </div>
+                </dl>
+                <div className="gpb-whatsapp-bubble">
+                  {buildWhatsAppPreview(activeRoom)}
+                </div>
+              </div>
+            </div>
+          </aside>
         </div>
       </div>
     </div>
@@ -518,4 +563,16 @@ function getDefaultCategory(number: string): Room["category"] {
 function getDefaultBookable(number: string) {
   const numeric = Number(number);
   return !(numeric >= 101 && numeric <= 104);
+}
+
+function formatPrice(price: number) {
+  if (!price) return "Не указана";
+  return `${new Intl.NumberFormat("ru-RU").format(price)} тг`;
+}
+
+function buildWhatsAppPreview(room: Room) {
+  const price = formatPrice(room.basePrice);
+  const description = room.description || "Уютный вариант для отдыха.";
+  const amenities = room.amenities ? `\nУдобства: ${room.amenities}` : "";
+  return `${room.title}\n${description}${amenities}\nЦена: ${price}`;
 }

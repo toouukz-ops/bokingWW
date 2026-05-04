@@ -6,7 +6,10 @@ export const db = mongoClient.db(config.mongodbDbName);
 
 export async function connectDatabase() {
   await mongoClient.connect();
-  await db.collection("rooms").createIndex({ number: 1 }, { unique: true });
+  await dropLegacyNumberIndex();
+  await migrateLegacyRooms();
+  await consolidateSeedRooms();
+  await db.collection("rooms").createIndex({ id: 1 }, { unique: true });
   await seedRooms();
 }
 
@@ -15,18 +18,19 @@ export async function closeDatabase() {
 }
 
 async function seedRooms() {
-  const roomNumbers = ["101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "115"];
   const rooms = db.collection("rooms");
   const now = new Date();
 
   await Promise.all(
-    roomNumbers.map((number) =>
+    roomNumbers.map((number, index) =>
       rooms.updateOne(
-        { number },
+        { id: `room-${number}` },
         {
           $setOnInsert: {
+            id: `room-${number}`,
             number,
             title: `Номер ${number}`,
+            sortOrder: index,
             status: "active",
             basePrice: 0,
             floor: "",
@@ -47,4 +51,65 @@ async function seedRooms() {
       )
     )
   );
+}
+
+const roomNumbers = ["101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "115"];
+
+async function dropLegacyNumberIndex() {
+  const rooms = db.collection("rooms");
+  const indexes = await rooms.indexes();
+  const numberIndex = indexes.find((index) => index.name === "number_1");
+  if (numberIndex) {
+    await rooms.dropIndex("number_1");
+  }
+}
+
+async function migrateLegacyRooms() {
+  const rooms = db.collection("rooms");
+  const legacyRooms = await rooms.find({ id: { $exists: false } }).sort({ number: 1 }).toArray();
+
+  await Promise.all(
+    legacyRooms.map((room, index) =>
+      rooms.updateOne(
+        { _id: room._id },
+        {
+          $set: {
+            id: `room-${String(room._id)}`,
+            sortOrder: typeof room.sortOrder === "number" ? room.sortOrder : index,
+            updatedAt: new Date()
+          }
+        }
+      )
+    )
+  );
+}
+
+async function consolidateSeedRooms() {
+  const rooms = db.collection("rooms");
+
+  for (const [index, number] of roomNumbers.entries()) {
+    const documents = await rooms.find({ number }).toArray();
+    if (documents.length === 0) {
+      continue;
+    }
+
+    const preferred = documents.find((room) => room.id === `room-${number}`) ?? documents[0];
+    const now = new Date();
+
+    await rooms.updateOne(
+      { _id: preferred._id },
+      {
+        $set: {
+          id: `room-${number}`,
+          sortOrder: typeof preferred.sortOrder === "number" ? preferred.sortOrder : index,
+          updatedAt: now
+        }
+      }
+    );
+
+    const duplicateIds = documents.filter((room) => String(room._id) !== String(preferred._id)).map((room) => room._id);
+    if (duplicateIds.length > 0) {
+      await rooms.deleteMany({ _id: { $in: duplicateIds } });
+    }
+  }
 }

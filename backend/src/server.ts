@@ -46,9 +46,9 @@ app.get("/api/rooms", async () => {
   return listRooms();
 });
 
-app.get("/api/rooms/:number", async (request, reply) => {
-  const { number } = request.params as { number: string };
-  const room = await getRoom(number);
+app.get("/api/rooms/:id", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const room = await getRoom(id);
 
   if (!room) {
     return reply.status(404).send({ error: "Room not found" });
@@ -57,11 +57,11 @@ app.get("/api/rooms/:number", async (request, reply) => {
   return room;
 });
 
-app.put("/api/rooms/:number", async (request, reply) => {
-  const { number } = request.params as { number: string };
+app.put("/api/rooms/:id", async (request, reply) => {
+  const { id } = request.params as { id: string };
   const result = roomSchema.safeParse({
     ...(request.body as Record<string, unknown>),
-    number
+    id
   });
 
   if (!result.success) {

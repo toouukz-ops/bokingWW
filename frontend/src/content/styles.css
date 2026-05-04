@@ -276,6 +276,25 @@ body.gpb-booking-panel-open #app {
   margin-bottom: 14px;
 }
 
+.gpb-order-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.gpb-order-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #d7dce2;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #25313d;
+  cursor: pointer;
+}
+
 .gpb-editor-title h2 {
   margin: 0;
   font-size: 16px;

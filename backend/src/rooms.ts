@@ -2,8 +2,10 @@ import { z } from "zod";
 import { db } from "./db.js";
 
 export const roomSchema = z.object({
+  id: z.string().min(1),
   number: z.string().min(1),
   title: z.string().min(1),
+  sortOrder: z.number().int().min(0),
   status: z.enum(["active", "hidden", "repair"]),
   basePrice: z.number().int().min(0),
   floor: z.string().optional().default(""),
@@ -28,12 +30,12 @@ interface RoomDocument extends Room {
 const rooms = db.collection<RoomDocument>("rooms");
 
 export async function listRooms(): Promise<Room[]> {
-  const documents = await rooms.find().sort({ number: 1 }).toArray();
+  const documents = await rooms.find().sort({ sortOrder: 1, number: 1 }).toArray();
   return documents.map(mapRoomDocument);
 }
 
-export async function getRoom(number: string): Promise<Room | null> {
-  const document = await rooms.findOne({ number });
+export async function getRoom(id: string): Promise<Room | null> {
+  const document = await rooms.findOne({ id });
   return document ? mapRoomDocument(document) : null;
 }
 
@@ -41,7 +43,7 @@ export async function saveRoom(room: Room): Promise<Room> {
   const now = new Date();
 
   await rooms.updateOne(
-    { number: room.number },
+    { id: room.id },
     {
       $set: {
         ...room,
@@ -54,13 +56,15 @@ export async function saveRoom(room: Room): Promise<Room> {
     { upsert: true }
   );
 
-  return (await getRoom(room.number)) ?? room;
+  return (await getRoom(room.id)) ?? room;
 }
 
 function mapRoomDocument(document: RoomDocument): Room {
   return {
+    id: document.id ?? document.number,
     number: document.number,
     title: document.title,
+    sortOrder: document.sortOrder ?? 0,
     status: document.status,
     basePrice: document.basePrice,
     floor: document.floor ?? "",

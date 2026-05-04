@@ -4,6 +4,8 @@ import {
   CalendarDays,
   Hotel,
   Image,
+  MoveDown,
+  MoveUp,
   PanelRightClose,
   PanelRightOpen,
   Settings,
@@ -146,10 +148,10 @@ export function BookingPanel() {
 
 function RoomCatalogModal({ onClose }: { onClose: () => void }) {
   const [rooms, setRooms] = useState<Room[]>(() => ROOM_NUMBERS.map(createEmptyRoom));
-  const [selectedRoom, setSelectedRoom] = useState(ROOM_NUMBERS[0]);
+  const [selectedRoomId, setSelectedRoomId] = useState(createRoomId(ROOM_NUMBERS[0]));
   const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const activeRoom = rooms.find((room) => room.number === selectedRoom) ?? rooms[0];
+  const activeRoom = rooms.find((room) => room.id === selectedRoomId) ?? rooms[0];
 
   useEffect(() => {
     getRooms()
@@ -163,15 +165,32 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
   function updateActiveRoom(patch: Partial<Room>) {
     setSaveState("idle");
     setRooms((currentRooms) =>
-      currentRooms.map((room) => (room.number === activeRoom.number ? { ...room, ...patch } : room))
+      currentRooms.map((room) => (room.id === activeRoom.id ? { ...room, ...patch } : room))
     );
+  }
+
+  function moveActiveRoom(direction: -1 | 1) {
+    setSaveState("idle");
+    setRooms((currentRooms) => {
+      const currentIndex = currentRooms.findIndex((room) => room.id === activeRoom.id);
+      const nextIndex = currentIndex + direction;
+      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= currentRooms.length) {
+        return currentRooms;
+      }
+
+      const nextRooms = [...currentRooms];
+      const [room] = nextRooms.splice(currentIndex, 1);
+      nextRooms.splice(nextIndex, 0, room);
+      return withSortOrder(nextRooms);
+    });
   }
 
   async function handleSave() {
     setSaveState("saving");
     try {
-      const savedRoom = await saveRoom(activeRoom);
-      setRooms((currentRooms) => currentRooms.map((room) => (room.number === savedRoom.number ? savedRoom : room)));
+      const roomsToSave = withSortOrder(rooms);
+      const savedRooms = await Promise.all(roomsToSave.map((room) => saveRoom(room)));
+      setRooms(withSortOrder(savedRooms));
       setSaveState("saved");
     } catch {
       setSaveState("error");
@@ -197,10 +216,10 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
           <nav className="gpb-room-list" aria-label="Номера">
             {rooms.map((room) => (
               <button
-                className={room.number === selectedRoom ? "is-active" : ""}
-                key={room.number}
+                className={room.id === activeRoom.id ? "is-active" : ""}
+                key={room.id}
                 type="button"
-                onClick={() => setSelectedRoom(room.number)}
+                onClick={() => setSelectedRoomId(room.id)}
               >
                 <BedDouble size={18} />
                 <span>{room.title || `Номер ${room.number}`}</span>
@@ -214,9 +233,21 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                 <div className="gpb-editor-title">
                   <BedDouble size={20} />
                   <h2>Номер {activeRoom.number}</h2>
+                  <div className="gpb-order-actions">
+                    <button type="button" onClick={() => moveActiveRoom(-1)} title="Поднять выше">
+                      <MoveUp size={16} />
+                    </button>
+                    <button type="button" onClick={() => moveActiveRoom(1)} title="Опустить ниже">
+                      <MoveDown size={16} />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="gpb-form-grid">
+                  <label>
+                    Номер
+                    <input value={activeRoom.number} onChange={(event) => updateActiveRoom({ number: event.target.value })} />
+                  </label>
                   <label>
                     Название
                     <input value={activeRoom.title} onChange={(event) => updateActiveRoom({ title: event.target.value })} />
@@ -363,8 +394,10 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
 
 function createEmptyRoom(number: string): Room {
   return {
+    id: createRoomId(number),
     number,
     title: `Номер ${number}`,
+    sortOrder: ROOM_NUMBERS.indexOf(number),
     status: "active",
     basePrice: 0,
     floor: "",
@@ -381,10 +414,28 @@ function createEmptyRoom(number: string): Room {
 }
 
 function mergeRooms(loadedRooms: Room[]) {
-  return ROOM_NUMBERS.map((number) => loadedRooms.find((room) => room.number === number) ?? createEmptyRoom(number));
+  const normalizedRooms = loadedRooms.map((room, index) => ({
+    ...room,
+    id: room.id || createRoomId(room.number),
+    sortOrder: Number.isFinite(room.sortOrder) ? room.sortOrder : index
+  }));
+  const byId = new Map(normalizedRooms.map((room) => [room.id, room]));
+  const rooms = ROOM_NUMBERS.map((number) => byId.get(createRoomId(number)) ?? createEmptyRoom(number));
+  return withSortOrder(rooms.sort((left, right) => left.sortOrder - right.sortOrder));
 }
 
 function toNumber(value: string, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function createRoomId(number: string) {
+  return `room-${number}`;
+}
+
+function withSortOrder(rooms: Room[]) {
+  return rooms.map((room, index) => ({
+    ...room,
+    sortOrder: index
+  }));
 }

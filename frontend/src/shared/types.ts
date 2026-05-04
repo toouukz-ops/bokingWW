@@ -21,8 +21,10 @@ export interface BookingDraft {
 export type RoomStatus = "active" | "hidden" | "repair";
 
 export interface Room {
+  id: string;
   number: string;
   title: string;
+  sortOrder: number;
   status: RoomStatus;
   basePrice: number;
   floor: string;

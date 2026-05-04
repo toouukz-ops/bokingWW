@@ -41,10 +41,10 @@ export async function getRooms(): Promise<Room[]> {
 
 export async function saveRoom(room: Room): Promise<Room> {
   const localRooms = await getLocalRooms();
-  await saveLocalRooms(localRooms.filter((item) => item.number !== room.number).concat(room));
+  await saveLocalRooms(localRooms.filter((item) => item.id !== room.id).concat(room));
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/rooms/${encodeURIComponent(room.number)}`, {
+    const response = await fetch(`${API_BASE_URL}/api/rooms/${encodeURIComponent(room.id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(room)

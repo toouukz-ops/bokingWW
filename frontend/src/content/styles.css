@@ -415,6 +415,11 @@ body.gpb-booking-panel-open #app {
   font-size: 13px;
 }
 
+.gpb-included-section {
+  border-color: #95b8d1;
+  background: #f2f8fc;
+}
+
 .gpb-form-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(140px, 1fr));

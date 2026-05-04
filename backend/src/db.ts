@@ -34,10 +34,11 @@ async function seedRooms() {
             sortOrder: index,
             category: item.category,
             bookable: item.bookable,
+            includedInStay: item.includedInStay,
             status: "active",
             basePrice: 0,
             floor: "",
-            capacityAdults: 2,
+            capacityAdults: getCatalogCapacity(item),
             capacityChildren: 0,
             extraBeds: 0,
             beds: "",
@@ -63,28 +64,35 @@ const catalogDefaults = [
     number,
     title: `Номер ${number}`,
     category: Number(number) <= 104 ? "staff-room" : "guest-room",
-    bookable: Number(number) >= 105
+    bookable: Number(number) >= 105,
+    includedInStay: false
   })),
   {
     id: "amenity-sauna",
     number: "SAUNA",
-    title: "Сауна",
+    title: "Баня / сауна",
     category: "amenity",
-    bookable: true
+    bookable: true,
+    includedInStay: false,
+    capacityAdults: 8
   },
   {
     id: "amenity-gazebo",
     number: "GAZEBO",
     title: "Беседка",
     category: "amenity",
-    bookable: true
+    bookable: true,
+    includedInStay: true,
+    capacityAdults: 15
   },
   {
     id: "amenity-bbq",
     number: "BBQ",
     title: "Мангальная зона",
     category: "amenity",
-    bookable: true
+    bookable: true,
+    includedInStay: true,
+    capacityAdults: 1
   }
 ];
 
@@ -137,6 +145,7 @@ async function consolidateSeedRooms() {
           sortOrder: typeof preferred.sortOrder === "number" ? preferred.sortOrder : index,
           category: Number(number) <= 104 ? "staff-room" : "guest-room",
           bookable: Number(number) >= 105,
+          includedInStay: false,
           updatedAt: now
         }
       }
@@ -159,9 +168,25 @@ async function backfillCatalogFields() {
         $set: {
           category: item.category,
           bookable: item.bookable,
+          includedInStay: item.includedInStay,
+          ...(item.category === "amenity" ? { capacityAdults: getCatalogCapacity(item) } : {}),
           updatedAt: new Date()
         }
       }
     );
   }
+
+  await rooms.updateOne(
+    { id: "amenity-sauna", title: "Сауна" },
+    {
+      $set: {
+        title: "Баня / сауна",
+        updatedAt: new Date()
+      }
+    }
+  );
+}
+
+function getCatalogCapacity(item: (typeof catalogDefaults)[number]) {
+  return "capacityAdults" in item ? item.capacityAdults : 2;
 }

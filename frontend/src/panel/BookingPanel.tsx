@@ -8,6 +8,7 @@ import {
   Image,
   ChevronLeft,
   ChevronRight,
+  Flame,
   Pencil,
   MoveDown,
   MoveUp,
@@ -15,6 +16,7 @@ import {
   PanelRightOpen,
   Settings,
   Trash2,
+  Utensils,
   Users,
   Video,
   X
@@ -32,28 +34,35 @@ const CATALOG_DEFAULTS = [
     number,
     title: `Номер ${number}`,
     category: (Number(number) <= 104 ? "staff-room" : "guest-room") as CatalogItemCategory,
-    bookable: Number(number) >= 105
+    bookable: Number(number) >= 105,
+    includedInStay: false
   })),
   {
     id: "amenity-sauna",
     number: "SAUNA",
-    title: "Сауна",
+    title: "Баня / сауна",
     category: "amenity",
-    bookable: true
+    bookable: true,
+    includedInStay: false,
+    capacityAdults: 8
   },
   {
     id: "amenity-gazebo",
     number: "GAZEBO",
     title: "Беседка",
     category: "amenity",
-    bookable: true
+    bookable: true,
+    includedInStay: true,
+    capacityAdults: 15
   },
   {
     id: "amenity-bbq",
     number: "BBQ",
     title: "Мангальная зона",
     category: "amenity",
-    bookable: true
+    bookable: true,
+    includedInStay: true,
+    capacityAdults: 1
   }
 ] as const;
 const AMENITY_OPTIONS = [
@@ -348,7 +357,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                 type="button"
                 onClick={() => setSelectedRoomId(room.id)}
               >
-                <BedDouble size={18} />
+                <CatalogItemIcon room={room} />
                 <span>
                   {room.title || `Номер ${room.number}`}
                   <small>{getCategoryLabel(room.category)}</small>
@@ -361,7 +370,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
             <div className="gpb-room-editor-scroll">
               <section className="gpb-editor-section gpb-identity-section">
                 <div className="gpb-editor-title gpb-identity-title">
-                  <BedDouble size={20} />
+                  <CatalogItemIcon room={activeRoom} size={20} />
                   <div>
                     <h2>{activeRoom.title}</h2>
                     <span>{activeRoom.number} · {getCategoryLabel(activeRoom.category)}</span>
@@ -430,6 +439,36 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                   <option value="no">Не бронируется</option>
                 </select>
               </section>
+
+              {activeRoom.category === "amenity" ? (
+                <section className="gpb-editor-section gpb-included-section">
+                  <div className="gpb-editor-title">
+                    <CatalogItemIcon room={activeRoom} size={20} />
+                    <h2>Комплектация бронирования</h2>
+                  </div>
+                  <div className="gpb-form-grid">
+                    <label>
+                      Входит в проживание
+                      <select
+                        value={activeRoom.includedInStay ? "yes" : "no"}
+                        onChange={(event) => updateActiveRoom({ includedInStay: event.target.value === "yes" })}
+                      >
+                        <option value="yes">Да, входит</option>
+                        <option value="no">Нет, отдельно</option>
+                      </select>
+                    </label>
+                    <label>
+                      Вместимость / количество
+                      <input
+                        min="1"
+                        type="number"
+                        value={activeRoom.capacityAdults}
+                        onChange={(event) => updateActiveRoom({ capacityAdults: toNumber(event.target.value, 1) })}
+                      />
+                    </label>
+                  </div>
+                </section>
+              ) : null}
 
               <section className="gpb-editor-section gpb-price-section">
                 <div className="gpb-editor-title">
@@ -636,6 +675,18 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                     <dt>Статус</dt>
                     <dd>{activeRoom.bookable ? "можно предложить" : "не предлагать"}</dd>
                   </div>
+                  {activeRoom.category === "amenity" ? (
+                    <>
+                      <div>
+                        <dt>В проживание</dt>
+                        <dd>{activeRoom.includedInStay ? "входит" : "отдельно"}</dd>
+                      </div>
+                      <div>
+                        <dt>Лимит</dt>
+                        <dd>{activeRoom.id === "amenity-bbq" ? `${activeRoom.capacityAdults} шт.` : `до ${activeRoom.capacityAdults} чел.`}</dd>
+                      </div>
+                    </>
+                  ) : null}
                 </dl>
                 <div className="gpb-whatsapp-bubble">
                   {buildWhatsAppPreview(activeRoom)}
@@ -824,10 +875,11 @@ function createEmptyRoom(item: (typeof CATALOG_DEFAULTS)[number]): Room {
     sortOrder: CATALOG_DEFAULTS.findIndex((catalogItem) => catalogItem.id === item.id),
     category: item.category,
     bookable: item.bookable,
+    includedInStay: item.includedInStay,
     status: "active",
     basePrice: 0,
     floor: "",
-    capacityAdults: 2,
+    capacityAdults: "capacityAdults" in item ? item.capacityAdults : 2,
     capacityChildren: 0,
     extraBeds: 0,
     beds: "",
@@ -847,6 +899,7 @@ function createCustomRoom(number: string, sortOrder: number): Room {
     sortOrder,
     category: "guest-room",
     bookable: true,
+    includedInStay: false,
     status: "active",
     basePrice: 0,
     floor: "",
@@ -943,7 +996,8 @@ function mergeRooms(loadedRooms: Room[]) {
     id: room.id || createRoomId(room.number),
     sortOrder: Number.isFinite(room.sortOrder) ? room.sortOrder : index,
     category: room.category ?? getDefaultCategory(room.number),
-    bookable: typeof room.bookable === "boolean" ? room.bookable : getDefaultBookable(room.number)
+    bookable: typeof room.bookable === "boolean" ? room.bookable : getDefaultBookable(room.number),
+    includedInStay: typeof room.includedInStay === "boolean" ? room.includedInStay : getDefaultIncludedInStay(room.id)
   }));
   const byId = new Map(normalizedRooms.map((room) => [room.id, room]));
   const rooms = CATALOG_DEFAULTS.map((item) => byId.get(item.id) ?? createEmptyRoom(item));
@@ -981,6 +1035,19 @@ function getCategoryLabel(category: Room["category"]) {
   return "Гости";
 }
 
+function CatalogItemIcon({ room, size = 18 }: { room: Room; size?: number }) {
+  if (room.id.includes("sauna") || /сауна|бан/i.test(room.title)) {
+    return <Flame size={size} />;
+  }
+  if (room.id.includes("bbq") || /мангал/i.test(room.title)) {
+    return <Utensils size={size} />;
+  }
+  if (room.id.includes("gazebo") || /бесед/i.test(room.title)) {
+    return <Hotel size={size} />;
+  }
+  return <BedDouble size={size} />;
+}
+
 function getDefaultCategory(number: string): Room["category"] {
   const numeric = Number(number);
   if (numeric >= 101 && numeric <= 104) return "staff-room";
@@ -990,6 +1057,10 @@ function getDefaultCategory(number: string): Room["category"] {
 function getDefaultBookable(number: string) {
   const numeric = Number(number);
   return !(numeric >= 101 && numeric <= 104);
+}
+
+function getDefaultIncludedInStay(id: string) {
+  return id === "amenity-gazebo" || id === "amenity-bbq";
 }
 
 function formatPrice(price: number) {
@@ -1012,7 +1083,10 @@ function buildWhatsAppPreview(room: Room) {
   const price = formatPrice(room.basePrice);
   const description = room.description || "Уютный вариант для отдыха.";
   const amenities = room.amenities ? `\nУдобства: ${room.amenities}` : "";
-  return `${room.title}\n${description}${amenities}\nЦена: ${price}`;
+  const included = room.category === "amenity"
+    ? `\n${room.includedInStay ? "Входит в стоимость проживания" : "Оплачивается отдельно"}`
+    : "";
+  return `${room.title}\n${description}${amenities}${included}\nЦена: ${price}`;
 }
 
 function getWhatsAppMediaItems(room: Room) {

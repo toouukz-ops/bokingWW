@@ -28,6 +28,7 @@ export interface Room {
   sortOrder: number;
   category: CatalogItemCategory;
   bookable: boolean;
+  includedInStay: boolean;
   status: RoomStatus;
   basePrice: number;
   floor: string;

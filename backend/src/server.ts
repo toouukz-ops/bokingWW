@@ -6,8 +6,8 @@ import { mkdir } from "node:fs/promises";
 import { createStubDraft, bookingDraftRequestSchema } from "./booking.js";
 import { config } from "./config.js";
 import { closeDatabase, connectDatabase } from "./db.js";
-import { deleteMediaFile, saveRoomMediaFile, uploadsRoot } from "./media.js";
-import { addRoomMedia, getRoom, listRooms, removeRoomMedia, roomSchema, saveRoom } from "./rooms.js";
+import { cropPhotoFile, deleteMediaFile, saveRoomMediaFile, uploadsRoot } from "./media.js";
+import { addRoomMedia, getRoom, listRooms, removeRoomMedia, replaceRoomMedia, roomSchema, saveRoom } from "./rooms.js";
 
 await connectDatabase();
 
@@ -125,6 +125,32 @@ app.delete("/api/rooms/:id/media", async (request, reply) => {
   }
 
   return updatedRoom;
+});
+
+app.post("/api/rooms/:id/media/crop", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const body = request.body as { aspectRatio?: number; focalX?: number; focalY?: number; path?: string } | undefined;
+  if (!body?.path || !body.aspectRatio) {
+    return reply.status(400).send({ error: "Path and aspectRatio are required" });
+  }
+
+  const room = await getRoom(id);
+  if (!room) {
+    return reply.status(404).send({ error: "Room not found" });
+  }
+
+  try {
+    const croppedPath = await cropPhotoFile(id, body.path, {
+      aspectRatio: body.aspectRatio,
+      focalX: body.focalX ?? 50,
+      focalY: body.focalY ?? 50
+    });
+    const updatedRoom = await replaceRoomMedia(id, body.path, croppedPath);
+    return updatedRoom;
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(400).send({ error: "Crop failed" });
+  }
 });
 
 const close = async () => {

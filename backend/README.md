@@ -37,6 +37,7 @@ http://127.0.0.1:8765
 - `GET /api/rooms` - каталог номеров.
 - `PUT /api/rooms/:id` - сохранить номер.
 - `POST /api/rooms/:id/media` - загрузить фото или видео.
+- `POST /api/rooms/:id/media/crop` - обрезать фото и сохранить JPG.
 - `DELETE /api/rooms/:id/media` - удалить фото или видео.
 
 Медиафайлы хранятся локально:
@@ -46,3 +47,5 @@ backend/uploads/rooms/<room-id>/
 ```
 
 В MongoDB сохраняются только пути к файлам.
+
+HEIC/HEIF/HEC при загрузке конвертируются в JPG, чтобы фото отображались в браузере и дальше подходили для отправки в WhatsApp.

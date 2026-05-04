@@ -3,6 +3,7 @@ import { createWriteStream } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
+import sharp from "sharp";
 
 export const uploadsRoot = resolve("uploads");
 
@@ -39,9 +40,18 @@ export async function saveRoomMediaFile(roomId: string, file: MultipartFile) {
   const roomFolder = join(uploadsRoot, "rooms", sanitizeSegment(roomId));
   await mkdir(roomFolder, { recursive: true });
 
-  const filename = `${mediaType}-${Date.now()}-${sanitizeSegment(basename(file.filename, extension))}${extension}`;
+  const normalizedExtension = mediaType === "photo" && isHeicExtension(extension) ? ".jpg" : extension;
+  const filename = `${mediaType}-${Date.now()}-${sanitizeSegment(basename(file.filename, extension))}${normalizedExtension}`;
   const destination = join(roomFolder, filename);
-  await pipeline(file.file, createWriteStream(destination));
+
+  if (mediaType === "photo" && isHeicExtension(extension)) {
+    const originalPath = join(roomFolder, `original-${Date.now()}-${sanitizeSegment(file.filename)}`);
+    await pipeline(file.file, createWriteStream(originalPath));
+    await sharp(originalPath).rotate().jpeg({ quality: 90 }).toFile(destination);
+    await unlink(originalPath).catch(() => undefined);
+  } else {
+    await pipeline(file.file, createWriteStream(destination));
+  }
 
   return {
     mediaType,
@@ -49,13 +59,34 @@ export async function saveRoomMediaFile(roomId: string, file: MultipartFile) {
   };
 }
 
-export async function deleteMediaFile(publicPath: string) {
-  if (!publicPath.startsWith("/uploads/")) {
-    return;
+export async function cropPhotoFile(roomId: string, publicPath: string, options: CropOptions) {
+  const sourcePath = getLocalUploadPath(publicPath);
+  if (!sourcePath) {
+    throw new Error("Invalid media path");
   }
 
-  const localPath = resolve(publicPath.replace(/^\/uploads\//, `${uploadsRoot}/`));
-  if (!localPath.startsWith(uploadsRoot)) {
+  const source = sharp(sourcePath).rotate();
+  const metadata = await source.metadata();
+  if (!metadata.width || !metadata.height) {
+    throw new Error("Invalid image dimensions");
+  }
+
+  const crop = calculateCrop(metadata.width, metadata.height, options.aspectRatio, options.focalX, options.focalY);
+  const roomFolder = join(uploadsRoot, "rooms", sanitizeSegment(roomId));
+  await mkdir(roomFolder, { recursive: true });
+
+  const filename = `crop-${Date.now()}-${sanitizeSegment(basename(publicPath, extname(publicPath)))}.jpg`;
+  const destination = join(roomFolder, filename);
+
+  await source.extract(crop).jpeg({ quality: 90 }).toFile(destination);
+  await deleteMediaFile(publicPath);
+
+  return `/uploads/rooms/${sanitizeSegment(roomId)}/${filename}`;
+}
+
+export async function deleteMediaFile(publicPath: string) {
+  const localPath = getLocalUploadPath(publicPath);
+  if (!localPath) {
     return;
   }
 
@@ -64,6 +95,44 @@ export async function deleteMediaFile(publicPath: string) {
       throw error;
     }
   });
+}
+
+interface CropOptions {
+  aspectRatio: number;
+  focalX: number;
+  focalY: number;
+}
+
+function calculateCrop(width: number, height: number, aspectRatio: number, focalX: number, focalY: number) {
+  const sourceRatio = width / height;
+  const cropWidth = sourceRatio > aspectRatio ? Math.round(height * aspectRatio) : width;
+  const cropHeight = sourceRatio > aspectRatio ? height : Math.round(width / aspectRatio);
+  const maxLeft = width - cropWidth;
+  const maxTop = height - cropHeight;
+
+  return {
+    left: Math.round(maxLeft * clamp(focalX / 100, 0, 1)),
+    top: Math.round(maxTop * clamp(focalY / 100, 0, 1)),
+    width: cropWidth,
+    height: cropHeight
+  };
+}
+
+function getLocalUploadPath(publicPath: string) {
+  if (!publicPath.startsWith("/uploads/")) {
+    return null;
+  }
+
+  const localPath = resolve(publicPath.replace(/^\/uploads\//, `${uploadsRoot}/`));
+  return localPath.startsWith(uploadsRoot) ? localPath : null;
+}
+
+function isHeicExtension(extension: string) {
+  return extension === ".heic" || extension === ".heif" || extension === ".hec";
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function sanitizeSegment(value: string) {

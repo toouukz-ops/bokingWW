@@ -556,6 +556,142 @@ body.gpb-booking-panel-open #app {
   cursor: pointer;
 }
 
+.gpb-gallery-item .gpb-gallery-crop {
+  right: 44px;
+}
+
+.gpb-crop-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(15 23 32 / 58%);
+  pointer-events: auto;
+}
+
+.gpb-crop-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1040px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow: hidden;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #16202a;
+}
+
+.gpb-crop-header,
+.gpb-crop-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid #d8dee5;
+}
+
+.gpb-crop-header strong {
+  display: block;
+  font-size: 18px;
+}
+
+.gpb-crop-header span {
+  display: block;
+  margin-top: 2px;
+  color: #64707d;
+  font-size: 13px;
+}
+
+.gpb-crop-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid #d7dce2;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #25313d;
+  cursor: pointer;
+}
+
+.gpb-crop-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 18px;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+}
+
+.gpb-crop-stage {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  max-height: 70vh;
+  overflow: hidden;
+  border: 1px solid #d8dee5;
+  border-radius: 8px;
+  background: #eef1f4;
+}
+
+.gpb-crop-stage img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.gpb-crop-controls {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.gpb-crop-controls label {
+  display: grid;
+  gap: 8px;
+  color: #5c6670;
+  font-size: 12px;
+}
+
+.gpb-crop-presets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.gpb-crop-presets button {
+  min-height: 36px;
+  border: 1px solid #cfd6dd;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #25313d;
+  cursor: pointer;
+  font: inherit;
+}
+
+.gpb-crop-presets button.is-active {
+  border-color: #0f6b57;
+  background: #0f6b57;
+  color: #ffffff;
+}
+
+.gpb-crop-footer {
+  justify-content: flex-end;
+  border-top: 1px solid #d8dee5;
+  border-bottom: 0;
+}
+
+.gpb-crop-footer .gpb-primary,
+.gpb-crop-footer .gpb-secondary {
+  width: auto;
+  min-width: 150px;
+  margin-top: 0;
+  padding: 0 18px;
+}
+
 .gpb-catalog-footer {
   display: flex;
   align-items: center;

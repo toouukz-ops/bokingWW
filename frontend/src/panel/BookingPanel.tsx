@@ -2,6 +2,7 @@ import {
   Banknote,
   BedDouble,
   CalendarDays,
+  Crop,
   Hotel,
   Image,
   Pencil,
@@ -16,7 +17,7 @@ import {
   X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { deleteRoomMedia, getHealth, getMediaUrl, getRooms, saveRoom, uploadRoomMedia } from "../shared/api";
+import { cropRoomMedia, deleteRoomMedia, getHealth, getMediaUrl, getRooms, saveRoom, uploadRoomMedia } from "../shared/api";
 import type { CatalogItemCategory, Room, RoomStatus } from "../shared/types";
 
 const MIN_WIDTH = 320;
@@ -201,6 +202,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [isTechnicalOpen, setIsTechnicalOpen] = useState(false);
   const [focusedPriceRoomId, setFocusedPriceRoomId] = useState<string | null>(null);
+  const [cropPath, setCropPath] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const activeRoom = rooms.find((room) => room.id === selectedRoomId) ?? rooms[0];
@@ -279,6 +281,18 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
     try {
       const updatedRoom = await deleteRoomMedia(activeRoom, path);
       setRooms((currentRooms) => currentRooms.map((room) => (room.id === updatedRoom.id ? updatedRoom : room)));
+      setSaveState("saved");
+    } catch {
+      setSaveState("error");
+    }
+  }
+
+  async function handleCropSave(options: { aspectRatio: number; focalX: number; focalY: number; path: string }) {
+    setSaveState("saving");
+    try {
+      const updatedRoom = await cropRoomMedia(activeRoom, options.path, options);
+      setRooms((currentRooms) => currentRooms.map((room) => (room.id === updatedRoom.id ? updatedRoom : room)));
+      setCropPath(null);
       setSaveState("saved");
     } catch {
       setSaveState("error");
@@ -486,6 +500,9 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                       <div className="gpb-gallery-item" key={path}>
                         <MediaImage alt={`${activeRoom.title} фото ${index + 1}`} path={path} />
                         {index === 0 ? <span>Главное</span> : null}
+                        <button className="gpb-gallery-crop" type="button" onClick={() => setCropPath(path)} title="Обрезать фото">
+                          <Crop size={16} />
+                        </button>
                         <button type="button" onClick={() => handleMediaDelete(path)} title="Удалить фото">
                           <Trash2 size={16} />
                         </button>
@@ -607,6 +624,109 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
             </div>
           </aside>
         </div>
+        {cropPath ? (
+          <CropModal
+            path={cropPath}
+            title={activeRoom.title}
+            onClose={() => setCropPath(null)}
+            onSave={handleCropSave}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+const CROP_PRESETS = [
+  { label: "16:9", ratio: 16 / 9 },
+  { label: "9:16", ratio: 9 / 16 },
+  { label: "1:1", ratio: 1 },
+  { label: "4:3", ratio: 4 / 3 },
+  { label: "3:4", ratio: 3 / 4 }
+];
+
+function CropModal({
+  onClose,
+  onSave,
+  path,
+  title
+}: {
+  onClose: () => void;
+  onSave: (options: { aspectRatio: number; focalX: number; focalY: number; path: string }) => Promise<void>;
+  path: string;
+  title: string;
+}) {
+  const [aspectRatio, setAspectRatio] = useState(4 / 3);
+  const [focalX, setFocalX] = useState(50);
+  const [focalY, setFocalY] = useState(50);
+  const [isSaving, setIsSaving] = useState(false);
+  const objectUrl = useMediaObjectUrl(path);
+
+  async function handleSave() {
+    setIsSaving(true);
+    await onSave({ aspectRatio, focalX, focalY, path });
+    setIsSaving(false);
+  }
+
+  return (
+    <div className="gpb-crop-backdrop">
+      <div className="gpb-crop-modal" role="dialog" aria-modal="true" aria-label="Обрезка фото">
+        <header className="gpb-crop-header">
+          <div>
+            <strong>Обрезка фото</strong>
+            <span>{title}</span>
+          </div>
+          <button type="button" onClick={onClose} title="Закрыть">
+            <X size={20} />
+          </button>
+        </header>
+        <div className="gpb-crop-body">
+          <div className="gpb-crop-stage" style={{ aspectRatio }}>
+            {objectUrl ? (
+              <img
+                alt={title}
+                src={objectUrl}
+                style={{ objectPosition: `${focalX}% ${focalY}%` }}
+              />
+            ) : (
+              <div className="gpb-media-placeholder">
+                <Image size={24} />
+                <span>Загрузка</span>
+              </div>
+            )}
+          </div>
+          <aside className="gpb-crop-controls">
+            <label>
+              Формат
+              <div className="gpb-crop-presets">
+                {CROP_PRESETS.map((preset) => (
+                  <button
+                    className={aspectRatio === preset.ratio ? "is-active" : ""}
+                    key={preset.label}
+                    type="button"
+                    onClick={() => setAspectRatio(preset.ratio)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </label>
+            <label>
+              Сдвиг по горизонтали
+              <input max="100" min="0" type="range" value={focalX} onChange={(event) => setFocalX(Number(event.target.value))} />
+            </label>
+            <label>
+              Сдвиг по вертикали
+              <input max="100" min="0" type="range" value={focalY} onChange={(event) => setFocalY(Number(event.target.value))} />
+            </label>
+          </aside>
+        </div>
+        <footer className="gpb-crop-footer">
+          <button className="gpb-secondary" type="button" onClick={onClose}>Отмена</button>
+          <button className="gpb-primary" type="button" onClick={handleSave} disabled={isSaving}>
+            {isSaving ? "Сохраняю..." : "Сохранить обрезку"}
+          </button>
+        </footer>
       </div>
     </div>
   );

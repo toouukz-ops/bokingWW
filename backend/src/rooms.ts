@@ -89,6 +89,29 @@ export async function removeRoomMedia(id: string, path: string): Promise<Room | 
   return getRoom(id);
 }
 
+export async function replaceRoomMedia(id: string, oldPath: string, newPath: string): Promise<Room | null> {
+  const room = await getRoom(id);
+  if (!room) {
+    return null;
+  }
+
+  const photoPaths = room.photoPaths.map((path) => (path === oldPath ? newPath : path));
+  const videoPaths = room.videoPaths.map((path) => (path === oldPath ? newPath : path));
+
+  await rooms.updateOne(
+    { id },
+    {
+      $set: {
+        photoPaths,
+        videoPaths,
+        updatedAt: new Date()
+      }
+    }
+  );
+
+  return getRoom(id);
+}
+
 function mapRoomDocument(document: RoomDocument): Room {
   return {
     id: document.id ?? document.number,

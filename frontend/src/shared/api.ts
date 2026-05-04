@@ -100,6 +100,26 @@ export async function deleteRoomMedia(room: Room, path: string): Promise<Room> {
   return updatedRoom;
 }
 
+export async function cropRoomMedia(
+  room: Room,
+  path: string,
+  options: { aspectRatio: number; focalX: number; focalY: number }
+): Promise<Room> {
+  const response = await fetch(`${API_BASE_URL}/api/rooms/${encodeURIComponent(room.id)}/media/crop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, ...options })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Media crop failed: ${response.status}`);
+  }
+
+  const updatedRoom = (await response.json()) as Room;
+  await replaceLocalRoom(updatedRoom);
+  return updatedRoom;
+}
+
 function getLocalRooms(): Promise<Room[]> {
   return new Promise((resolve) => {
     chrome.storage.local.get([LOCAL_ROOMS_STORAGE_KEY], (result) => {

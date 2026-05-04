@@ -5,6 +5,8 @@ import {
   Crop,
   Hotel,
   Image,
+  ChevronLeft,
+  ChevronRight,
   Pencil,
   MoveDown,
   MoveUp,
@@ -599,13 +601,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
 
           <aside className="gpb-preview-panel">
             <div className="gpb-preview-card">
-              <div className="gpb-preview-media">
-                {activeRoom.photoPaths[0] ? (
-                  <MediaImage alt={activeRoom.title} path={activeRoom.photoPaths[0]} />
-                ) : (
-                  <Image size={28} />
-                )}
-              </div>
+              <PreviewCarousel room={activeRoom} />
               <div className="gpb-preview-content">
                 <strong>{activeRoom.title}</strong>
                 <span>{activeRoom.number} · {getCategoryLabel(activeRoom.category)}</span>
@@ -627,6 +623,11 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                 <div className="gpb-whatsapp-bubble">
                   {buildWhatsAppPreview(activeRoom)}
                 </div>
+                <div className="gpb-whatsapp-media-note">
+                  {getWhatsAppMediaItems(activeRoom).length
+                    ? `К отправке: ${getWhatsAppMediaItems(activeRoom).length} медиа. Первое фото будет главным.`
+                    : "Медиа для отправки пока нет."}
+                </div>
               </div>
             </div>
           </aside>
@@ -640,6 +641,65 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
           />
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function PreviewCarousel({ room }: { room: Room }) {
+  const mediaItems = getWhatsAppMediaItems(room);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const activeItem = mediaItems[Math.min(activeIndex, Math.max(mediaItems.length - 1, 0))];
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [room.id, room.photoPaths.length, room.videoPaths.length]);
+
+  function move(direction: -1 | 1) {
+    setActiveIndex((index) => {
+      if (!mediaItems.length) return 0;
+      return (index + direction + mediaItems.length) % mediaItems.length;
+    });
+  }
+
+  return (
+    <div className="gpb-preview-carousel">
+      <div className="gpb-preview-media">
+        {activeItem ? (
+          activeItem.type === "photo" ? (
+            <MediaImage alt={room.title} path={activeItem.path} />
+          ) : (
+            <MediaVideo path={activeItem.path} />
+          )
+        ) : (
+          <Image size={28} />
+        )}
+        {mediaItems.length > 1 ? (
+          <>
+            <button className="gpb-carousel-prev" type="button" onClick={() => move(-1)} title="Назад">
+              <ChevronLeft size={18} />
+            </button>
+            <button className="gpb-carousel-next" type="button" onClick={() => move(1)} title="Вперед">
+              <ChevronRight size={18} />
+            </button>
+            <span className="gpb-carousel-count">{activeIndex + 1}/{mediaItems.length}</span>
+          </>
+        ) : null}
+      </div>
+      {mediaItems.length ? (
+        <div className="gpb-carousel-thumbs">
+          {mediaItems.map((item, index) => (
+            <button
+              className={index === activeIndex ? "is-active" : ""}
+              key={item.path}
+              type="button"
+              onClick={() => setActiveIndex(index)}
+              title={item.type === "photo" ? "Фото" : "Видео"}
+            >
+              {item.type === "photo" ? <MediaImage alt={`${room.title} ${index + 1}`} path={item.path} /> : <MediaVideo path={item.path} />}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -904,6 +964,12 @@ function buildWhatsAppPreview(room: Room) {
   const description = room.description || "Уютный вариант для отдыха.";
   const amenities = room.amenities ? `\nУдобства: ${room.amenities}` : "";
   return `${room.title}\n${description}${amenities}\nЦена: ${price}`;
+}
+
+function getWhatsAppMediaItems(room: Room) {
+  const photos = room.photoPaths.map((path) => ({ path, type: "photo" as const }));
+  const videos = room.videoPaths.map((path) => ({ path, type: "video" as const }));
+  return [...photos, ...videos];
 }
 
 function isHeicPath(path: string) {

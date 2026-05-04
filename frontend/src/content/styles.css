@@ -231,6 +231,43 @@ body.gpb-booking-panel-open #app {
   font-weight: 700 !important;
 }
 
+.gpb-create-object {
+  display: grid;
+  gap: 10px;
+  margin: 8px 0 12px;
+  border: 1px solid #d8dee5;
+  border-radius: 8px;
+  background: #f8fafb;
+  padding: 10px;
+}
+
+.gpb-create-object label {
+  display: grid;
+  gap: 5px;
+  color: #5c6670;
+  font-size: 12px;
+}
+
+.gpb-create-object input,
+.gpb-create-object select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid #cfd6dd;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #16202a;
+  font: inherit;
+  padding: 6px 8px;
+}
+
+.gpb-create-submit {
+  justify-content: center;
+  border-color: #0f6b57 !important;
+  background: #ffffff !important;
+  color: #0f6b57 !important;
+  font-weight: 700 !important;
+}
+
 .gpb-room-group-title {
   margin: 14px 4px 6px;
   color: #64707d;

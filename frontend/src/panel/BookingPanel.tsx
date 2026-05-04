@@ -86,6 +86,11 @@ const AMENITY_OPTIONS = [
   "Парковка"
 ];
 const DEFAULT_GROUPS = ["Блок А", "Блок Б", "Блок персонала", "Территория"];
+const CREATE_TYPE_OPTIONS: Array<{ category: Room["category"]; label: string }> = [
+  { category: "guest-room", label: "Номер / домик" },
+  { category: "amenity", label: "Услуга / зона" },
+  { category: "staff-room", label: "Служебный объект" }
+];
 
 function getMaxPanelWidth() {
   return Math.min(MAX_WIDTH, Math.floor(window.innerWidth * 0.62));
@@ -219,12 +224,17 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [mediaError, setMediaError] = useState("");
   const [isTechnicalOpen, setIsTechnicalOpen] = useState(false);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [createTitle, setCreateTitle] = useState("");
+  const [createGroup, setCreateGroup] = useState("");
+  const [createCategory, setCreateCategory] = useState<Room["category"]>("guest-room");
   const [focusedPriceRoomId, setFocusedPriceRoomId] = useState<string | null>(null);
   const [cropPath, setCropPath] = useState<string | null>(null);
   const [draggedRoomId, setDraggedRoomId] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const activeRoom = rooms.find((room) => room.id === selectedRoomId) ?? rooms[0];
+  const activeGroup = activeRoom?.group || "Блок А";
 
   useEffect(() => {
     getRooms()
@@ -234,6 +244,14 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
       })
       .catch(() => setLoadState("ready"));
   }, []);
+
+  useEffect(() => {
+    if (!isCreateOpen) {
+      return;
+    }
+
+    setCreateGroup(activeGroup);
+  }, [activeGroup, isCreateOpen]);
 
   function updateActiveRoom(patch: Partial<Room>) {
     setSaveState("idle");
@@ -290,14 +308,21 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
     setDraggedRoomId(null);
   }
 
-  function addRoom() {
+  function createCatalogObject() {
     setSaveState("idle");
     setMediaError("");
     setIsTechnicalOpen(true);
+    setIsCreateOpen(false);
     setRooms((currentRooms) => {
-      const nextNumber = getNextRoomNumber(currentRooms);
-      const room = createCustomRoom(nextNumber, currentRooms.length);
+      const room = createCustomObject({
+        category: createCategory,
+        group: createGroup.trim() || activeGroup,
+        sortOrder: currentRooms.length,
+        title: createTitle.trim(),
+        nextNumber: getNextRoomNumber(currentRooms)
+      });
       setSelectedRoomId(room.id);
+      setCreateTitle("");
       return withSortOrder(currentRooms.concat(room));
     });
   }
@@ -375,10 +400,46 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
 
         <div className="gpb-catalog-body">
           <nav className="gpb-room-list" aria-label="Номера">
-            <button className="gpb-add-room-button" type="button" onClick={addRoom}>
+            <button className="gpb-add-room-button" type="button" onClick={() => setIsCreateOpen((value) => !value)}>
               <Plus size={18} />
-              <span>Добавить номер</span>
+              <span>Создать объект</span>
             </button>
+            {isCreateOpen ? (
+              <div className="gpb-create-object">
+                <label>
+                  Тип
+                  <select value={createCategory} onChange={(event) => setCreateCategory(event.target.value as Room["category"])}>
+                    {CREATE_TYPE_OPTIONS.map((option) => (
+                      <option key={option.category} value={option.category}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Название
+                  <input
+                    placeholder={getCreateTitlePlaceholder(createCategory)}
+                    value={createTitle}
+                    onChange={(event) => setCreateTitle(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Группа
+                  <input
+                    list="gpb-create-room-groups"
+                    value={createGroup}
+                    onChange={(event) => setCreateGroup(event.target.value)}
+                  />
+                </label>
+                <datalist id="gpb-create-room-groups">
+                  {getGroupSuggestions(rooms).map((group) => (
+                    <option key={group} value={group} />
+                  ))}
+                </datalist>
+                <button className="gpb-create-submit" type="button" onClick={createCatalogObject}>
+                  Создать
+                </button>
+              </div>
+            ) : null}
             {rooms.map((room) => (
               <RoomListItem
                 activeRoomId={activeRoom.id}
@@ -983,15 +1044,30 @@ function createEmptyRoom(item: (typeof CATALOG_DEFAULTS)[number]): Room {
   };
 }
 
-function createCustomRoom(number: string, sortOrder: number): Room {
+function createCustomObject({
+  category,
+  group,
+  nextNumber,
+  sortOrder,
+  title
+}: {
+  category: Room["category"];
+  group: string;
+  nextNumber: string;
+  sortOrder: number;
+  title: string;
+}): Room {
+  const fallbackTitle = category === "guest-room" ? `Номер ${nextNumber}` : "Новый объект";
+  const number = category === "guest-room" ? nextNumber : createObjectCode(title || fallbackTitle);
+
   return {
-    id: `room-custom-${Date.now()}`,
+    id: `object-custom-${Date.now()}`,
     number,
-    title: `Номер ${number}`,
+    title: title || fallbackTitle,
     sortOrder,
-    group: "Блок А",
-    category: "guest-room",
-    bookable: true,
+    group,
+    category,
+    bookable: category !== "staff-room",
     includedInStay: false,
     status: "active",
     basePrice: 0,
@@ -1121,6 +1197,22 @@ function getNextRoomNumber(rooms: Room[]) {
   }, 0);
 
   return String(Math.max(maxNumber + 1, 116));
+}
+
+function getCreateTitlePlaceholder(category: Room["category"]) {
+  if (category === "guest-room") return "Например: Домик 1 или Номер 116";
+  if (category === "amenity") return "Например: Гараж, бассейн, баня";
+  return "Например: Склад, прачечная";
+}
+
+function createObjectCode(title: string) {
+  const code = title
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-ZА-Я0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 20);
+  return code || "OBJECT";
 }
 
 function getCategoryLabel(category: Room["category"]) {

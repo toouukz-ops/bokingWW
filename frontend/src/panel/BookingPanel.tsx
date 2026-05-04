@@ -15,11 +15,41 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { getHealth, getRooms, saveRoom } from "../shared/api";
-import type { Room, RoomStatus } from "../shared/types";
+import type { CatalogItemCategory, Room, RoomStatus } from "../shared/types";
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 960;
 const ROOM_NUMBERS = ["101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "115"];
+const CATALOG_DEFAULTS = [
+  ...ROOM_NUMBERS.map((number) => ({
+    id: createRoomId(number),
+    number,
+    title: `Номер ${number}`,
+    category: (Number(number) <= 104 ? "staff-room" : "guest-room") as CatalogItemCategory,
+    bookable: Number(number) >= 105
+  })),
+  {
+    id: "amenity-sauna",
+    number: "SAUNA",
+    title: "Сауна",
+    category: "amenity",
+    bookable: true
+  },
+  {
+    id: "amenity-gazebo",
+    number: "GAZEBO",
+    title: "Беседка",
+    category: "amenity",
+    bookable: true
+  },
+  {
+    id: "amenity-bbq",
+    number: "BBQ",
+    title: "Мангальная зона",
+    category: "amenity",
+    bookable: true
+  }
+] as const;
 
 function getMaxPanelWidth() {
   return Math.min(MAX_WIDTH, Math.floor(window.innerWidth * 0.62));
@@ -147,8 +177,8 @@ export function BookingPanel() {
 }
 
 function RoomCatalogModal({ onClose }: { onClose: () => void }) {
-  const [rooms, setRooms] = useState<Room[]>(() => ROOM_NUMBERS.map(createEmptyRoom));
-  const [selectedRoomId, setSelectedRoomId] = useState(createRoomId(ROOM_NUMBERS[0]));
+  const [rooms, setRooms] = useState<Room[]>(() => CATALOG_DEFAULTS.map(createEmptyRoom));
+  const [selectedRoomId, setSelectedRoomId] = useState(CATALOG_DEFAULTS[0].id);
   const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const activeRoom = rooms.find((room) => room.id === selectedRoomId) ?? rooms[0];
@@ -222,7 +252,10 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                 onClick={() => setSelectedRoomId(room.id)}
               >
                 <BedDouble size={18} />
-                <span>{room.title || `Номер ${room.number}`}</span>
+                <span>
+                  {room.title || `Номер ${room.number}`}
+                  <small>{getCategoryLabel(room.category)}</small>
+                </span>
               </button>
             ))}
           </nav>
@@ -253,6 +286,22 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                     <input value={activeRoom.title} onChange={(event) => updateActiveRoom({ title: event.target.value })} />
                   </label>
                   <label>
+                    Тип
+                    <select
+                      value={activeRoom.category}
+                      onChange={(event) =>
+                        updateActiveRoom({
+                          category: event.target.value as Room["category"],
+                          bookable: event.target.value !== "staff-room"
+                        })
+                      }
+                    >
+                      <option value="guest-room">Гостевой номер</option>
+                      <option value="staff-room">Персонал</option>
+                      <option value="amenity">Зона/услуга</option>
+                    </select>
+                  </label>
+                  <label>
                     Статус
                     <select
                       value={activeRoom.status}
@@ -261,6 +310,16 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                       <option value="active">Активен</option>
                       <option value="hidden">Скрыт</option>
                       <option value="repair">Ремонт</option>
+                    </select>
+                  </label>
+                  <label>
+                    Бронируется
+                    <select
+                      value={activeRoom.bookable ? "yes" : "no"}
+                      onChange={(event) => updateActiveRoom({ bookable: event.target.value === "yes" })}
+                    >
+                      <option value="yes">Да</option>
+                      <option value="no">Нет</option>
                     </select>
                   </label>
                   <label>
@@ -392,12 +451,14 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function createEmptyRoom(number: string): Room {
+function createEmptyRoom(item: (typeof CATALOG_DEFAULTS)[number]): Room {
   return {
-    id: createRoomId(number),
-    number,
-    title: `Номер ${number}`,
-    sortOrder: ROOM_NUMBERS.indexOf(number),
+    id: item.id,
+    number: item.number,
+    title: item.title,
+    sortOrder: CATALOG_DEFAULTS.findIndex((catalogItem) => catalogItem.id === item.id),
+    category: item.category,
+    bookable: item.bookable,
     status: "active",
     basePrice: 0,
     floor: "",
@@ -417,10 +478,12 @@ function mergeRooms(loadedRooms: Room[]) {
   const normalizedRooms = loadedRooms.map((room, index) => ({
     ...room,
     id: room.id || createRoomId(room.number),
-    sortOrder: Number.isFinite(room.sortOrder) ? room.sortOrder : index
+    sortOrder: Number.isFinite(room.sortOrder) ? room.sortOrder : index,
+    category: room.category ?? getDefaultCategory(room.number),
+    bookable: typeof room.bookable === "boolean" ? room.bookable : getDefaultBookable(room.number)
   }));
   const byId = new Map(normalizedRooms.map((room) => [room.id, room]));
-  const rooms = ROOM_NUMBERS.map((number) => byId.get(createRoomId(number)) ?? createEmptyRoom(number));
+  const rooms = CATALOG_DEFAULTS.map((item) => byId.get(item.id) ?? createEmptyRoom(item));
   return withSortOrder(rooms.sort((left, right) => left.sortOrder - right.sortOrder));
 }
 
@@ -438,4 +501,21 @@ function withSortOrder(rooms: Room[]) {
     ...room,
     sortOrder: index
   }));
+}
+
+function getCategoryLabel(category: Room["category"]) {
+  if (category === "staff-room") return "Персонал";
+  if (category === "amenity") return "Зона";
+  return "Гости";
+}
+
+function getDefaultCategory(number: string): Room["category"] {
+  const numeric = Number(number);
+  if (numeric >= 101 && numeric <= 104) return "staff-room";
+  return "guest-room";
+}
+
+function getDefaultBookable(number: string) {
+  const numeric = Number(number);
+  return !(numeric >= 101 && numeric <= 104);
 }

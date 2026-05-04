@@ -19,12 +19,15 @@ export interface BookingDraft {
 }
 
 export type RoomStatus = "active" | "hidden" | "repair";
+export type CatalogItemCategory = "guest-room" | "staff-room" | "amenity";
 
 export interface Room {
   id: string;
   number: string;
   title: string;
   sortOrder: number;
+  category: CatalogItemCategory;
+  bookable: boolean;
   status: RoomStatus;
   basePrice: number;
   floor: string;

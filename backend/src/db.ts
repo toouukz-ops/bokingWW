@@ -9,6 +9,7 @@ export async function connectDatabase() {
   await dropLegacyNumberIndex();
   await migrateLegacyRooms();
   await consolidateSeedRooms();
+  await backfillCatalogFields();
   await db.collection("rooms").createIndex({ id: 1 }, { unique: true });
   await seedRooms();
 }
@@ -22,15 +23,17 @@ async function seedRooms() {
   const now = new Date();
 
   await Promise.all(
-    roomNumbers.map((number, index) =>
+    catalogDefaults.map((item, index) =>
       rooms.updateOne(
-        { id: `room-${number}` },
+        { id: item.id },
         {
           $setOnInsert: {
-            id: `room-${number}`,
-            number,
-            title: `Номер ${number}`,
+            id: item.id,
+            number: item.number,
+            title: item.title,
             sortOrder: index,
+            category: item.category,
+            bookable: item.bookable,
             status: "active",
             basePrice: 0,
             floor: "",
@@ -54,6 +57,36 @@ async function seedRooms() {
 }
 
 const roomNumbers = ["101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "115"];
+const catalogDefaults = [
+  ...roomNumbers.map((number) => ({
+    id: `room-${number}`,
+    number,
+    title: `Номер ${number}`,
+    category: Number(number) <= 104 ? "staff-room" : "guest-room",
+    bookable: Number(number) >= 105
+  })),
+  {
+    id: "amenity-sauna",
+    number: "SAUNA",
+    title: "Сауна",
+    category: "amenity",
+    bookable: true
+  },
+  {
+    id: "amenity-gazebo",
+    number: "GAZEBO",
+    title: "Беседка",
+    category: "amenity",
+    bookable: true
+  },
+  {
+    id: "amenity-bbq",
+    number: "BBQ",
+    title: "Мангальная зона",
+    category: "amenity",
+    bookable: true
+  }
+];
 
 async function dropLegacyNumberIndex() {
   const rooms = db.collection("rooms");
@@ -102,6 +135,8 @@ async function consolidateSeedRooms() {
         $set: {
           id: `room-${number}`,
           sortOrder: typeof preferred.sortOrder === "number" ? preferred.sortOrder : index,
+          category: Number(number) <= 104 ? "staff-room" : "guest-room",
+          bookable: Number(number) >= 105,
           updatedAt: now
         }
       }
@@ -111,5 +146,22 @@ async function consolidateSeedRooms() {
     if (duplicateIds.length > 0) {
       await rooms.deleteMany({ _id: { $in: duplicateIds } });
     }
+  }
+}
+
+async function backfillCatalogFields() {
+  const rooms = db.collection("rooms");
+
+  for (const item of catalogDefaults) {
+    await rooms.updateOne(
+      { id: item.id },
+      {
+        $set: {
+          category: item.category,
+          bookable: item.bookable,
+          updatedAt: new Date()
+        }
+      }
+    );
   }
 }

@@ -33,6 +33,7 @@ const CATALOG_DEFAULTS = [
     id: createRoomId(number),
     number,
     title: `Номер ${number}`,
+    group: Number(number) <= 104 ? "Блок персонала" : "Блок А",
     category: (Number(number) <= 104 ? "staff-room" : "guest-room") as CatalogItemCategory,
     bookable: Number(number) >= 105,
     includedInStay: false
@@ -41,6 +42,7 @@ const CATALOG_DEFAULTS = [
     id: "amenity-sauna",
     number: "SAUNA",
     title: "Баня / сауна",
+    group: "Территория",
     category: "amenity",
     bookable: true,
     includedInStay: false,
@@ -50,6 +52,7 @@ const CATALOG_DEFAULTS = [
     id: "amenity-gazebo",
     number: "GAZEBO",
     title: "Беседка",
+    group: "Территория",
     category: "amenity",
     bookable: true,
     includedInStay: true,
@@ -59,6 +62,7 @@ const CATALOG_DEFAULTS = [
     id: "amenity-bbq",
     number: "BBQ",
     title: "Мангальная зона",
+    group: "Территория",
     category: "amenity",
     bookable: true,
     includedInStay: true,
@@ -81,6 +85,7 @@ const AMENITY_OPTIONS = [
   "Чайник",
   "Парковка"
 ];
+const DEFAULT_GROUPS = ["Блок А", "Блок Б", "Блок персонала", "Территория"];
 
 function getMaxPanelWidth() {
   return Math.min(MAX_WIDTH, Math.floor(window.innerWidth * 0.62));
@@ -216,6 +221,7 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
   const [isTechnicalOpen, setIsTechnicalOpen] = useState(false);
   const [focusedPriceRoomId, setFocusedPriceRoomId] = useState<string | null>(null);
   const [cropPath, setCropPath] = useState<string | null>(null);
+  const [draggedRoomId, setDraggedRoomId] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const activeRoom = rooms.find((room) => room.id === selectedRoomId) ?? rooms[0];
@@ -259,6 +265,29 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
       nextRooms.splice(nextIndex, 0, room);
       return withSortOrder(nextRooms);
     });
+  }
+
+  function moveDraggedRoom(targetRoomId: string) {
+    if (!draggedRoomId || draggedRoomId === targetRoomId) {
+      return;
+    }
+
+    setSaveState("idle");
+    setRooms((currentRooms) => {
+      const draggedIndex = currentRooms.findIndex((room) => room.id === draggedRoomId);
+      const targetIndex = currentRooms.findIndex((room) => room.id === targetRoomId);
+      if (draggedIndex < 0 || targetIndex < 0) {
+        return currentRooms;
+      }
+
+      const nextRooms = [...currentRooms];
+      const [draggedRoom] = nextRooms.splice(draggedIndex, 1);
+      const targetRoom = currentRooms[targetIndex];
+      const insertIndex = nextRooms.findIndex((room) => room.id === targetRoomId);
+      nextRooms.splice(insertIndex, 0, { ...draggedRoom, group: targetRoom.group });
+      return withSortOrder(nextRooms);
+    });
+    setDraggedRoomId(null);
   }
 
   function addRoom() {
@@ -351,18 +380,17 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
               <span>Добавить номер</span>
             </button>
             {rooms.map((room) => (
-              <button
-                className={room.id === activeRoom.id ? "is-active" : ""}
+              <RoomListItem
+                activeRoomId={activeRoom.id}
+                draggedRoomId={draggedRoomId}
                 key={room.id}
-                type="button"
-                onClick={() => setSelectedRoomId(room.id)}
-              >
-                <CatalogItemIcon room={room} />
-                <span>
-                  {room.title || `Номер ${room.number}`}
-                  <small>{getCategoryLabel(room.category)}</small>
-                </span>
-              </button>
+                previousGroup={getPreviousRoomGroup(rooms, room.id)}
+                room={room}
+                onDragEnd={() => setDraggedRoomId(null)}
+                onDragStart={() => setDraggedRoomId(room.id)}
+                onDrop={() => moveDraggedRoom(room.id)}
+                onSelect={() => setSelectedRoomId(room.id)}
+              />
             ))}
           </nav>
 
@@ -414,6 +442,19 @@ function RoomCatalogModal({ onClose }: { onClose: () => void }) {
                         <option value="amenity">Зона/услуга</option>
                       </select>
                     </label>
+                    <label>
+                      Группа
+                      <input
+                        list="gpb-room-groups"
+                        value={activeRoom.group}
+                        onChange={(event) => updateActiveRoom({ group: event.target.value })}
+                      />
+                    </label>
+                    <datalist id="gpb-room-groups">
+                      {getGroupSuggestions(rooms).map((group) => (
+                        <option key={group} value={group} />
+                      ))}
+                    </datalist>
                     <label>
                       Этаж
                       <input value={activeRoom.floor} onChange={(event) => updateActiveRoom({ floor: event.target.value })} />
@@ -772,6 +813,56 @@ function PreviewCarousel({ room }: { room: Room }) {
   );
 }
 
+function RoomListItem({
+  activeRoomId,
+  draggedRoomId,
+  onDragEnd,
+  onDragStart,
+  onDrop,
+  onSelect,
+  previousGroup,
+  room
+}: {
+  activeRoomId: string;
+  draggedRoomId: string | null;
+  onDragEnd: () => void;
+  onDragStart: () => void;
+  onDrop: () => void;
+  onSelect: () => void;
+  previousGroup?: string;
+  room: Room;
+}) {
+  const isNewGroup = room.group !== previousGroup;
+
+  return (
+    <>
+      {isNewGroup ? <div className="gpb-room-group-title">{room.group || "Без группы"}</div> : null}
+      <button
+        className={[
+          room.id === activeRoomId ? "is-active" : "",
+          room.id === draggedRoomId ? "is-dragging" : ""
+        ].filter(Boolean).join(" ")}
+        draggable
+        type="button"
+        onClick={onSelect}
+        onDragEnd={onDragEnd}
+        onDragOver={(event) => event.preventDefault()}
+        onDragStart={onDragStart}
+        onDrop={(event) => {
+          event.preventDefault();
+          onDrop();
+        }}
+      >
+        <CatalogItemIcon room={room} />
+        <span>
+          {room.title || `Номер ${room.number}`}
+          <small>{getCategoryLabel(room.category)}</small>
+        </span>
+      </button>
+    </>
+  );
+}
+
 const CROP_PRESETS = [
   { label: "16:9", ratio: 16 / 9 },
   { label: "9:16", ratio: 9 / 16 },
@@ -873,6 +964,7 @@ function createEmptyRoom(item: (typeof CATALOG_DEFAULTS)[number]): Room {
     number: item.number,
     title: item.title,
     sortOrder: CATALOG_DEFAULTS.findIndex((catalogItem) => catalogItem.id === item.id),
+    group: item.group,
     category: item.category,
     bookable: item.bookable,
     includedInStay: item.includedInStay,
@@ -897,6 +989,7 @@ function createCustomRoom(number: string, sortOrder: number): Room {
     number,
     title: `Номер ${number}`,
     sortOrder,
+    group: "Блок А",
     category: "guest-room",
     bookable: true,
     includedInStay: false,
@@ -995,6 +1088,7 @@ function mergeRooms(loadedRooms: Room[]) {
     ...room,
     id: room.id || createRoomId(room.number),
     sortOrder: Number.isFinite(room.sortOrder) ? room.sortOrder : index,
+    group: room.group || getDefaultGroup(room.category ?? getDefaultCategory(room.number)),
     category: room.category ?? getDefaultCategory(room.number),
     bookable: typeof room.bookable === "boolean" ? room.bookable : getDefaultBookable(room.number),
     includedInStay: typeof room.includedInStay === "boolean" ? room.includedInStay : getDefaultIncludedInStay(room.id)
@@ -1057,6 +1151,23 @@ function getDefaultCategory(number: string): Room["category"] {
 function getDefaultBookable(number: string) {
   const numeric = Number(number);
   return !(numeric >= 101 && numeric <= 104);
+}
+
+function getDefaultGroup(category: Room["category"]) {
+  if (category === "staff-room") return "Блок персонала";
+  if (category === "amenity") return "Территория";
+  return "Блок А";
+}
+
+function getGroupSuggestions(rooms: Room[]) {
+  return Array.from(new Set(DEFAULT_GROUPS.concat(rooms.map((room) => room.group).filter(Boolean)))).sort((a, b) =>
+    a.localeCompare(b, "ru")
+  );
+}
+
+function getPreviousRoomGroup(rooms: Room[], roomId: string) {
+  const index = rooms.findIndex((room) => room.id === roomId);
+  return index > 0 ? rooms[index - 1].group : undefined;
 }
 
 function getDefaultIncludedInStay(id: string) {

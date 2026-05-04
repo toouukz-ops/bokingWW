@@ -26,6 +26,7 @@ export interface Room {
   number: string;
   title: string;
   sortOrder: number;
+  group: string;
   category: CatalogItemCategory;
   bookable: boolean;
   includedInStay: boolean;

@@ -32,6 +32,7 @@ async function seedRooms() {
             number: item.number,
             title: item.title,
             sortOrder: index,
+            group: item.group,
             category: item.category,
             bookable: item.bookable,
             includedInStay: item.includedInStay,
@@ -63,6 +64,7 @@ const catalogDefaults = [
     id: `room-${number}`,
     number,
     title: `Номер ${number}`,
+    group: Number(number) <= 104 ? "Блок персонала" : "Блок А",
     category: Number(number) <= 104 ? "staff-room" : "guest-room",
     bookable: Number(number) >= 105,
     includedInStay: false
@@ -71,6 +73,7 @@ const catalogDefaults = [
     id: "amenity-sauna",
     number: "SAUNA",
     title: "Баня / сауна",
+    group: "Территория",
     category: "amenity",
     bookable: true,
     includedInStay: false,
@@ -80,6 +83,7 @@ const catalogDefaults = [
     id: "amenity-gazebo",
     number: "GAZEBO",
     title: "Беседка",
+    group: "Территория",
     category: "amenity",
     bookable: true,
     includedInStay: true,
@@ -89,6 +93,7 @@ const catalogDefaults = [
     id: "amenity-bbq",
     number: "BBQ",
     title: "Мангальная зона",
+    group: "Территория",
     category: "amenity",
     bookable: true,
     includedInStay: true,
@@ -143,6 +148,7 @@ async function consolidateSeedRooms() {
         $set: {
           id: `room-${number}`,
           sortOrder: typeof preferred.sortOrder === "number" ? preferred.sortOrder : index,
+          group: Number(number) <= 104 ? "Блок персонала" : "Блок А",
           category: Number(number) <= 104 ? "staff-room" : "guest-room",
           bookable: Number(number) >= 105,
           includedInStay: false,
@@ -167,6 +173,7 @@ async function backfillCatalogFields() {
       {
         $set: {
           category: item.category,
+          group: item.group,
           bookable: item.bookable,
           includedInStay: item.includedInStay,
           ...(item.category === "amenity" ? { capacityAdults: getCatalogCapacity(item) } : {}),

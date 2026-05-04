@@ -6,6 +6,7 @@ export const roomSchema = z.object({
   number: z.string().min(1),
   title: z.string().min(1),
   sortOrder: z.number().int().min(0),
+  group: z.string().optional().default("Без группы"),
   category: z.enum(["guest-room", "staff-room", "amenity"]),
   bookable: z.boolean(),
   includedInStay: z.boolean().default(false),
@@ -119,6 +120,7 @@ function mapRoomDocument(document: RoomDocument): Room {
     number: document.number,
     title: document.title,
     sortOrder: document.sortOrder ?? 0,
+    group: document.group ?? getDefaultGroup(document.category),
     category: document.category ?? "guest-room",
     bookable: document.bookable ?? true,
     includedInStay: document.includedInStay ?? false,
@@ -135,4 +137,10 @@ function mapRoomDocument(document: RoomDocument): Room {
     photoPaths: Array.isArray(document.photoPaths) ? document.photoPaths : [],
     videoPaths: Array.isArray(document.videoPaths) ? document.videoPaths : []
   };
+}
+
+function getDefaultGroup(category: Room["category"]) {
+  if (category === "staff-room") return "Блок персонала";
+  if (category === "amenity") return "Территория";
+  return "Блок А";
 }

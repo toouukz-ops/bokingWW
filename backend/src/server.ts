@@ -2,10 +2,10 @@ import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { createStubDraft, bookingDraftRequestSchema } from "./booking.js";
 import { config } from "./config.js";
-import { migrate } from "./db.js";
+import { closeDatabase, connectDatabase } from "./db.js";
 import { getRoom, listRooms, roomSchema, saveRoom } from "./rooms.js";
 
-migrate();
+await connectDatabase();
 
 const app = Fastify({
   logger: true
@@ -48,7 +48,7 @@ app.get("/api/rooms", async () => {
 
 app.get("/api/rooms/:number", async (request, reply) => {
   const { number } = request.params as { number: string };
-  const room = getRoom(number);
+  const room = await getRoom(number);
 
   if (!room) {
     return reply.status(404).send({ error: "Room not found" });
@@ -73,6 +73,14 @@ app.put("/api/rooms/:number", async (request, reply) => {
 
   return saveRoom(result.data);
 });
+
+const close = async () => {
+  await app.close();
+  await closeDatabase();
+};
+
+process.on("SIGINT", close);
+process.on("SIGTERM", close);
 
 await app.listen({
   port: config.port,

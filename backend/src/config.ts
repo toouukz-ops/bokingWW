@@ -2,7 +2,7 @@ import "dotenv/config";
 
 export const config = {
   port: Number(process.env.PORT ?? 8765),
-  databasePath: process.env.DATABASE_PATH ?? "./data/bookings.sqlite",
+  mongodbUri: process.env.MONGODB_URI ?? "mongodb://127.0.0.1:27017",
+  mongodbDbName: process.env.MONGODB_DB_NAME ?? "gpb_whatsapp_booking",
   openAiApiKey: process.env.OPENAI_API_KEY ?? ""
 };
-

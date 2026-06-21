@@ -8,98 +8,14 @@ export async function connectDatabase() {
   await mongoClient.connect();
   await dropLegacyNumberIndex();
   await migrateLegacyRooms();
-  await consolidateSeedRooms();
-  await backfillCatalogFields();
   await db.collection("rooms").createIndex({ id: 1 }, { unique: true });
-  await seedRooms();
+  await db.collection("guestContacts").createIndex({ phone: 1 }, { unique: true });
+  await db.collection("guestContacts").createIndex({ inquiryDate: -1 });
 }
 
 export async function closeDatabase() {
   await mongoClient.close();
 }
-
-async function seedRooms() {
-  const rooms = db.collection("rooms");
-  const now = new Date();
-
-  await Promise.all(
-    catalogDefaults.map((item, index) =>
-      rooms.updateOne(
-        { id: item.id },
-        {
-          $setOnInsert: {
-            id: item.id,
-            number: item.number,
-            title: item.title,
-            sortOrder: index,
-            group: item.group,
-            category: item.category,
-            bookable: item.bookable,
-            includedInStay: item.includedInStay,
-            status: "active",
-            basePrice: 0,
-            floor: "",
-            capacityAdults: getCatalogCapacity(item),
-            capacityChildren: 0,
-            extraBeds: 0,
-            beds: "",
-            description: "",
-            amenities: "",
-            adminNotes: "",
-            photoPaths: [],
-            videoPaths: [],
-            createdAt: now,
-            updatedAt: now
-          }
-        },
-        { upsert: true }
-      )
-    )
-  );
-}
-
-const roomNumbers = ["101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "115"];
-const catalogDefaults = [
-  ...roomNumbers.map((number) => ({
-    id: `room-${number}`,
-    number,
-    title: `Номер ${number}`,
-    group: Number(number) <= 104 ? "Блок персонала" : "Блок А",
-    category: Number(number) <= 104 ? "staff-room" : "guest-room",
-    bookable: Number(number) >= 105,
-    includedInStay: false
-  })),
-  {
-    id: "amenity-sauna",
-    number: "SAUNA",
-    title: "Баня / сауна",
-    group: "Территория",
-    category: "amenity",
-    bookable: true,
-    includedInStay: false,
-    capacityAdults: 8
-  },
-  {
-    id: "amenity-gazebo",
-    number: "GAZEBO",
-    title: "Беседка",
-    group: "Территория",
-    category: "amenity",
-    bookable: true,
-    includedInStay: true,
-    capacityAdults: 15
-  },
-  {
-    id: "amenity-bbq",
-    number: "BBQ",
-    title: "Мангальная зона",
-    group: "Территория",
-    category: "amenity",
-    bookable: true,
-    includedInStay: true,
-    capacityAdults: 1
-  }
-];
 
 async function dropLegacyNumberIndex() {
   const rooms = db.collection("rooms");
@@ -128,72 +44,4 @@ async function migrateLegacyRooms() {
       )
     )
   );
-}
-
-async function consolidateSeedRooms() {
-  const rooms = db.collection("rooms");
-
-  for (const [index, number] of roomNumbers.entries()) {
-    const documents = await rooms.find({ number }).toArray();
-    if (documents.length === 0) {
-      continue;
-    }
-
-    const preferred = documents.find((room) => room.id === `room-${number}`) ?? documents[0];
-    const now = new Date();
-
-    await rooms.updateOne(
-      { _id: preferred._id },
-      {
-        $set: {
-          id: `room-${number}`,
-          sortOrder: typeof preferred.sortOrder === "number" ? preferred.sortOrder : index,
-          group: Number(number) <= 104 ? "Блок персонала" : "Блок А",
-          category: Number(number) <= 104 ? "staff-room" : "guest-room",
-          bookable: Number(number) >= 105,
-          includedInStay: false,
-          updatedAt: now
-        }
-      }
-    );
-
-    const duplicateIds = documents.filter((room) => String(room._id) !== String(preferred._id)).map((room) => room._id);
-    if (duplicateIds.length > 0) {
-      await rooms.deleteMany({ _id: { $in: duplicateIds } });
-    }
-  }
-}
-
-async function backfillCatalogFields() {
-  const rooms = db.collection("rooms");
-
-  for (const item of catalogDefaults) {
-    await rooms.updateOne(
-      { id: item.id },
-      {
-        $set: {
-          category: item.category,
-          group: item.group,
-          bookable: item.bookable,
-          includedInStay: item.includedInStay,
-          ...(item.category === "amenity" ? { capacityAdults: getCatalogCapacity(item) } : {}),
-          updatedAt: new Date()
-        }
-      }
-    );
-  }
-
-  await rooms.updateOne(
-    { id: "amenity-sauna", title: "Сауна" },
-    {
-      $set: {
-        title: "Баня / сауна",
-        updatedAt: new Date()
-      }
-    }
-  );
-}
-
-function getCatalogCapacity(item: (typeof catalogDefaults)[number]) {
-  return "capacityAdults" in item ? item.capacityAdults : 2;
 }

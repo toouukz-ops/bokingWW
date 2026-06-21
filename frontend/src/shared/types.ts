@@ -18,8 +18,223 @@ export interface BookingDraft {
   prepayment?: number;
 }
 
+export interface Reservation {
+  id: string;
+  roomIds: string[];
+  items?: ReservationItem[];
+  payments?: ReservationPayment[];
+  guestFirstName: string;
+  phone: string;
+  checkIn: string;
+  checkOut: string;
+  checkInTime: string;
+  checkOutTime: string;
+  comment: string;
+  adminComment?: string;
+  adults: number;
+  children: number;
+  hasPet: boolean;
+  extraBed: boolean;
+  extraBedType?: "air-bed" | "rollaway";
+  airMattressCount: number;
+  rollawayCount?: number;
+  extraInventoryByRoomId?: Record<string, { airBeds: number; rollaways: number }>;
+  extraInventoryManual?: boolean;
+  hourlyHours: number;
+  discountPercent: number;
+  subtotal: number;
+  discountAmount: number;
+  total: number;
+  prepayment: number;
+  paidAmount?: number;
+  paymentLink: string;
+  paymentMethod?: string;
+  breakfastIncluded?: boolean;
+  breakfastDiscountAmount?: number;
+  isManualSale?: boolean;
+  isAddOnSale?: boolean;
+  parentReservationId?: string;
+  status: "pending" | "booked" | "cancelled";
+  prepaymentReceivedAt?: string;
+  balancePaidAt?: string;
+  checkedInAt?: string;
+  checkedOutAt?: string;
+  extendedAt?: string;
+  noShowAt?: string;
+  createdAt: string;
+}
+
+export interface ReservationItem {
+  id: string;
+  roomId: string;
+  checkIn: string;
+  checkOut: string;
+  checkInTime?: string;
+  checkOutTime?: string;
+  subtotal: number;
+  discountAmount?: number;
+  total: number;
+  prepayment?: number;
+  paidAmount?: number;
+  balancePaidAt?: string;
+  checkedInAt?: string;
+  checkedOutAt?: string;
+}
+
+export interface ReservationPayment {
+  id: string;
+  type: "prepayment" | "balance" | "extra";
+  roomId?: string;
+  amount: number;
+  method?: string;
+  paidAt: string;
+}
+
+export interface PaymentSettings {
+  paymentLink: string;
+  paymentMethods: Record<string, string>;
+  linkMethods: Record<string, string>;
+  companyRequisites: Record<string, string>;
+  objectGalleryPhotoPaths: string[];
+  objectGalleryVideoPaths: string[];
+  menuItems: MenuItem[];
+  pricePdfRoomIds: string[];
+  pricePdfSummaryOptions: string[];
+  pricePdfLinkIds: string[];
+  pricePdfIncludeGallery: boolean;
+  pricePdfGroupPeriodTotals: boolean;
+  quickPhrases: string[];
+  customAmenityOptions: string[];
+  customFoodOptions: string[];
+  customSleepingPlaceOptions: string[];
+  defaultCheckInTime: string;
+  defaultCheckOutTime: string;
+  weatherLocationName: string;
+  weatherLatitude: number;
+  weatherLongitude: number;
+  customHolidayDates: string[];
+  inventoryAirBeds: number;
+  inventoryRollaways: number;
+  inventoryCustomFields: Record<string, string>;
+  packageDiscountPercent: number;
+  packagePeriodDiscountPercent: number;
+  packagePeriodDiscountFrom: string;
+  packagePeriodDiscountTo: string;
+  dynamicPricingEnabled: boolean;
+  dynamicPricingMarginPercent: number;
+  dynamicPricingSeasonEnd: string;
+  breakfastPricePerPerson: number;
+  packageGiftText: string;
+  packageMinRooms: number;
+  packageIncludeAmenities: boolean;
+  packageCustomFields: Record<string, string>;
+  servicePassword: string;
+}
+
+export interface MenuItem {
+  id: string;
+  title: string;
+  photoPath: string;
+  price: number;
+  cookingTime: string;
+  composition: string;
+}
+
+export interface ActiveChat {
+  id: string;
+  title: string;
+  phone?: string;
+}
+
+export interface GuestContact {
+  phone: string;
+  appeal: string;
+  inquiryDate: string;
+}
+
+export type ExpenseType = "fixed" | "variable";
+
+export interface ExpenseCategory {
+  id: string;
+  type: ExpenseType;
+  title: string;
+  createdAt: string;
+}
+
+export interface ExpenseEntry {
+  id: string;
+  categoryId: string;
+  type: ExpenseType;
+  title: string;
+  amount: number;
+  paymentDate: string;
+  note: string;
+  createdAt: string;
+}
+
+export interface ChatBookingDraft {
+  selectedRoomId: string;
+  selectedBookingRoomIds: string[];
+  roomDateOverrides?: Record<string, { checkIn: string; checkOut: string }>;
+  checkIn: string;
+  checkOut: string;
+  checkInTime: string;
+  checkOutTime: string;
+  comment: string;
+  adminComment?: string;
+  guestFirstName: string;
+  phone: string;
+  adults: number;
+  children: number;
+  hasPet: boolean;
+  extraBed: boolean;
+  extraBedType?: "air-bed" | "rollaway";
+  airMattressCount: number;
+  rollawayCount?: number;
+  extraInventoryByRoomId?: Record<string, { airBeds: number; rollaways: number }>;
+  extraInventoryManual?: boolean;
+  hourlyHours: number;
+  discountPercent: number;
+  packageDiscountEnabled?: boolean;
+  breakfastIncluded?: boolean;
+  manualTotalAmount: number;
+  manualSaleOpen?: boolean;
+  manualSaleAmount: number;
+  manualSaleComment: string;
+  manualSalePaymentMethod: string;
+  manualSalePeriod: "day" | "half-day";
+  prepaymentAlreadyPaid: boolean;
+  catalogStatus?: "price-sent" | "room-sent";
+  catalogStatusAt?: string;
+  agreementSent: boolean;
+  agreementEverSent?: boolean;
+  lastReservation: Reservation | null;
+  updatedAt: string;
+}
+
 export type RoomStatus = "active" | "hidden" | "repair";
 export type CatalogItemCategory = "guest-room" | "staff-room" | "amenity";
+export type CatalogObjectType = "room" | "house" | "amenity" | "staff" | "sauna" | "gazebo" | "bbq" | "firepit" | "parking" | "dining";
+export type BathroomType = "inside-room" | "private-on-floor" | "shared-on-floor" | "none";
+export type SleepingPlaceType = "double-bed" | "single-bed" | "sofa" | "fixed-sofa" | "sofa-bed" | "rollaway" | "air-bed" | "custom";
+
+export interface SleepingPlace {
+  id: string;
+  type: SleepingPlaceType;
+  title: string;
+  count: number;
+  placesCount?: number;
+  normalCapacity: number;
+  denseCapacity: number;
+  isMain: boolean;
+  allowSharedSameGender: boolean;
+  pairOnly: boolean;
+  childFriendly: boolean;
+  adultFriendly: boolean;
+  needsPreparation: boolean;
+  extraPrice: number;
+  notes: string;
+}
 
 export interface Room {
   id: string;
@@ -28,15 +243,30 @@ export interface Room {
   sortOrder: number;
   group: string;
   category: CatalogItemCategory;
+  objectType: CatalogObjectType;
   bookable: boolean;
   includedInStay: boolean;
   status: RoomStatus;
+  excludeFromBookingSummary: boolean;
+  hideInBookingPanel: boolean;
   basePrice: number;
+  weekdayPrice: number;
+  weekendPrice: number;
+  holidayPrice: number;
+  dynamicPricingApplied?: boolean;
+  dynamicPricingBasePrice?: number;
+  dynamicPricesByDate?: Record<string, number>;
   floor: string;
+  occupancyLabel: string;
+  bathroomType: BathroomType;
   capacityAdults: number;
   capacityChildren: number;
   extraBeds: number;
+  extraBedEnabled: boolean;
+  extraBedPrice: number;
+  extraBedDescription: string;
   beds: string;
+  sleepingPlaces: SleepingPlace[];
   description: string;
   amenities: string;
   adminNotes: string;

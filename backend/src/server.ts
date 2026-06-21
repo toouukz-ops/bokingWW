@@ -3,15 +3,18 @@ import multipart from "@fastify/multipart";
 import staticFiles from "@fastify/static";
 import Fastify from "fastify";
 import { mkdir } from "node:fs/promises";
+import { exportServerBackup, importServerBackup } from "./backup.js";
 import { createStubDraft, bookingDraftRequestSchema } from "./booking.js";
 import { config } from "./config.js";
 import { closeDatabase, connectDatabase } from "./db.js";
-import { cropPhotoFile, deleteMediaFile, saveRoomMediaFile, uploadsRoot } from "./media.js";
-import { addRoomMedia, getRoom, listRooms, removeRoomMedia, replaceRoomMedia, roomSchema, saveRoom } from "./rooms.js";
+import { deleteGuestContact, guestContactSchema, listGuestContacts, saveGuestContact } from "./guestContacts.js";
+import { cropPhotoFile, deleteMediaFile, ensureWhatsappVideoFile, saveRoomMediaFile, uploadsRoot } from "./media.js";
+import { addRoomMedia, deleteRoom, getRoom, listRooms, removeRoomMedia, replaceRoomMedia, roomSchema, saveRoom } from "./rooms.js";
 
 await connectDatabase();
 
 const app = Fastify({
+  bodyLimit: 250 * 1024 * 1024,
   logger: true
 });
 
@@ -27,7 +30,7 @@ await app.register(cors, {
 });
 await app.register(multipart, {
   limits: {
-    fileSize: 80 * 1024 * 1024,
+    fileSize: 250 * 1024 * 1024,
     files: 1
   }
 });
@@ -37,11 +40,37 @@ await app.register(staticFiles, {
   prefix: "/uploads/"
 });
 
+const frontendDebugLogs: Array<{
+  body: Record<string, unknown>;
+  createdAt: string;
+}> = [];
+
 app.get("/api/health", async () => {
   return {
     ok: true,
     service: "gpb-whatsapp-booking-backend"
   };
+});
+
+app.get("/api/debug/logs", async () => {
+  return frontendDebugLogs;
+});
+
+app.post("/api/debug/logs", async (request) => {
+  const body = request.body as Record<string, unknown> | undefined;
+  frontendDebugLogs.push({
+    body: body ?? {},
+    createdAt: new Date().toISOString()
+  });
+  if (frontendDebugLogs.length > 200) {
+    frontendDebugLogs.splice(0, frontendDebugLogs.length - 200);
+  }
+  request.log.info({
+    source: "frontend",
+    debug: body ?? {}
+  }, "GPB frontend debug");
+
+  return { ok: true };
 });
 
 app.post("/api/booking/draft", async (request, reply) => {
@@ -55,6 +84,47 @@ app.post("/api/booking/draft", async (request, reply) => {
   }
 
   return createStubDraft(result.data.message);
+});
+
+app.get("/api/backup/server", async (request) => {
+  const query = request.query as Record<string, string | undefined>;
+  return exportServerBackup({
+    includeGuestContacts: query.guestContacts !== "0",
+    includeMedia: query.media !== "0",
+    includeRooms: query.rooms !== "0"
+  });
+});
+
+app.post("/api/backup/server/import", async (request, reply) => {
+  const body = request.body as Record<string, unknown> | undefined;
+  if (!body || typeof body !== "object") {
+    return reply.status(400).send({ error: "Invalid backup payload" });
+  }
+
+  return importServerBackup(body);
+});
+
+app.get("/api/guest-contacts", async () => {
+  return listGuestContacts();
+});
+
+app.post("/api/guest-contacts", async (request, reply) => {
+  const result = guestContactSchema.safeParse(request.body);
+
+  if (!result.success) {
+    return reply.status(400).send({
+      error: "Invalid guest contact",
+      details: result.error.flatten()
+    });
+  }
+
+  return saveGuestContact(result.data);
+});
+
+app.delete("/api/guest-contacts/:phone", async (request, reply) => {
+  const { phone } = request.params as { phone: string };
+  await deleteGuestContact(decodeURIComponent(phone));
+  return reply.status(204).send();
 });
 
 app.get("/api/rooms", async () => {
@@ -87,6 +157,17 @@ app.put("/api/rooms/:id", async (request, reply) => {
   }
 
   return saveRoom(result.data);
+});
+
+app.delete("/api/rooms/:id", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const deleted = await deleteRoom(id);
+
+  if (!deleted) {
+    return reply.status(404).send({ error: "Room not found" });
+  }
+
+  return { ok: true };
 });
 
 app.post("/api/rooms/:id/media", async (request, reply) => {
@@ -127,6 +208,45 @@ app.delete("/api/rooms/:id/media", async (request, reply) => {
   return updatedRoom;
 });
 
+app.post("/api/object-gallery/media", async (request, reply) => {
+  const file = await request.file();
+  if (!file) {
+    return reply.status(400).send({ error: "File is required" });
+  }
+
+  try {
+    return await saveRoomMediaFile("object-gallery", file);
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(400).send({ error: "Object gallery upload failed" });
+  }
+});
+
+app.delete("/api/object-gallery/media", async (request, reply) => {
+  const body = request.body as { path?: string } | undefined;
+  if (!body?.path) {
+    return reply.status(400).send({ error: "Path is required" });
+  }
+
+  await deleteMediaFile(body.path);
+  return reply.status(204).send();
+});
+
+app.post("/api/media/whatsapp-video", async (request, reply) => {
+  const body = request.body as { path?: string } | undefined;
+  if (!body?.path) {
+    return reply.status(400).send({ error: "Path is required" });
+  }
+
+  try {
+    const path = await ensureWhatsappVideoFile(body.path);
+    return { path };
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(400).send({ error: "Video conversion failed" });
+  }
+});
+
 app.post("/api/rooms/:id/media/crop", async (request, reply) => {
   const { id } = request.params as { id: string };
   const body = request.body as { aspectRatio?: number; focalX?: number; focalY?: number; path?: string } | undefined;
@@ -163,5 +283,5 @@ process.on("SIGTERM", close);
 
 await app.listen({
   port: config.port,
-  host: "127.0.0.1"
+  host: process.env.HOST ?? "0.0.0.0"
 });

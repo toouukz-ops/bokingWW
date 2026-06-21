@@ -1,13 +1,16 @@
 import type { MultipartFile } from "@fastify/multipart";
 import { execFile } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir, unlink } from "node:fs/promises";
-import { basename, extname, join, resolve } from "node:path";
+import { mkdir, stat, unlink } from "node:fs/promises";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 
-export const uploadsRoot = resolve("uploads");
+const mediaModuleDir = dirname(fileURLToPath(import.meta.url));
+
+export const uploadsRoot = resolve(mediaModuleDir, "..", "uploads");
 const execFileAsync = promisify(execFile);
 
 const allowedExtensions = new Set([
@@ -43,7 +46,11 @@ export async function saveRoomMediaFile(roomId: string, file: MultipartFile) {
   const roomFolder = join(uploadsRoot, "rooms", sanitizeSegment(roomId));
   await mkdir(roomFolder, { recursive: true });
 
-  const normalizedExtension = mediaType === "photo" && isHeicExtension(extension) ? ".jpg" : extension;
+  const normalizedExtension = mediaType === "photo" && isHeicExtension(extension)
+    ? ".jpg"
+    : mediaType === "video"
+      ? ".mp4"
+      : extension;
   const filename = `${mediaType}-${Date.now()}-${sanitizeSegment(basename(file.filename, extension))}${normalizedExtension}`;
   const destination = join(roomFolder, filename);
 
@@ -52,6 +59,14 @@ export async function saveRoomMediaFile(roomId: string, file: MultipartFile) {
     await pipeline(file.file, createWriteStream(originalPath));
     try {
       await convertHeicToJpeg(originalPath, destination);
+    } finally {
+      await unlink(originalPath).catch(() => undefined);
+    }
+  } else if (mediaType === "video") {
+    const originalPath = join(roomFolder, `original-${Date.now()}-${sanitizeSegment(file.filename)}`);
+    await pipeline(file.file, createWriteStream(originalPath));
+    try {
+      await convertVideoToWhatsappMp4(originalPath, destination);
     } finally {
       await unlink(originalPath).catch(() => undefined);
     }
@@ -70,6 +85,62 @@ async function convertHeicToJpeg(sourcePath: string, destination: string) {
     await sharp(sourcePath).rotate().jpeg({ quality: 90 }).toFile(destination);
   } catch {
     await execFileAsync("sips", ["-s", "format", "jpeg", sourcePath, "--out", destination]);
+  }
+}
+
+export async function ensureWhatsappVideoFile(publicPath: string) {
+  const sourcePath = getLocalUploadPath(publicPath);
+  if (!sourcePath) {
+    throw new Error("Invalid media path");
+  }
+
+  const folder = dirname(sourcePath);
+  const filename = `whatsapp-${sanitizeSegment(basename(publicPath, extname(publicPath)))}.mp4`;
+  const destination = join(folder, filename);
+  const publicFolder = publicPath.slice(0, publicPath.lastIndexOf("/") + 1);
+  const publicDestination = `${publicFolder}${filename}`;
+
+  if (await fileExists(destination)) {
+    return publicDestination;
+  }
+
+  await convertVideoToWhatsappMp4(sourcePath, destination);
+  return publicDestination;
+}
+
+async function convertVideoToWhatsappMp4(sourcePath: string, destination: string) {
+  await execFileAsync("ffmpeg", [
+    "-y",
+    "-i",
+    sourcePath,
+    "-map",
+    "0:v:0",
+    "-map",
+    "0:a?",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "23",
+    "-pix_fmt",
+    "yuv420p",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "128k",
+    "-movflags",
+    "+faststart",
+    destination
+  ]);
+}
+
+async function fileExists(path: string) {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
   }
 }
 

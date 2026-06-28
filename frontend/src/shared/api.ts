@@ -311,35 +311,81 @@ export async function cropRoomMedia(
   return updatedRoom;
 }
 
-export function getReservations(): Promise<Reservation[]> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get([LOCAL_RESERVATIONS_STORAGE_KEY], (result) => {
-      const reservations = result[LOCAL_RESERVATIONS_STORAGE_KEY];
-      resolve(Array.isArray(reservations) ? reservations : []);
-    });
-  });
+export async function getReservations(): Promise<Reservation[]> {
+  const localReservations = await getLocalReservations();
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/reservations`);
+    if (!response.ok) throw new Error(`Reservations request failed: ${response.status}`);
+    const reservations = (await response.json()) as Reservation[];
+    if (!reservations.length && localReservations.length) {
+      await saveReservationsToServer(localReservations);
+      return localReservations;
+    }
+    await saveReservations(reservations);
+    return reservations;
+  } catch {
+    return localReservations;
+  }
 }
 
 export async function saveReservation(reservation: Reservation): Promise<Reservation> {
-  const reservations = await getReservations();
+  const reservations = await getLocalReservations();
   await saveReservations(reservations.filter((item) => item.id !== reservation.id).concat(reservation));
+  try {
+    await fetch(`${API_BASE_URL}/api/reservations/${encodeURIComponent(reservation.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(reservation)
+    });
+  } catch {
+    return reservation;
+  }
   return reservation;
 }
 
 export async function deleteReservation(reservationId: string): Promise<void> {
-  const reservations = await getReservations();
+  const reservations = await getLocalReservations();
   await saveReservations(reservations.filter((item) => item.id !== reservationId));
+  try {
+    await fetch(`${API_BASE_URL}/api/reservations/${encodeURIComponent(reservationId)}`, { method: "DELETE" });
+  } catch {
+    return;
+  }
 }
 
 export async function clearBookingStatistics(): Promise<void> {
   await saveReservations([]);
   await saveChatBookingDrafts({});
+  await Promise.allSettled([
+    saveReservationsToServer([]),
+    saveChatBookingDraftsToServer({})
+  ]);
 }
 
-export function getPaymentSettings(): Promise<PaymentSettings> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get([LOCAL_PAYMENT_SETTINGS_STORAGE_KEY], (result) => {
-      const settings = result[LOCAL_PAYMENT_SETTINGS_STORAGE_KEY];
+export async function getPaymentSettings(): Promise<PaymentSettings> {
+  const localSettings = await getLocalPaymentSettingsValue();
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/payment-settings`);
+    if (!response.ok) throw new Error(`Payment settings request failed: ${response.status}`);
+    const payload = (await response.json()) as { settings?: unknown };
+    if (payload.settings && isPlainObject(payload.settings)) {
+      const settings = normalizePaymentSettings(payload.settings);
+      await saveLocalPaymentSettings(settings);
+      return settings;
+    }
+    if (localSettings && isPlainObject(localSettings)) {
+      const settings = normalizePaymentSettings(localSettings);
+      await savePaymentSettingsToServer(settings);
+      return settings;
+    }
+  } catch {
+    return normalizePaymentSettings(localSettings);
+  }
+
+  return normalizePaymentSettings(localSettings);
+}
+
+function normalizePaymentSettings(settings: any): PaymentSettings {
       const paymentMethods = settings?.paymentMethods && typeof settings.paymentMethods === "object" && !Array.isArray(settings.paymentMethods)
         ? settings.paymentMethods
         : {};
@@ -403,7 +449,7 @@ export function getPaymentSettings(): Promise<PaymentSettings> {
       const pricePdfLinkIds = Array.isArray(settings?.pricePdfLinkIds)
         ? settings.pricePdfLinkIds.filter((id: unknown): id is string => typeof id === "string" && id.trim().length > 0)
         : [];
-      resolve({
+      return {
         paymentLink: typeof settings?.paymentLink === "string" ? settings.paymentLink : "",
         paymentMethods,
         linkMethods,
@@ -453,66 +499,93 @@ export function getPaymentSettings(): Promise<PaymentSettings> {
         agreementHoldMinutes: typeof settings?.agreementHoldMinutes === "number" && Number.isFinite(settings.agreementHoldMinutes)
           ? Math.max(1, Math.round(settings.agreementHoldMinutes))
           : 30
-      });
-    });
-  });
+      };
 }
 
-export function savePaymentSettings(settings: PaymentSettings): Promise<void> {
-  return new Promise((resolve) => {
-    chrome.storage.local.set({ [LOCAL_PAYMENT_SETTINGS_STORAGE_KEY]: settings }, () => resolve());
-  });
+export async function savePaymentSettings(settings: PaymentSettings): Promise<void> {
+  await saveLocalPaymentSettings(settings);
+  await savePaymentSettingsToServer(settings);
 }
 
-export function getExpenseCategories(): Promise<ExpenseCategory[]> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get([LOCAL_EXPENSE_CATEGORIES_STORAGE_KEY], (result) => {
-      const categories = result[LOCAL_EXPENSE_CATEGORIES_STORAGE_KEY];
-      resolve(Array.isArray(categories) ? categories : []);
-    });
-  });
+export async function getExpenseCategories(): Promise<ExpenseCategory[]> {
+  const localCategories = await getLocalExpenseCategories();
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/expense-categories`);
+    if (!response.ok) throw new Error(`Expense categories request failed: ${response.status}`);
+    const categories = (await response.json()) as ExpenseCategory[];
+    if (!categories.length && localCategories.length) {
+      await saveExpenseCategoriesToServer(localCategories);
+      return localCategories;
+    }
+    await saveLocalExpenseCategories(categories);
+    return categories;
+  } catch {
+    return localCategories;
+  }
 }
 
-export function saveExpenseCategories(categories: ExpenseCategory[]): Promise<void> {
-  return new Promise((resolve) => {
-    chrome.storage.local.set({ [LOCAL_EXPENSE_CATEGORIES_STORAGE_KEY]: categories }, () => resolve());
-  });
+export async function saveExpenseCategories(categories: ExpenseCategory[]): Promise<void> {
+  await saveLocalExpenseCategories(categories);
+  await saveExpenseCategoriesToServer(categories);
 }
 
-export function getExpenseEntries(): Promise<ExpenseEntry[]> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get([LOCAL_EXPENSE_ENTRIES_STORAGE_KEY], (result) => {
-      const entries = result[LOCAL_EXPENSE_ENTRIES_STORAGE_KEY];
-      resolve(Array.isArray(entries) ? entries : []);
-    });
-  });
+export async function getExpenseEntries(): Promise<ExpenseEntry[]> {
+  const localEntries = await getLocalExpenseEntries();
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/expense-entries`);
+    if (!response.ok) throw new Error(`Expense entries request failed: ${response.status}`);
+    const entries = (await response.json()) as ExpenseEntry[];
+    if (!entries.length && localEntries.length) {
+      await saveExpenseEntriesToServer(localEntries);
+      return localEntries;
+    }
+    await saveLocalExpenseEntries(entries);
+    return entries;
+  } catch {
+    return localEntries;
+  }
 }
 
-export function saveExpenseEntries(entries: ExpenseEntry[]): Promise<void> {
-  return new Promise((resolve) => {
-    chrome.storage.local.set({ [LOCAL_EXPENSE_ENTRIES_STORAGE_KEY]: entries }, () => resolve());
-  });
+export async function saveExpenseEntries(entries: ExpenseEntry[]): Promise<void> {
+  await saveLocalExpenseEntries(entries);
+  await saveExpenseEntriesToServer(entries);
 }
 
 export async function getChatBookingDraft(chatId: string): Promise<ChatBookingDraft | null> {
-  const drafts = await getChatBookingDrafts();
+  const drafts = await getAllChatBookingDrafts();
   return drafts[chatId] ?? null;
 }
 
 export async function getAllChatBookingDrafts(): Promise<Record<string, ChatBookingDraft>> {
-  return getChatBookingDrafts();
+  const localDrafts = await getChatBookingDrafts();
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/chat-drafts`);
+    if (!response.ok) throw new Error(`Chat drafts request failed: ${response.status}`);
+    const payload = (await response.json()) as { drafts?: Record<string, ChatBookingDraft> };
+    const serverDrafts = payload.drafts && typeof payload.drafts === "object" && !Array.isArray(payload.drafts) ? payload.drafts : {};
+    if (!Object.keys(serverDrafts).length && Object.keys(localDrafts).length) {
+      await saveChatBookingDraftsToServer(localDrafts);
+      return localDrafts;
+    }
+    await saveChatBookingDrafts(serverDrafts);
+    return serverDrafts;
+  } catch {
+    return localDrafts;
+  }
 }
 
 export async function saveChatBookingDraft(chatId: string, draft: ChatBookingDraft): Promise<void> {
   const drafts = await getChatBookingDrafts();
   drafts[chatId] = draft;
   await saveChatBookingDrafts(drafts);
+  await saveChatBookingDraftsToServer(drafts);
 }
 
 export async function deleteChatBookingDraft(chatId: string): Promise<void> {
   const drafts = await getChatBookingDrafts();
   delete drafts[chatId];
   await saveChatBookingDrafts(drafts);
+  await saveChatBookingDraftsToServer(drafts);
 }
 
 function getLocalRooms(): Promise<Room[]> {
@@ -530,10 +603,111 @@ function saveLocalRooms(rooms: Room[]): Promise<void> {
   });
 }
 
+function getLocalReservations(): Promise<Reservation[]> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([LOCAL_RESERVATIONS_STORAGE_KEY], (result) => {
+      const reservations = result[LOCAL_RESERVATIONS_STORAGE_KEY];
+      resolve(Array.isArray(reservations) ? reservations : []);
+    });
+  });
+}
+
 function saveReservations(reservations: Reservation[]): Promise<void> {
   return new Promise((resolve) => {
     chrome.storage.local.set({ [LOCAL_RESERVATIONS_STORAGE_KEY]: reservations }, () => resolve());
   });
+}
+
+async function saveReservationsToServer(reservations: Reservation[]): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/reservations`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: reservations })
+    });
+  } catch {
+    return;
+  }
+}
+
+function getLocalPaymentSettingsValue(): Promise<unknown> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([LOCAL_PAYMENT_SETTINGS_STORAGE_KEY], (result) => {
+      resolve(result[LOCAL_PAYMENT_SETTINGS_STORAGE_KEY] ?? null);
+    });
+  });
+}
+
+function saveLocalPaymentSettings(settings: PaymentSettings): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [LOCAL_PAYMENT_SETTINGS_STORAGE_KEY]: settings }, () => resolve());
+  });
+}
+
+async function savePaymentSettingsToServer(settings: PaymentSettings): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/payment-settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings })
+    });
+  } catch {
+    return;
+  }
+}
+
+function getLocalExpenseCategories(): Promise<ExpenseCategory[]> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([LOCAL_EXPENSE_CATEGORIES_STORAGE_KEY], (result) => {
+      const categories = result[LOCAL_EXPENSE_CATEGORIES_STORAGE_KEY];
+      resolve(Array.isArray(categories) ? categories : []);
+    });
+  });
+}
+
+function saveLocalExpenseCategories(categories: ExpenseCategory[]): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [LOCAL_EXPENSE_CATEGORIES_STORAGE_KEY]: categories }, () => resolve());
+  });
+}
+
+async function saveExpenseCategoriesToServer(categories: ExpenseCategory[]): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/expense-categories`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: categories })
+    });
+  } catch {
+    return;
+  }
+}
+
+function getLocalExpenseEntries(): Promise<ExpenseEntry[]> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([LOCAL_EXPENSE_ENTRIES_STORAGE_KEY], (result) => {
+      const entries = result[LOCAL_EXPENSE_ENTRIES_STORAGE_KEY];
+      resolve(Array.isArray(entries) ? entries : []);
+    });
+  });
+}
+
+function saveLocalExpenseEntries(entries: ExpenseEntry[]): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [LOCAL_EXPENSE_ENTRIES_STORAGE_KEY]: entries }, () => resolve());
+  });
+}
+
+async function saveExpenseEntriesToServer(entries: ExpenseEntry[]): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/expense-entries`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: entries })
+    });
+  } catch {
+    return;
+  }
 }
 
 function getChatBookingDrafts(): Promise<Record<string, ChatBookingDraft>> {
@@ -549,6 +723,18 @@ function saveChatBookingDrafts(drafts: Record<string, ChatBookingDraft>): Promis
   return new Promise((resolve) => {
     chrome.storage.local.set({ [LOCAL_CHAT_DRAFTS_STORAGE_KEY]: drafts }, () => resolve());
   });
+}
+
+async function saveChatBookingDraftsToServer(drafts: Record<string, ChatBookingDraft>): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/chat-drafts`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ drafts })
+    });
+  } catch {
+    return;
+  }
 }
 
 async function replaceLocalRoom(room: Room) {

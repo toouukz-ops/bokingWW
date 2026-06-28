@@ -8,6 +8,11 @@ export async function connectDatabase() {
   await mongoClient.connect();
   await ensureCollection("rooms");
   await ensureCollection("guestContacts");
+  await ensureCollection("reservations");
+  await ensureCollection("settings");
+  await ensureCollection("expenseCategories");
+  await ensureCollection("expenseEntries");
+  await ensureCollection("chatDrafts");
   await dropLegacyNumberIndex();
   await migrateLegacyRooms();
   await migrateLegacyGuestContacts();

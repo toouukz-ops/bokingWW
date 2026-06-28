@@ -3,6 +3,20 @@ import multipart from "@fastify/multipart";
 import staticFiles from "@fastify/static";
 import Fastify from "fastify";
 import { mkdir } from "node:fs/promises";
+import {
+  deleteReservationData,
+  getChatDraftData,
+  getPaymentSettingsData,
+  listExpenseCategories,
+  listExpenseEntries,
+  listReservations,
+  replaceChatDraftData,
+  replaceExpenseCategories,
+  replaceExpenseEntries,
+  replaceReservations,
+  savePaymentSettingsData,
+  saveReservationData
+} from "./appData.js";
 import { exportServerBackup, importServerBackup } from "./backup.js";
 import { createStubDraft, bookingDraftRequestSchema } from "./booking.js";
 import { config } from "./config.js";
@@ -125,6 +139,68 @@ app.delete("/api/guest-contacts/:phone", async (request, reply) => {
   const { phone } = request.params as { phone: string };
   await deleteGuestContact(decodeURIComponent(phone));
   return reply.status(204).send();
+});
+
+app.get("/api/reservations", async () => {
+  return listReservations();
+});
+
+app.put("/api/reservations", async (request) => {
+  const body = request.body as { items?: Array<Record<string, unknown>> } | undefined;
+  return replaceReservations(Array.isArray(body?.items) ? body.items : []);
+});
+
+app.put("/api/reservations/:id", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const body = request.body as Record<string, unknown> | undefined;
+  if (!body || typeof body !== "object") {
+    return reply.status(400).send({ error: "Invalid reservation" });
+  }
+
+  return saveReservationData(id, body);
+});
+
+app.delete("/api/reservations/:id", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  await deleteReservationData(id);
+  return reply.status(204).send();
+});
+
+app.get("/api/payment-settings", async () => {
+  return { settings: await getPaymentSettingsData() };
+});
+
+app.put("/api/payment-settings", async (request) => {
+  const body = request.body as { settings?: unknown } | undefined;
+  return { settings: await savePaymentSettingsData(body?.settings ?? null) };
+});
+
+app.get("/api/expense-categories", async () => {
+  return listExpenseCategories();
+});
+
+app.put("/api/expense-categories", async (request) => {
+  const body = request.body as { items?: Array<Record<string, unknown>> } | undefined;
+  return replaceExpenseCategories(Array.isArray(body?.items) ? body.items : []);
+});
+
+app.get("/api/expense-entries", async () => {
+  return listExpenseEntries();
+});
+
+app.put("/api/expense-entries", async (request) => {
+  const body = request.body as { items?: Array<Record<string, unknown>> } | undefined;
+  return replaceExpenseEntries(Array.isArray(body?.items) ? body.items : []);
+});
+
+app.get("/api/chat-drafts", async () => {
+  return { drafts: await getChatDraftData() };
+});
+
+app.put("/api/chat-drafts", async (request) => {
+  const body = request.body as { drafts?: Record<string, unknown> } | undefined;
+  const drafts = body?.drafts && typeof body.drafts === "object" && !Array.isArray(body.drafts) ? body.drafts : {};
+  return { drafts: await replaceChatDraftData(drafts) };
 });
 
 app.get("/api/rooms", async () => {

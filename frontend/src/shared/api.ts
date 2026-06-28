@@ -563,8 +563,7 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
         servicePassword: typeof settings?.servicePassword === "string" && settings.servicePassword.trim() ? settings.servicePassword : "0000",
         agreementHoldMinutes: typeof settings?.agreementHoldMinutes === "number" && Number.isFinite(settings.agreementHoldMinutes)
           ? Math.max(1, Math.round(settings.agreementHoldMinutes))
-          : 30,
-        operatorName: typeof settings?.operatorName === "string" && settings.operatorName.trim() ? settings.operatorName.trim() : ""
+          : 30
       };
 }
 

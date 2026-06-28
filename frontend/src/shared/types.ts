@@ -171,7 +171,6 @@ export interface PaymentSettings {
   packageCustomFields: Record<string, string>;
   servicePassword: string;
   agreementHoldMinutes: number;
-  operatorName: string;
 }
 
 export type IncludedCardTemplate = "hero-thumbs-description" | "photo-description";

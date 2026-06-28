@@ -93,6 +93,7 @@ const CUSTOM_AMENITY_OPTIONS_STORAGE_KEY = "gpb-custom-amenity-options";
 const CUSTOM_FOOD_OPTIONS_STORAGE_KEY = "gpb-custom-food-options";
 const ROOM_HOLDS_STORAGE_KEY = "gpb-room-holds";
 const SYNC_CLIENT_ID_STORAGE_KEY = "gpb-sync-client-id";
+const OPERATOR_NAME_STORAGE_KEY = "gpb-operator-name";
 const DEFAULT_ROOM_HOLD_MINUTES = 30;
 const TIMELINE_ALTERNATE_ROW_COLOR_KEY = "gpb-timeline-alternate-row-color";
 const DEFAULT_TIMELINE_ALTERNATE_ROW_COLOR = "#f7f9fc";
@@ -561,6 +562,22 @@ function getOrCreateSyncClientId() {
   }
 }
 
+function getStoredOperatorName() {
+  try {
+    return window.localStorage.getItem(OPERATOR_NAME_STORAGE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function saveStoredOperatorName(name: string) {
+  try {
+    window.localStorage.setItem(OPERATOR_NAME_STORAGE_KEY, name);
+  } catch {
+    return;
+  }
+}
+
 function safeParseRealtimeEvent(event: Event): Record<string, unknown> | null {
   const message = event as MessageEvent<string>;
   try {
@@ -792,7 +809,7 @@ export function BookingPanel() {
   const [socialPriceDescription, setSocialPriceDescription] = useState("");
   const [servicePassword, setServicePassword] = useState("0000");
   const [agreementHoldMinutes, setAgreementHoldMinutes] = useState(DEFAULT_ROOM_HOLD_MINUTES);
-  const [operatorName, setOperatorName] = useState("");
+  const [operatorName, setOperatorName] = useState(getStoredOperatorName);
   const [lastReservation, setLastReservation] = useState<Reservation | null>(null);
   const [bookingDateWarning, setBookingDateWarning] = useState("");
   const [bookingDateWarningHoldId, setBookingDateWarningHoldId] = useState("");
@@ -1860,7 +1877,6 @@ export function BookingPanel() {
     setPackageCustomFields(settings.packageCustomFields);
     setServicePassword(settings.servicePassword);
     setAgreementHoldMinutes(settings.agreementHoldMinutes);
-    setOperatorName(settings.operatorName);
   }
 
   function buildPaymentSettingsPatch(overrides: Partial<PaymentSettings> = {}) {
@@ -1912,7 +1928,6 @@ export function BookingPanel() {
       packageCustomFields,
       servicePassword,
       agreementHoldMinutes,
-      operatorName,
       ...overrides
     };
   }
@@ -3894,8 +3909,8 @@ export function BookingPanel() {
 
   async function handleOperatorNameSave(value: string) {
     const nextName = value.trim();
+    saveStoredOperatorName(nextName);
     setOperatorName(nextName);
-    await savePaymentSettings(buildPaymentSettingsPatch({ operatorName: nextName }));
   }
 
   async function handleAgreementHoldMinutesChange(value: number) {

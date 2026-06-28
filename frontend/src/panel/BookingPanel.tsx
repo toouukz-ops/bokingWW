@@ -3892,7 +3892,7 @@ export function BookingPanel() {
     await savePaymentSettings(buildPaymentSettingsPatch({ servicePassword: nextPassword || "0000" }));
   }
 
-  async function handleOperatorNameChange(value: string) {
+  async function handleOperatorNameSave(value: string) {
     const nextName = value.trim();
     setOperatorName(nextName);
     await savePaymentSettings(buildPaymentSettingsPatch({ operatorName: nextName }));
@@ -6828,7 +6828,7 @@ export function BookingPanel() {
           onPackageCustomFieldChange={handlePackageCustomFieldChange}
           onPackageCustomFieldDelete={handlePackageCustomFieldDelete}
           onServicePasswordChange={handleServicePasswordChange}
-          onOperatorNameChange={handleOperatorNameChange}
+          onOperatorNameSave={handleOperatorNameSave}
           onAgreementHoldMinutesChange={handleAgreementHoldMinutesChange}
         />
       ) : null}
@@ -10235,7 +10235,7 @@ function SettingsModal({
   onPackageCustomFieldChange,
   onPackageCustomFieldDelete,
   onServicePasswordChange,
-  onOperatorNameChange,
+  onOperatorNameSave,
   onAgreementHoldMinutesChange
 }: {
   companyRequisites: Record<string, string>;
@@ -10318,7 +10318,7 @@ function SettingsModal({
   onPackageCustomFieldChange: (fieldId: string, value: string) => void;
   onPackageCustomFieldDelete: (fieldId: string) => void;
   onServicePasswordChange: (value: string) => void;
-  onOperatorNameChange: (value: string) => void;
+  onOperatorNameSave: (value: string) => Promise<void>;
   onAgreementHoldMinutesChange: (value: number) => void;
 }) {
   const [localWeatherName, setLocalWeatherName] = useState(weatherLocationName);
@@ -10338,6 +10338,8 @@ function SettingsModal({
   const [localPackageGift, setLocalPackageGift] = useState(packageGiftText);
   const [localPackageMinRooms, setLocalPackageMinRooms] = useState(String(packageMinRooms));
   const [localPackageIncludeAmenities, setLocalPackageIncludeAmenities] = useState(packageIncludeAmenities);
+  const [localOperatorName, setLocalOperatorName] = useState(operatorName);
+  const [operatorSaveState, setOperatorSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [menuBulkPricePercent, setMenuBulkPricePercent] = useState(0);
   const backupInputRef = useRef<HTMLInputElement | null>(null);
   const [backupMessage, setBackupMessage] = useState("");
@@ -10379,6 +10381,21 @@ function SettingsModal({
     { id: "users", label: "Пользователи", icon: Users },
     { id: "service", label: "Сервис", icon: Settings }
   ] as const;
+
+  useEffect(() => {
+    setLocalOperatorName(operatorName);
+  }, [operatorName]);
+
+  async function saveOperatorName() {
+    setOperatorSaveState("saving");
+    try {
+      await onOperatorNameSave(localOperatorName);
+      setOperatorSaveState("saved");
+      window.setTimeout(() => setOperatorSaveState("idle"), 1800);
+    } catch {
+      setOperatorSaveState("error");
+    }
+  }
 
   function addPaymentMethodField() {
     openCustomFieldOverlay("Новый способ оплаты", "Например: Карта другого банка", paymentMethods, (fieldId) => onPaymentMethodChange(fieldId, ""));
@@ -11052,11 +11069,21 @@ function SettingsModal({
                   Имя оператора
                   <input
                     type="text"
-                    value={operatorName}
-                    onChange={(event) => onOperatorNameChange(event.target.value)}
+                    value={localOperatorName}
+                    onChange={(event) => {
+                      setLocalOperatorName(event.target.value);
+                      if (operatorSaveState !== "idle") setOperatorSaveState("idle");
+                    }}
                     placeholder="Например: Эрнест"
                   />
                 </label>
+                <div className="gpb-settings-panel-actions">
+                  <button className="gpb-settings-add-button" type="button" onClick={saveOperatorName} disabled={operatorSaveState === "saving"}>
+                    {operatorSaveState === "saving" ? "Сохраняю..." : "Сохранить пользователя"}
+                  </button>
+                  {operatorSaveState === "saved" ? <span className="gpb-settings-save-status">Сохранено</span> : null}
+                  {operatorSaveState === "error" ? <span className="gpb-settings-save-status is-error">Ошибка сохранения</span> : null}
+                </div>
                 <label className="gpb-wide-label">
                   ID машины
                   <input readOnly type="text" value={syncClientId} />

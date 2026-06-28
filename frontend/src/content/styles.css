@@ -6044,6 +6044,17 @@ body.gpb-booking-panel-open #app {
   margin-top: 0;
 }
 
+.gpb-settings-save-status {
+  align-self: center;
+  color: #0f6b57;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.gpb-settings-save-status.is-error {
+  color: #b42318;
+}
+
 .gpb-settings-gallery-actions .gpb-settings-add-button,
 .gpb-settings-gallery-actions .gpb-primary {
   display: inline-flex;

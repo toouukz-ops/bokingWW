@@ -20270,19 +20270,18 @@ function buildReservationPaymentConfirmationMessage(reservation: Reservation, ro
   const paymentLabel = getManualSalePaymentLabel(reservation.paymentMethod ?? "");
   const hasPayment = paidAmount > 0 || Boolean(reservation.prepaymentReceivedAt || reservation.balancePaidAt);
   return [
-    `*${reservation.guestFirstName || "Гость"}*`,
+    reservation.guestFirstName || "Гость",
+    hasPayment ? "Оплата поступила." : "Бронь подтверждена без предоплаты.",
     "Подтверждение брони",
     `Номера: ${formatReservationConfirmationRooms(reservation, rooms)}`,
     `Заезд: ${formatKazakhDate(reservation.checkIn)} ${reservation.checkInTime}`,
     `Выезд: ${formatKazakhDate(reservation.checkOut)} ${reservation.checkOutTime}`,
     formatReservationGuestCountText(reservation),
-    "",
-    hasPayment ? "Оплата поступила." : "Бронь подтверждена без предоплаты.",
-    hasPayment ? `Получено: ${formatPrice(paidAmount)}` : "Оплата: 100% при заезде",
     `Итого: ${formatPrice(reservation.total)}`,
-    hasPayment ? `Остаток: ${formatPrice(balance)}` : `К оплате при заезде: ${formatPrice(reservation.total)}`,
-    paymentLabel ? `Способ оплаты: ${paymentLabel}` : "",
-    hasPayment ? "Оставшаяся сумма вносится в день заезда." : ""
+    hasPayment ? `*Получено: ${formatPrice(paidAmount)}*` : "Оплата: 100% при заезде",
+    hasPayment ? `*Остаток: ${formatPrice(balance)}*` : `К оплате при заезде: ${formatPrice(reservation.total)}`,
+    paymentLabel ? `*Способ оплаты: ${paymentLabel}*` : "",
+    hasPayment ? "*Оставшаяся сумма вносится в день заезда.*" : ""
   ].filter(Boolean).join("\n");
 }
 

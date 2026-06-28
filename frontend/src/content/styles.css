@@ -890,13 +890,13 @@ body.gpb-booking-panel-open #app {
 
 .gpb-room-hold-tooltip {
   position: absolute;
-  right: 0;
+  right: -2px;
   bottom: calc(100% + 8px);
   z-index: 20;
   display: none;
-  min-width: 210px;
-  max-width: 280px;
-  gap: 4px;
+  width: 184px;
+  max-width: calc(100vw - 24px);
+  gap: 6px;
   border: 1px solid rgba(15, 32, 43, 0.12);
   border-radius: 8px;
   background: #ffffff;
@@ -926,9 +926,8 @@ body.gpb-booking-panel-open #app {
 
 .gpb-room-hold-tooltip > span {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
   min-width: 0;
 }
 
@@ -940,7 +939,7 @@ body.gpb-booking-panel-open #app {
 .gpb-room-hold-tooltip small {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: normal;
+  white-space: nowrap;
 }
 
 .gpb-room-hold-tooltip b {

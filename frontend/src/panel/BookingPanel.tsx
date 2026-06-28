@@ -5786,7 +5786,6 @@ export function BookingPanel() {
                           className={`gpb-room-hold-button ${getRoomHoldsForRoom(room.id).length ? "is-hold-active" : ""}`}
                           aria-label={getRoomHoldForRoom(room.id) ? "Снять удержание" : `Удержать на ${agreementHoldMinutes} мин`}
                           disabled={isBookingLocked}
-                          title={getRoomHoldsForRoom(room.id).length ? getRoomHoldsForRoom(room.id).map((hold) => `${hold.guestName || hold.ownerTitle || "Гость"} - ${formatHoldCountdown(hold.expiresAt, holdNowMs)}`).join("\n") : "Нет активных согласований"}
                           type="button"
                           onClick={(event) => {
                             event.stopPropagation();
@@ -5799,7 +5798,7 @@ export function BookingPanel() {
                               getRoomHoldsForRoom(room.id).map((hold) => (
                                 <span key={hold.id}>
                                   <b>{hold.guestName || hold.ownerTitle || "Гость"}</b>
-                                  <small>{formatHoldCountdown(hold.expiresAt, holdNowMs)}</small>
+                                  <small>На удержании {formatHoldCountdown(hold.expiresAt, holdNowMs)}</small>
                                 </span>
                               ))
                             ) : (

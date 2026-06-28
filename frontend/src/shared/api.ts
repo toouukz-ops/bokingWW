@@ -570,14 +570,14 @@ export async function saveChatBookingDraft(chatId: string, draft: ChatBookingDra
   const drafts = await getChatBookingDrafts();
   drafts[chatId] = draft;
   await saveChatBookingDrafts(drafts);
-  await saveChatBookingDraftsToServer(drafts);
+  await saveChatBookingDraftToServer(chatId, draft);
 }
 
 export async function deleteChatBookingDraft(chatId: string): Promise<void> {
   const drafts = await getChatBookingDrafts();
   delete drafts[chatId];
   await saveChatBookingDrafts(drafts);
-  await saveChatBookingDraftsToServer(drafts);
+  await deleteChatBookingDraftFromServer(chatId);
 }
 
 function getLocalRooms(): Promise<Room[]> {
@@ -724,6 +724,26 @@ async function saveChatBookingDraftsToServer(drafts: Record<string, ChatBookingD
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ drafts })
     });
+  } catch {
+    return;
+  }
+}
+
+async function saveChatBookingDraftToServer(chatId: string, draft: ChatBookingDraft): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/chat-drafts/${encodeURIComponent(chatId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ draft })
+    });
+  } catch {
+    return;
+  }
+}
+
+async function deleteChatBookingDraftFromServer(chatId: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/chat-drafts/${encodeURIComponent(chatId)}`, { method: "DELETE" });
   } catch {
     return;
   }

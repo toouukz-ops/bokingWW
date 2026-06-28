@@ -5,6 +5,7 @@ import Fastify from "fastify";
 import { mkdir } from "node:fs/promises";
 import {
   deleteReservationData,
+  deleteChatDraftData,
   getChatDraftData,
   getPaymentSettingsData,
   listExpenseCategories,
@@ -14,6 +15,7 @@ import {
   replaceExpenseCategories,
   replaceExpenseEntries,
   replaceReservations,
+  saveChatDraftData,
   savePaymentSettingsData,
   saveReservationData
 } from "./appData.js";
@@ -201,6 +203,22 @@ app.put("/api/chat-drafts", async (request) => {
   const body = request.body as { drafts?: Record<string, unknown> } | undefined;
   const drafts = body?.drafts && typeof body.drafts === "object" && !Array.isArray(body.drafts) ? body.drafts : {};
   return { drafts: await replaceChatDraftData(drafts) };
+});
+
+app.put("/api/chat-drafts/:chatId", async (request, reply) => {
+  const { chatId } = request.params as { chatId: string };
+  const body = request.body as { draft?: unknown } | undefined;
+  if (!body || !body.draft || typeof body.draft !== "object" || Array.isArray(body.draft)) {
+    return reply.status(400).send({ error: "Invalid chat draft" });
+  }
+
+  return { draft: await saveChatDraftData(decodeURIComponent(chatId), body.draft) };
+});
+
+app.delete("/api/chat-drafts/:chatId", async (request, reply) => {
+  const { chatId } = request.params as { chatId: string };
+  await deleteChatDraftData(decodeURIComponent(chatId));
+  return reply.status(204).send();
 });
 
 app.get("/api/rooms", async () => {

@@ -62,6 +62,19 @@ export async function getChatDraftData() {
   return Object.fromEntries(documents.map((document) => [document.chatId, document.draft]));
 }
 
+export async function saveChatDraftData(chatId: string, draft: unknown) {
+  await chatDrafts.updateOne(
+    { chatId },
+    { $set: { chatId, draft, updatedAt: new Date() } },
+    { upsert: true }
+  );
+  return draft;
+}
+
+export async function deleteChatDraftData(chatId: string) {
+  await chatDrafts.deleteOne({ chatId });
+}
+
 export async function replaceChatDraftData(drafts: Record<string, unknown>) {
   await chatDrafts.deleteMany({});
   const entries = Object.entries(drafts);

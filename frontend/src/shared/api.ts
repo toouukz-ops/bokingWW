@@ -169,10 +169,6 @@ export async function getRooms(): Promise<Room[]> {
       throw new Error(`Rooms request failed: ${response.status}`);
     }
     const rooms = (await response.json()) as Room[];
-    if (!rooms.length && localRooms.length) {
-      await Promise.all(localRooms.map((room) => saveRoomToServer(room)));
-      return localRooms;
-    }
     await saveLocalRooms(rooms);
     return rooms;
   } catch {
@@ -317,10 +313,6 @@ export async function getReservations(): Promise<Reservation[]> {
     const response = await fetch(`${API_BASE_URL}/api/reservations`);
     if (!response.ok) throw new Error(`Reservations request failed: ${response.status}`);
     const reservations = (await response.json()) as Reservation[];
-    if (!reservations.length && localReservations.length) {
-      await saveReservationsToServer(localReservations);
-      return localReservations;
-    }
     await saveReservations(reservations);
     return reservations;
   } catch {
@@ -371,11 +363,6 @@ export async function getPaymentSettings(): Promise<PaymentSettings> {
     if (payload.settings && isPlainObject(payload.settings)) {
       const settings = normalizePaymentSettings(payload.settings);
       await saveLocalPaymentSettings(settings);
-      return settings;
-    }
-    if (localSettings && isPlainObject(localSettings)) {
-      const settings = normalizePaymentSettings(localSettings);
-      await savePaymentSettingsToServer(settings);
       return settings;
     }
   } catch {
@@ -513,10 +500,6 @@ export async function getExpenseCategories(): Promise<ExpenseCategory[]> {
     const response = await fetch(`${API_BASE_URL}/api/expense-categories`);
     if (!response.ok) throw new Error(`Expense categories request failed: ${response.status}`);
     const categories = (await response.json()) as ExpenseCategory[];
-    if (!categories.length && localCategories.length) {
-      await saveExpenseCategoriesToServer(localCategories);
-      return localCategories;
-    }
     await saveLocalExpenseCategories(categories);
     return categories;
   } catch {
@@ -535,10 +518,6 @@ export async function getExpenseEntries(): Promise<ExpenseEntry[]> {
     const response = await fetch(`${API_BASE_URL}/api/expense-entries`);
     if (!response.ok) throw new Error(`Expense entries request failed: ${response.status}`);
     const entries = (await response.json()) as ExpenseEntry[];
-    if (!entries.length && localEntries.length) {
-      await saveExpenseEntriesToServer(localEntries);
-      return localEntries;
-    }
     await saveLocalExpenseEntries(entries);
     return entries;
   } catch {
@@ -563,10 +542,6 @@ export async function getAllChatBookingDrafts(): Promise<Record<string, ChatBook
     if (!response.ok) throw new Error(`Chat drafts request failed: ${response.status}`);
     const payload = (await response.json()) as { drafts?: Record<string, ChatBookingDraft> };
     const serverDrafts = payload.drafts && typeof payload.drafts === "object" && !Array.isArray(payload.drafts) ? payload.drafts : {};
-    if (!Object.keys(serverDrafts).length && Object.keys(localDrafts).length) {
-      await saveChatBookingDraftsToServer(localDrafts);
-      return localDrafts;
-    }
     await saveChatBookingDrafts(serverDrafts);
     return serverDrafts;
   } catch {

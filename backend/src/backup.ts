@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { guestContactSchema, listGuestContacts, saveGuestContact, type GuestContact } from "./guestContacts.js";
 import { uploadsRoot } from "./media.js";
+import { saveStoredMediaBuffer } from "./mediaStore.js";
 import { getRoom, listRooms, roomSchema, saveRoom, type Room } from "./rooms.js";
 
 export type ServerBackupPayload = {
@@ -81,12 +82,15 @@ async function importBackupMediaFiles(files: Array<{ dataBase64: string; path: s
     }
 
     try {
+      const data = Buffer.from(file.dataBase64, "base64");
       await mkdir(dirname(localPath), { recursive: true });
-      await writeFile(localPath, Buffer.from(file.dataBase64, "base64"), { flag: "wx" });
+      await writeFile(localPath, data, { flag: "wx" });
+      await saveStoredMediaBuffer(file.path, data);
       report.imported += 1;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "EEXIST") {
+        await saveStoredMediaBuffer(file.path, Buffer.from(file.dataBase64, "base64"));
         report.skipped += 1;
       } else {
         report.conflicts += 1;

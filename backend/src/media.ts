@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
+import { deleteStoredMedia, saveStoredMediaFile } from "./mediaStore.js";
 
 const mediaModuleDir = dirname(fileURLToPath(import.meta.url));
 
@@ -74,9 +75,12 @@ export async function saveRoomMediaFile(roomId: string, file: MultipartFile) {
     await pipeline(file.file, createWriteStream(destination));
   }
 
+  const publicPath = `/uploads/rooms/${sanitizeSegment(roomId)}/${filename}`;
+  await saveStoredMediaFile(publicPath, destination);
+
   return {
     mediaType,
-    path: `/uploads/rooms/${sanitizeSegment(roomId)}/${filename}`
+    path: publicPath
   };
 }
 
@@ -105,6 +109,7 @@ export async function ensureWhatsappVideoFile(publicPath: string) {
   }
 
   await convertVideoToWhatsappMp4(sourcePath, destination);
+  await saveStoredMediaFile(publicDestination, destination);
   return publicDestination;
 }
 
@@ -165,8 +170,10 @@ export async function cropPhotoFile(roomId: string, publicPath: string, options:
 
   await source.extract(crop).jpeg({ quality: 90 }).toFile(destination);
   await deleteMediaFile(publicPath);
+  const nextPublicPath = `/uploads/rooms/${sanitizeSegment(roomId)}/${filename}`;
+  await saveStoredMediaFile(nextPublicPath, destination);
 
-  return `/uploads/rooms/${sanitizeSegment(roomId)}/${filename}`;
+  return nextPublicPath;
 }
 
 export async function deleteMediaFile(publicPath: string) {
@@ -180,6 +187,7 @@ export async function deleteMediaFile(publicPath: string) {
       throw error;
     }
   });
+  await deleteStoredMedia(publicPath);
 }
 
 interface CropOptions {
@@ -203,7 +211,7 @@ function calculateCrop(width: number, height: number, aspectRatio: number, focal
   };
 }
 
-function getLocalUploadPath(publicPath: string) {
+export function getLocalUploadPath(publicPath: string) {
   if (!publicPath.startsWith("/uploads/")) {
     return null;
   }

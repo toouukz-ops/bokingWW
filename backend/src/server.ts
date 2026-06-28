@@ -1,8 +1,9 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
-import staticFiles from "@fastify/static";
 import Fastify from "fastify";
+import { createReadStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import {
   deleteReservationData,
   deleteChatDraftData,
@@ -24,7 +25,8 @@ import { createStubDraft, bookingDraftRequestSchema } from "./booking.js";
 import { config } from "./config.js";
 import { closeDatabase, connectDatabase } from "./db.js";
 import { deleteGuestContact, guestContactSchema, listGuestContacts, saveGuestContact } from "./guestContacts.js";
-import { cropPhotoFile, deleteMediaFile, ensureWhatsappVideoFile, saveRoomMediaFile, uploadsRoot } from "./media.js";
+import { cropPhotoFile, deleteMediaFile, ensureWhatsappVideoFile, getLocalUploadPath, saveRoomMediaFile, uploadsRoot } from "./media.js";
+import { getMediaContentType, getStoredMedia, openStoredMediaStream } from "./mediaStore.js";
 import { addRoomMedia, deleteRoom, getRoom, listRooms, removeRoomMedia, replaceRoomMedia, roomSchema, saveRoom } from "./rooms.js";
 
 await connectDatabase();
@@ -51,9 +53,33 @@ await app.register(multipart, {
   }
 });
 await mkdir(uploadsRoot, { recursive: true });
-await app.register(staticFiles, {
-  root: uploadsRoot,
-  prefix: "/uploads/"
+
+app.get("/uploads/*", async (request, reply) => {
+  const params = request.params as { "*": string };
+  const publicPath = `/uploads/${params["*"] ?? ""}`;
+  const localPath = getLocalUploadPath(publicPath);
+
+  if (localPath) {
+    try {
+      const localStat = await stat(localPath);
+      reply.type(getMediaContentType(publicPath));
+      reply.header("content-length", String(localStat.size));
+      return reply.send(createReadStream(localPath));
+    } catch {
+      // Fall through to durable Mongo storage.
+    }
+  }
+
+  const storedMedia = await getStoredMedia(publicPath);
+  if (!storedMedia) {
+    return reply.status(404).send({ error: "Media not found" });
+  }
+
+  reply.type(String(storedMedia.contentType || getMediaContentType(publicPath)));
+  if (typeof storedMedia.length === "number") {
+    reply.header("content-length", String(storedMedia.length));
+  }
+  return reply.send(openStoredMediaStream(storedMedia._id));
 });
 
 const frontendDebugLogs: Array<{

@@ -1,4 +1,4 @@
-import type { BookingDraft, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, Room, RoomHold } from "./types";
+import type { ActiveDialog, BookingDraft, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, Room, RoomHold } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8765";
 const LOCAL_ROOMS_STORAGE_KEY = "gpb-booking-rooms";
@@ -38,6 +38,36 @@ export async function getHealth(): Promise<{ ok: boolean; service: string }> {
 export function getRealtimeEventsUrl(clientId: string) {
   const params = new URLSearchParams({ clientId });
   return `${API_BASE_URL}/api/events?${params.toString()}`;
+}
+
+export async function getActiveDialogs(): Promise<ActiveDialog[]> {
+  const response = await fetch(`${API_BASE_URL}/api/active-dialogs`);
+  if (!response.ok) {
+    throw new Error(`Active dialogs request failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function claimActiveDialog(dialog: Pick<ActiveDialog, "chatKey" | "chatTitle" | "clientId" | "operatorName" | "phone">): Promise<ActiveDialog> {
+  const response = await fetch(`${API_BASE_URL}/api/active-dialogs/${encodeURIComponent(dialog.chatKey)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(dialog)
+  });
+  if (!response.ok) {
+    throw new Error(`Active dialog claim failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function releaseActiveDialog(chatKey: string, clientId: string): Promise<void> {
+  const params = new URLSearchParams({ clientId });
+  const response = await fetch(`${API_BASE_URL}/api/active-dialogs/${encodeURIComponent(chatKey)}?${params.toString()}`, {
+    method: "DELETE"
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Active dialog release failed: ${response.status}`);
+  }
 }
 
 export async function createDraftFromMessage(message: string): Promise<BookingDraft> {
@@ -533,7 +563,8 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
         servicePassword: typeof settings?.servicePassword === "string" && settings.servicePassword.trim() ? settings.servicePassword : "0000",
         agreementHoldMinutes: typeof settings?.agreementHoldMinutes === "number" && Number.isFinite(settings.agreementHoldMinutes)
           ? Math.max(1, Math.round(settings.agreementHoldMinutes))
-          : 30
+          : 30,
+        operatorName: typeof settings?.operatorName === "string" && settings.operatorName.trim() ? settings.operatorName.trim() : ""
       };
 }
 

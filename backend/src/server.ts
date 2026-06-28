@@ -5,15 +5,18 @@ import { createReadStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { stat } from "node:fs/promises";
 import {
+  claimActiveDialogData,
   deleteReservationData,
   deleteChatDraftData,
   deleteRoomHoldData,
   getChatDraftData,
   getPaymentSettingsData,
+  listActiveDialogs,
   listExpenseCategories,
   listExpenseEntries,
   listReservations,
   listRoomHolds,
+  releaseActiveDialogData,
   replaceChatDraftData,
   replaceExpenseCategories,
   replaceExpenseEntries,
@@ -158,6 +161,30 @@ app.post("/api/debug/logs", async (request) => {
   }, "GPB frontend debug");
 
   return { ok: true };
+});
+
+app.get("/api/active-dialogs", async () => {
+  return listActiveDialogs();
+});
+
+app.put("/api/active-dialogs/:chatKey", async (request, reply) => {
+  const { chatKey } = request.params as { chatKey: string };
+  const body = request.body as Record<string, unknown> | undefined;
+  if (!body || typeof body !== "object") {
+    return reply.status(400).send({ error: "Invalid active dialog" });
+  }
+  const decodedChatKey = decodeURIComponent(chatKey);
+  const dialog = await claimActiveDialogData(decodedChatKey, body);
+  broadcastRealtime("active-dialogs.changed", { action: "upsert", dialog }, String(body.clientId ?? ""));
+  return dialog;
+});
+
+app.delete("/api/active-dialogs/:chatKey", async (request, reply) => {
+  const { chatKey } = request.params as { chatKey: string };
+  const query = request.query as { clientId?: string };
+  await releaseActiveDialogData(decodeURIComponent(chatKey), query.clientId ?? "");
+  broadcastRealtime("active-dialogs.changed", { action: "delete", chatKey: decodeURIComponent(chatKey), clientId: query.clientId ?? "" }, query.clientId ?? "");
+  return reply.status(204).send();
 });
 
 app.post("/api/booking/draft", async (request, reply) => {

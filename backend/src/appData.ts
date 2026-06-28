@@ -6,6 +6,7 @@ const expenseCategories = db.collection<Record<string, unknown> & { id: string }
 const expenseEntries = db.collection<Record<string, unknown> & { id: string }>("expenseEntries");
 const chatDrafts = db.collection<{ chatId: string; draft: unknown; updatedAt: Date }>("chatDrafts");
 const roomHolds = db.collection<Record<string, unknown> & { id: string; expiresAt: string }>("roomHolds");
+const activeDialogs = db.collection<Record<string, unknown> & { chatKey: string; clientId: string; expiresAt: string }>("activeDialogs");
 
 export async function listReservations() {
   return reservations.find().sort({ createdAt: -1 }).toArray();
@@ -105,6 +106,47 @@ export async function deleteRoomHoldData(id: string) {
 
 export async function deleteExpiredRoomHolds() {
   await roomHolds.deleteMany({ expiresAt: { $lte: new Date().toISOString() } });
+}
+
+export async function listActiveDialogs() {
+  await deleteExpiredActiveDialogs();
+  return activeDialogs.find({ expiresAt: { $gt: new Date().toISOString() } }).sort({ updatedAt: -1 }).toArray();
+}
+
+export async function claimActiveDialogData(chatKey: string, dialog: Record<string, unknown>) {
+  await deleteExpiredActiveDialogs();
+  const existing = await activeDialogs.findOne({ chatKey, expiresAt: { $gt: new Date().toISOString() } });
+  if (existing && existing.clientId !== dialog.clientId) {
+    return existing;
+  }
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const expiresAt = new Date(now.getTime() + 90_000).toISOString();
+  const document = {
+    ...dialog,
+    chatKey,
+    startedAt: typeof dialog.startedAt === "string" ? dialog.startedAt : nowIso,
+    updatedAt: nowIso,
+    expiresAt
+  };
+  await activeDialogs.updateOne(
+    { chatKey },
+    {
+      $set: document,
+      $setOnInsert: { createdAt: nowIso }
+    },
+    { upsert: true }
+  );
+  return document;
+}
+
+export async function releaseActiveDialogData(chatKey: string, clientId: string) {
+  if (!chatKey) return;
+  await activeDialogs.deleteOne({ chatKey, clientId });
+}
+
+export async function deleteExpiredActiveDialogs() {
+  await activeDialogs.deleteMany({ expiresAt: { $lte: new Date().toISOString() } });
 }
 
 export async function replaceChatDraftData(drafts: Record<string, unknown>) {

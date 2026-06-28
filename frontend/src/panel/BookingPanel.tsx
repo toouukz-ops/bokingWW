@@ -39,6 +39,7 @@ import { jsPDF } from "jspdf";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import {
   clearBookingStatistics,
+  claimActiveDialog,
   cropRoomMedia,
   deleteObjectGalleryMedia,
   deleteGuestContact,
@@ -50,6 +51,7 @@ import {
   ensureWhatsappVideoMedia,
   exportLocalBackupData,
   exportServerBackupData,
+  getActiveDialogs,
   getAllChatBookingDrafts,
   getExpenseCategories,
   getExpenseEntries,
@@ -64,6 +66,7 @@ import {
   getRooms,
   importLocalBackupData,
   importServerBackupData,
+  releaseActiveDialog,
   saveGuestContact,
   saveExpenseCategories,
   saveExpenseEntries,
@@ -77,7 +80,7 @@ import {
   uploadRoomMedia
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
-import type { ActiveChat, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
+import type { ActiveChat, ActiveDialog, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -582,6 +585,32 @@ function normalizeRoomHolds(value: unknown): RoomHold[] {
   );
 }
 
+function filterActiveDialogs(value: unknown, nowMs = Date.now()): ActiveDialog[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is ActiveDialog =>
+      Boolean(
+        item &&
+        typeof item === "object" &&
+        typeof item.chatKey === "string" &&
+        typeof item.clientId === "string" &&
+        typeof item.operatorName === "string" &&
+        typeof item.expiresAt === "string" &&
+        new Date(item.expiresAt).getTime() > nowMs
+      )
+    )
+    .map((item) => ({
+      chatKey: item.chatKey,
+      chatTitle: typeof item.chatTitle === "string" ? item.chatTitle : "",
+      phone: typeof item.phone === "string" ? item.phone : "",
+      clientId: item.clientId,
+      operatorName: item.operatorName.trim() || "Оператор",
+      startedAt: typeof item.startedAt === "string" ? item.startedAt : "",
+      updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : "",
+      expiresAt: item.expiresAt
+    }));
+}
+
 function filterActiveRoomHolds(holds: RoomHold[], nowMs = Date.now()) {
   return holds.filter((hold) => new Date(hold.expiresAt).getTime() > nowMs);
 }
@@ -763,6 +792,7 @@ export function BookingPanel() {
   const [socialPriceDescription, setSocialPriceDescription] = useState("");
   const [servicePassword, setServicePassword] = useState("0000");
   const [agreementHoldMinutes, setAgreementHoldMinutes] = useState(DEFAULT_ROOM_HOLD_MINUTES);
+  const [operatorName, setOperatorName] = useState("");
   const [lastReservation, setLastReservation] = useState<Reservation | null>(null);
   const [bookingDateWarning, setBookingDateWarning] = useState("");
   const [bookingDateWarningHoldId, setBookingDateWarningHoldId] = useState("");
@@ -787,6 +817,7 @@ export function BookingPanel() {
   const [clearBookingState, setClearBookingState] = useState<"idle" | "clearing" | "cleared">("idle");
   const [contactSaveState, setContactSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [roomHolds, setRoomHolds] = useState<RoomHold[]>([]);
+  const [activeDialogs, setActiveDialogs] = useState<ActiveDialog[]>([]);
   const [holdNowMs, setHoldNowMs] = useState(() => Date.now());
   const [todayWeatherState, setTodayWeatherState] = useState<WeatherState>({ status: "idle" });
   const [isDiscountFocused, setIsDiscountFocused] = useState(false);
@@ -810,6 +841,7 @@ export function BookingPanel() {
   const draftCacheLoadPromiseRef = useRef<Promise<Record<string, ChatBookingDraft>> | null>(null);
   const draftRestoreVersionRef = useRef(0);
   const activeChatBeforeRestoreRef = useRef<ActiveChat | null>(null);
+  const claimedActiveDialogKeyRef = useRef("");
   const saveAdminCommentTimerRef = useRef<number | null>(null);
   const quickPhraseSendingRef = useRef(false);
   const syncClientIdRef = useRef(getOrCreateSyncClientId());
@@ -829,6 +861,12 @@ export function BookingPanel() {
     () => roomHolds.filter((hold) => new Date(hold.expiresAt).getTime() > holdNowMs),
     [holdNowMs, roomHolds]
   );
+  const currentActiveDialog = useMemo(
+    () => activeChat ? activeDialogs.find((dialog) => dialog.chatKey === activeChat.id && new Date(dialog.expiresAt).getTime() > holdNowMs) ?? null : null,
+    [activeChat?.id, activeDialogs, holdNowMs]
+  );
+  const isCurrentChatOwnedByOther = Boolean(currentActiveDialog && currentActiveDialog.clientId !== syncClientIdRef.current);
+  const currentOperatorName = operatorName.trim() || "Оператор";
   const agreementHoldDurationMs = useMemo(
     () => Math.max(1, Math.round(agreementHoldMinutes || DEFAULT_ROOM_HOLD_MINUTES)) * 60 * 1000,
     [agreementHoldMinutes]
@@ -1138,6 +1176,10 @@ export function BookingPanel() {
       setRoomHolds(activeHolds);
       void saveStoredRoomHolds(activeHolds);
     }).catch(() => undefined);
+    getActiveDialogs().then((dialogs) => {
+      if (!isMounted) return;
+      setActiveDialogs(filterActiveDialogs(dialogs));
+    }).catch(() => undefined);
 
     const handleStorageChange = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
       if (areaName !== "local" || !changes[ROOM_HOLDS_STORAGE_KEY]) return;
@@ -1149,6 +1191,18 @@ export function BookingPanel() {
       // Chrome throws here when a previously injected content script survives extension reload.
     }
     const events = new EventSource(getRealtimeEventsUrl(syncClientIdRef.current));
+    events.addEventListener("active-dialogs.changed", (event) => {
+      const payload = safeParseRealtimeEvent(event);
+      if (!payload || typeof payload !== "object") return;
+      if (payload.action === "upsert" && payload.dialog) {
+        const dialog = filterActiveDialogs([payload.dialog])[0];
+        if (!dialog) return;
+        setActiveDialogs((currentDialogs) => filterActiveDialogs(currentDialogs.filter((item) => item.chatKey !== dialog.chatKey).concat(dialog)));
+      }
+      if (payload.action === "delete" && typeof payload.chatKey === "string") {
+        setActiveDialogs((currentDialogs) => currentDialogs.filter((dialog) => dialog.chatKey !== payload.chatKey));
+      }
+    });
     events.addEventListener("room-holds.changed", (event) => {
       const payload = safeParseRealtimeEvent(event);
       if (!payload || typeof payload !== "object") return;
@@ -1182,7 +1236,11 @@ export function BookingPanel() {
   }, []);
 
   useEffect(() => {
-    const intervalId = window.setInterval(() => setHoldNowMs(Date.now()), 1000);
+    const intervalId = window.setInterval(() => {
+      const now = Date.now();
+      setHoldNowMs(now);
+      setActiveDialogs((currentDialogs) => filterActiveDialogs(currentDialogs, now));
+    }, 1000);
     return () => window.clearInterval(intervalId);
   }, []);
 
@@ -1303,6 +1361,44 @@ export function BookingPanel() {
   useEffect(() => {
     activeChatIdRef.current = activeChat?.id ?? "";
   }, [activeChat?.id, activeChat?.phone, activeChat?.title]);
+
+  useEffect(() => {
+    const previousKey = claimedActiveDialogKeyRef.current;
+    const nextKey = activeChat?.id ?? "";
+    if (previousKey && previousKey !== nextKey) {
+      void releaseActiveDialog(previousKey, syncClientIdRef.current).catch(() => undefined);
+      claimedActiveDialogKeyRef.current = "";
+    }
+    if (!activeChat) return;
+
+    let isCancelled = false;
+    const dialogPayload = {
+      chatKey: activeChat.id,
+      chatTitle: activeChat.title,
+      clientId: syncClientIdRef.current,
+      operatorName: currentOperatorName,
+      phone: activeChat.phone ?? ""
+    };
+
+    async function claim() {
+      try {
+        const dialog = await claimActiveDialog(dialogPayload);
+        if (isCancelled) return;
+        claimedActiveDialogKeyRef.current = dialog.chatKey;
+        setActiveDialogs((currentDialogs) => filterActiveDialogs(currentDialogs.filter((item) => item.chatKey !== dialog.chatKey).concat(dialog)));
+      } catch {
+        return;
+      }
+    }
+
+    void claim();
+    const intervalId = window.setInterval(claim, 25_000);
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+      void releaseActiveDialog(activeChat.id, syncClientIdRef.current).catch(() => undefined);
+    };
+  }, [activeChat?.id, activeChat?.phone, activeChat?.title, currentOperatorName]);
 
   useEffect(() => {
     const storedContact = activeChat ? findStoredGuestContactForActiveChat(activeChat) : null;
@@ -1764,6 +1860,7 @@ export function BookingPanel() {
     setPackageCustomFields(settings.packageCustomFields);
     setServicePassword(settings.servicePassword);
     setAgreementHoldMinutes(settings.agreementHoldMinutes);
+    setOperatorName(settings.operatorName);
   }
 
   function buildPaymentSettingsPatch(overrides: Partial<PaymentSettings> = {}) {
@@ -1815,6 +1912,7 @@ export function BookingPanel() {
       packageCustomFields,
       servicePassword,
       agreementHoldMinutes,
+      operatorName,
       ...overrides
     };
   }
@@ -1881,6 +1979,10 @@ export function BookingPanel() {
 
   async function saveChatDraftForChat(chat: ActiveChat, patch: Partial<ChatBookingDraft> = {}) {
     if (isRestoringChatDraftRef.current) return;
+    const dialogOwner = activeDialogs.find((dialog) => dialog.chatKey === chat.id && new Date(dialog.expiresAt).getTime() > Date.now());
+    if (dialogOwner && dialogOwner.clientId !== syncClientIdRef.current) {
+      return;
+    }
     const draft = reconcileDraftReservationDates({ ...buildChatDraft(), ...patch, updatedAt: new Date().toISOString() });
     await saveCachedChatBookingDraft(chat.id, draft);
     const normalizedPhone = formatPhoneDigits(draft.phone);
@@ -3790,6 +3892,12 @@ export function BookingPanel() {
     await savePaymentSettings(buildPaymentSettingsPatch({ servicePassword: nextPassword || "0000" }));
   }
 
+  async function handleOperatorNameChange(value: string) {
+    const nextName = value.trim();
+    setOperatorName(nextName);
+    await savePaymentSettings(buildPaymentSettingsPatch({ operatorName: nextName }));
+  }
+
   async function handleAgreementHoldMinutesChange(value: number) {
     const nextMinutes = Math.max(1, Math.round(value || DEFAULT_ROOM_HOLD_MINUTES));
     setAgreementHoldMinutes(nextMinutes);
@@ -5446,6 +5554,16 @@ export function BookingPanel() {
                 </button>
               ) : null}
             </div>
+            {activeChat ? (
+              <div className={`gpb-active-dialog-status ${isCurrentChatOwnedByOther ? "is-foreign" : "is-own"}`}>
+                <Users size={14} />
+                <span>
+                  {currentActiveDialog
+                    ? `Диалог с ${currentActiveDialog.clientId === syncClientIdRef.current ? "вами" : currentActiveDialog.operatorName}`
+                    : `Диалог с ${currentOperatorName}`}
+                </span>
+              </div>
+            ) : null}
           </div>
         </div>
       </section>
@@ -6673,6 +6791,8 @@ export function BookingPanel() {
           packageMinRooms={packageMinRooms}
           servicePassword={servicePassword}
           agreementHoldMinutes={agreementHoldMinutes}
+          operatorName={operatorName}
+          syncClientId={syncClientIdRef.current}
           onClose={() => setIsSettingsOpen(false)}
           onCompanyRequisiteChange={handleCompanyRequisiteChange}
           onCompanyRequisiteDelete={handleCompanyRequisiteDelete}
@@ -6708,6 +6828,7 @@ export function BookingPanel() {
           onPackageCustomFieldChange={handlePackageCustomFieldChange}
           onPackageCustomFieldDelete={handlePackageCustomFieldDelete}
           onServicePasswordChange={handleServicePasswordChange}
+          onOperatorNameChange={handleOperatorNameChange}
           onAgreementHoldMinutesChange={handleAgreementHoldMinutesChange}
         />
       ) : null}
@@ -10077,6 +10198,8 @@ function SettingsModal({
   packageMinRooms,
   servicePassword,
   agreementHoldMinutes,
+  operatorName,
+  syncClientId,
   onClose,
   onCompanyRequisiteChange,
   onCompanyRequisiteDelete,
@@ -10112,6 +10235,7 @@ function SettingsModal({
   onPackageCustomFieldChange,
   onPackageCustomFieldDelete,
   onServicePasswordChange,
+  onOperatorNameChange,
   onAgreementHoldMinutesChange
 }: {
   companyRequisites: Record<string, string>;
@@ -10148,6 +10272,8 @@ function SettingsModal({
   packageMinRooms: number;
   servicePassword: string;
   agreementHoldMinutes: number;
+  operatorName: string;
+  syncClientId: string;
   onClose: () => void;
   onCompanyRequisiteChange: (fieldId: string, value: string) => void;
   onCompanyRequisiteDelete: (fieldId: string) => void;
@@ -10192,6 +10318,7 @@ function SettingsModal({
   onPackageCustomFieldChange: (fieldId: string, value: string) => void;
   onPackageCustomFieldDelete: (fieldId: string) => void;
   onServicePasswordChange: (value: string) => void;
+  onOperatorNameChange: (value: string) => void;
   onAgreementHoldMinutesChange: (value: number) => void;
 }) {
   const [localWeatherName, setLocalWeatherName] = useState(weatherLocationName);
@@ -10228,7 +10355,7 @@ function SettingsModal({
     rooms: true
   });
   const [activeSettingsSection, setActiveSettingsSection] = useState<
-    "payment" | "company" | "links" | "gallery" | "menu" | "package" | "inventory" | "weather" | "backup" | "service"
+    "payment" | "company" | "links" | "gallery" | "menu" | "package" | "inventory" | "weather" | "backup" | "service" | "users"
   >("payment");
   const [customFieldRequest, setCustomFieldRequest] = useState<{
     existingValues: Record<string, string>;
@@ -10249,6 +10376,7 @@ function SettingsModal({
     { id: "inventory", label: "Инвентарь", icon: BedDouble },
     { id: "weather", label: "Погода и время", icon: CloudSun },
     { id: "backup", label: "Резервная копия", icon: Download },
+    { id: "users", label: "Пользователи", icon: Users },
     { id: "service", label: "Сервис", icon: Settings }
   ] as const;
 
@@ -10912,6 +11040,27 @@ function SettingsModal({
                 {backupMessage ? (
                   <div className={`gpb-backup-status ${backupStatus === "error" ? "is-error" : ""}`}>{backupMessage}</div>
                 ) : null}
+              </section>
+
+              <section className={`gpb-settings-panel ${activeSettingsSection === "users" ? "" : "is-hidden"}`}>
+                <div className="gpb-editor-title">
+                  <Users size={20} />
+                  <h2>Пользователи</h2>
+                </div>
+                <p className="gpb-settings-note">Имя этой машины показывается другим операторам в статусе активного диалога.</p>
+                <label className="gpb-wide-label">
+                  Имя оператора
+                  <input
+                    type="text"
+                    value={operatorName}
+                    onChange={(event) => onOperatorNameChange(event.target.value)}
+                    placeholder="Например: Эрнест"
+                  />
+                </label>
+                <label className="gpb-wide-label">
+                  ID машины
+                  <input readOnly type="text" value={syncClientId} />
+                </label>
               </section>
 
               <section className={`gpb-settings-panel ${activeSettingsSection === "service" ? "" : "is-hidden"}`}>

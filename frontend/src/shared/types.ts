@@ -112,6 +112,17 @@ export interface RoomHold {
   expiresAt: string;
 }
 
+export interface ActiveDialog {
+  chatKey: string;
+  chatTitle: string;
+  phone: string;
+  clientId: string;
+  operatorName: string;
+  startedAt: string;
+  updatedAt: string;
+  expiresAt: string;
+}
+
 export interface PaymentSettings {
   paymentLink: string;
   paymentMethods: Record<string, string>;
@@ -160,6 +171,7 @@ export interface PaymentSettings {
   packageCustomFields: Record<string, string>;
   servicePassword: string;
   agreementHoldMinutes: number;
+  operatorName: string;
 }
 
 export type IncludedCardTemplate = "hero-thumbs-description" | "photo-description";

@@ -163,11 +163,16 @@ export async function importLocalBackupData(data: Record<string, unknown>): Prom
 
 export async function getRooms(): Promise<Room[]> {
   try {
+    const localRooms = await getLocalRooms();
     const response = await fetch(`${API_BASE_URL}/api/rooms`);
     if (!response.ok) {
       throw new Error(`Rooms request failed: ${response.status}`);
     }
     const rooms = (await response.json()) as Room[];
+    if (!rooms.length && localRooms.length) {
+      await Promise.all(localRooms.map((room) => saveRoomToServer(room)));
+      return localRooms;
+    }
     await saveLocalRooms(rooms);
     return rooms;
   } catch {
@@ -180,17 +185,7 @@ export async function saveRoom(room: Room): Promise<Room> {
   await saveLocalRooms(localRooms.filter((item) => item.id !== room.id).concat(room));
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/rooms/${encodeURIComponent(room.id)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(room)
-    });
-
-    if (!response.ok) {
-      throw new Error(`Room save failed: ${response.status}`);
-    }
-
-    return response.json();
+    return await saveRoomToServer(room);
   } catch {
     return room;
   }
@@ -559,6 +554,20 @@ function saveChatBookingDrafts(drafts: Record<string, ChatBookingDraft>): Promis
 async function replaceLocalRoom(room: Room) {
   const localRooms = await getLocalRooms();
   await saveLocalRooms(localRooms.filter((item) => item.id !== room.id).concat(room));
+}
+
+async function saveRoomToServer(room: Room): Promise<Room> {
+  const response = await fetch(`${API_BASE_URL}/api/rooms/${encodeURIComponent(room.id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(room)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Room save failed: ${response.status}`);
+  }
+
+  return response.json();
 }
 
 function mergeById(currentValue: unknown, incomingValue: unknown) {

@@ -96,6 +96,22 @@ export interface ReservationPayment {
   paidAt: string;
 }
 
+export interface RoomHold {
+  id: string;
+  roomId: string;
+  checkIn: string;
+  checkOut: string;
+  checkInTime: string;
+  checkOutTime: string;
+  ownerId: string;
+  ownerTitle: string;
+  guestName: string;
+  phone: string;
+  clientId?: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface PaymentSettings {
   paymentLink: string;
   paymentMethods: Record<string, string>;

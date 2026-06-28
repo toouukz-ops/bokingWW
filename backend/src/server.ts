@@ -7,18 +7,21 @@ import { stat } from "node:fs/promises";
 import {
   deleteReservationData,
   deleteChatDraftData,
+  deleteRoomHoldData,
   getChatDraftData,
   getPaymentSettingsData,
   listExpenseCategories,
   listExpenseEntries,
   listReservations,
+  listRoomHolds,
   replaceChatDraftData,
   replaceExpenseCategories,
   replaceExpenseEntries,
   replaceReservations,
   saveChatDraftData,
   savePaymentSettingsData,
-  saveReservationData
+  saveReservationData,
+  saveRoomHoldData
 } from "./appData.js";
 import { exportServerBackup, importServerBackup } from "./backup.js";
 import { createStubDraft, bookingDraftRequestSchema } from "./booking.js";
@@ -86,6 +89,14 @@ const frontendDebugLogs: Array<{
   body: Record<string, unknown>;
   createdAt: string;
 }> = [];
+const realtimeClients = new Set<{ clientId: string; send: (event: string, data: unknown) => void }>();
+
+function broadcastRealtime(event: string, data: unknown, sourceClientId = "") {
+  for (const client of realtimeClients) {
+    if (sourceClientId && client.clientId === sourceClientId) continue;
+    client.send(event, data);
+  }
+}
 
 app.get("/api/health", async () => {
   return {
@@ -96,6 +107,40 @@ app.get("/api/health", async () => {
 
 app.get("/api/debug/logs", async () => {
   return frontendDebugLogs;
+});
+
+app.get("/api/events", async (request, reply) => {
+  const query = request.query as { clientId?: string };
+  const clientId = query.clientId || "";
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
+    "Content-Type": "text/event-stream",
+    "X-Accel-Buffering": "no"
+  });
+  reply.raw.write("retry: 2000\n\n");
+
+  const client = {
+    clientId,
+    send: (event: string, data: unknown) => {
+      reply.raw.write(`event: ${event}\n`);
+      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+    }
+  };
+  realtimeClients.add(client);
+  client.send("sync.ready", { serverTime: new Date().toISOString() });
+
+  const heartbeat = setInterval(() => {
+    reply.raw.write(`event: sync.ping\n`);
+    reply.raw.write(`data: ${JSON.stringify({ serverTime: new Date().toISOString() })}\n\n`);
+  }, 25_000);
+
+  request.raw.on("close", () => {
+    clearInterval(heartbeat);
+    realtimeClients.delete(client);
+  });
 });
 
 app.post("/api/debug/logs", async (request) => {
@@ -244,6 +289,30 @@ app.put("/api/chat-drafts/:chatId", async (request, reply) => {
 app.delete("/api/chat-drafts/:chatId", async (request, reply) => {
   const { chatId } = request.params as { chatId: string };
   await deleteChatDraftData(decodeURIComponent(chatId));
+  return reply.status(204).send();
+});
+
+app.get("/api/room-holds", async () => {
+  return listRoomHolds();
+});
+
+app.put("/api/room-holds/:id", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const body = request.body as Record<string, unknown> | undefined;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return reply.status(400).send({ error: "Invalid room hold" });
+  }
+
+  const hold = await saveRoomHoldData(id, body);
+  broadcastRealtime("room-holds.changed", { action: "upsert", hold }, typeof body.clientId === "string" ? body.clientId : "");
+  return hold;
+});
+
+app.delete("/api/room-holds/:id", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const query = request.query as { clientId?: string };
+  await deleteRoomHoldData(decodeURIComponent(id));
+  broadcastRealtime("room-holds.changed", { action: "delete", id: decodeURIComponent(id) }, query.clientId);
   return reply.status(204).send();
 });
 

@@ -13,12 +13,16 @@ export async function connectDatabase() {
   await ensureCollection("expenseCategories");
   await ensureCollection("expenseEntries");
   await ensureCollection("chatDrafts");
+  await ensureCollection("roomHolds");
   await dropLegacyNumberIndex();
   await migrateLegacyRooms();
   await migrateLegacyGuestContacts();
   await db.collection("rooms").createIndex({ id: 1 }, { unique: true });
   await db.collection("guestContacts").createIndex({ phone: 1 }, { unique: true });
   await db.collection("guestContacts").createIndex({ inquiryDate: -1 });
+  await db.collection("roomHolds").createIndex({ id: 1 }, { unique: true });
+  await db.collection("roomHolds").createIndex({ expiresAt: 1 });
+  await db.collection("roomHolds").createIndex({ roomId: 1, checkIn: 1, checkOut: 1 });
 }
 
 export async function closeDatabase() {

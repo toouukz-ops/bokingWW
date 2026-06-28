@@ -5,6 +5,7 @@ const settings = db.collection<{ id: string; value: unknown; updatedAt: Date }>(
 const expenseCategories = db.collection<Record<string, unknown> & { id: string }>("expenseCategories");
 const expenseEntries = db.collection<Record<string, unknown> & { id: string }>("expenseEntries");
 const chatDrafts = db.collection<{ chatId: string; draft: unknown; updatedAt: Date }>("chatDrafts");
+const roomHolds = db.collection<Record<string, unknown> & { id: string; expiresAt: string }>("roomHolds");
 
 export async function listReservations() {
   return reservations.find().sort({ createdAt: -1 }).toArray();
@@ -73,6 +74,37 @@ export async function saveChatDraftData(chatId: string, draft: unknown) {
 
 export async function deleteChatDraftData(chatId: string) {
   await chatDrafts.deleteOne({ chatId });
+}
+
+export async function listRoomHolds() {
+  await deleteExpiredRoomHolds();
+  return roomHolds.find({ expiresAt: { $gt: new Date().toISOString() } }).sort({ expiresAt: 1 }).toArray();
+}
+
+export async function saveRoomHoldData(id: string, hold: Record<string, unknown>) {
+  const now = new Date();
+  const document = {
+    ...hold,
+    id,
+    updatedAt: now
+  };
+  await roomHolds.updateOne(
+    { id },
+    {
+      $set: document,
+      $setOnInsert: { createdAt: typeof hold.createdAt === "string" ? hold.createdAt : now.toISOString() }
+    },
+    { upsert: true }
+  );
+  return document;
+}
+
+export async function deleteRoomHoldData(id: string) {
+  await roomHolds.deleteOne({ id });
+}
+
+export async function deleteExpiredRoomHolds() {
+  await roomHolds.deleteMany({ expiresAt: { $lte: new Date().toISOString() } });
 }
 
 export async function replaceChatDraftData(drafts: Record<string, unknown>) {

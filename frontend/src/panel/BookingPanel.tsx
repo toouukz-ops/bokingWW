@@ -45,6 +45,7 @@ import {
   deleteChatBookingDraft,
   deleteReservation,
   deleteRoom,
+  deleteRoomHold,
   deleteRoomMedia,
   ensureWhatsappVideoMedia,
   exportLocalBackupData,
@@ -56,8 +57,10 @@ import {
   getHealth,
   getMediaUrl,
   getPaymentSettings,
+  getRealtimeEventsUrl,
   getReservations,
   getChatBookingDraft,
+  getRoomHolds,
   getRooms,
   importLocalBackupData,
   importServerBackupData,
@@ -68,12 +71,13 @@ import {
   saveChatBookingDraft,
   saveReservation,
   saveRoom,
+  saveRoomHold,
   sendDebugLog,
   uploadObjectGalleryMedia,
   uploadRoomMedia
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
-import type { ActiveChat, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
+import type { ActiveChat, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -85,6 +89,7 @@ const CUSTOM_HOLIDAY_DATES_STORAGE_KEY = "gpb-custom-holiday-dates";
 const CUSTOM_AMENITY_OPTIONS_STORAGE_KEY = "gpb-custom-amenity-options";
 const CUSTOM_FOOD_OPTIONS_STORAGE_KEY = "gpb-custom-food-options";
 const ROOM_HOLDS_STORAGE_KEY = "gpb-room-holds";
+const SYNC_CLIENT_ID_STORAGE_KEY = "gpb-sync-client-id";
 const DEFAULT_ROOM_HOLD_MINUTES = 30;
 const TIMELINE_ALTERNATE_ROW_COLOR_KEY = "gpb-timeline-alternate-row-color";
 const DEFAULT_TIMELINE_ALTERNATE_ROW_COLOR = "#f7f9fc";
@@ -140,20 +145,6 @@ type AvailabilityConflict = {
   releaseDate: string;
   reservation?: Reservation;
   room: Room;
-};
-type RoomHold = {
-  id: string;
-  roomId: string;
-  checkIn: string;
-  checkOut: string;
-  checkInTime: string;
-  checkOutTime: string;
-  ownerId: string;
-  ownerTitle: string;
-  guestName: string;
-  phone: string;
-  createdAt: string;
-  expiresAt: string;
 };
 type CatalogAvailabilitySummary = {
   airBeds: number;
@@ -555,6 +546,28 @@ function saveStoredRoomHolds(holds: RoomHold[]): Promise<void> {
   });
 }
 
+function getOrCreateSyncClientId() {
+  try {
+    const existing = window.localStorage.getItem(SYNC_CLIENT_ID_STORAGE_KEY);
+    if (existing) return existing;
+    const nextId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    window.localStorage.setItem(SYNC_CLIENT_ID_STORAGE_KEY, nextId);
+    return nextId;
+  } catch {
+    return `client-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
+function safeParseRealtimeEvent(event: Event): Record<string, unknown> | null {
+  const message = event as MessageEvent<string>;
+  try {
+    const payload = JSON.parse(message.data || "{}");
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeRoomHolds(value: unknown): RoomHold[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is RoomHold =>
@@ -799,6 +812,7 @@ export function BookingPanel() {
   const activeChatBeforeRestoreRef = useRef<ActiveChat | null>(null);
   const saveAdminCommentTimerRef = useRef<number | null>(null);
   const quickPhraseSendingRef = useRef(false);
+  const syncClientIdRef = useRef(getOrCreateSyncClientId());
   const pricedRooms = useMemo(
     () => applyDynamicPricingToRooms({
       checkIn,
@@ -1118,6 +1132,12 @@ export function BookingPanel() {
         void saveStoredRoomHolds(activeHolds);
       }
     });
+    getRoomHolds().then((holds) => {
+      if (!isMounted) return;
+      const activeHolds = filterActiveRoomHolds(normalizeRoomHolds(holds));
+      setRoomHolds(activeHolds);
+      void saveStoredRoomHolds(activeHolds);
+    }).catch(() => undefined);
 
     const handleStorageChange = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
       if (areaName !== "local" || !changes[ROOM_HOLDS_STORAGE_KEY]) return;
@@ -1128,9 +1148,31 @@ export function BookingPanel() {
     } catch {
       // Chrome throws here when a previously injected content script survives extension reload.
     }
+    const events = new EventSource(getRealtimeEventsUrl(syncClientIdRef.current));
+    events.addEventListener("room-holds.changed", (event) => {
+      const payload = safeParseRealtimeEvent(event);
+      if (!payload || typeof payload !== "object") return;
+      if (payload.action === "upsert" && payload.hold) {
+        const hold = normalizeRoomHolds([payload.hold])[0];
+        if (!hold) return;
+        setRoomHolds((currentHolds) => {
+          const nextHolds = filterActiveRoomHolds(currentHolds.filter((item) => item.id !== hold.id).concat(hold));
+          void saveStoredRoomHolds(nextHolds);
+          return nextHolds;
+        });
+      }
+      if (payload.action === "delete" && typeof payload.id === "string") {
+        setRoomHolds((currentHolds) => {
+          const nextHolds = currentHolds.filter((hold) => hold.id !== payload.id);
+          void saveStoredRoomHolds(nextHolds);
+          return nextHolds;
+        });
+      }
+    });
 
     return () => {
       isMounted = false;
+      events.close();
       try {
         chrome.storage?.onChanged?.removeListener(handleStorageChange);
       } catch {
@@ -3118,6 +3160,7 @@ export function BookingPanel() {
       ownerTitle: activeChat?.title ?? "",
       guestName: reservation.guestFirstName || getGuestNameFallbackFromPhone(normalizedPhone) || activeChat?.title || "",
       phone: normalizedPhone,
+      clientId: syncClientIdRef.current,
       createdAt: new Date().toISOString(),
       expiresAt
     };
@@ -3128,7 +3171,9 @@ export function BookingPanel() {
     if (!reservationItems.length) return;
 
     const expiresAt = new Date(Date.now() + agreementHoldDurationMs).toISOString();
-    const nextHolds = filterActiveRoomHolds(roomHolds)
+    const activeHolds = filterActiveRoomHolds(roomHolds);
+    const nextAgreementHolds = reservationItems.map((item) => createAgreementRoomHold(reservation, item, expiresAt));
+    const nextHolds = activeHolds
       .filter((hold) => {
         if (hold.ownerId !== currentHoldOwnerId) return true;
         return !reservationItems.some((item) =>
@@ -3141,10 +3186,15 @@ export function BookingPanel() {
           )
         );
       })
-      .concat(reservationItems.map((item) => createAgreementRoomHold(reservation, item, expiresAt)));
+      .concat(nextAgreementHolds);
+    const removedHoldIds = activeHolds.filter((hold) => !nextHolds.some((item) => item.id === hold.id)).map((hold) => hold.id);
 
     setRoomHolds(nextHolds);
     await saveStoredRoomHolds(nextHolds);
+    await Promise.allSettled([
+      ...removedHoldIds.map((holdId) => deleteRoomHold(holdId, syncClientIdRef.current)),
+      ...nextAgreementHolds.map((hold) => saveRoomHold(hold))
+    ]);
   }
 
   async function toggleRoomHold(room: Room) {
@@ -3154,6 +3204,7 @@ export function BookingPanel() {
       const nextHolds = roomHolds.filter((hold) => hold.id !== existingHold.id);
       setRoomHolds(nextHolds);
       await saveStoredRoomHolds(nextHolds);
+      await deleteRoomHold(existingHold.id, syncClientIdRef.current);
       return;
     }
 
@@ -3171,6 +3222,7 @@ export function BookingPanel() {
       ownerTitle: activeChat?.title ?? "",
       guestName: guestFirstName || getGuestNameFallbackFromPhone(normalizedPhone) || activeChat?.title || "",
       phone: normalizedPhone,
+      clientId: syncClientIdRef.current,
       createdAt: new Date().toISOString(),
       expiresAt
     };
@@ -3179,6 +3231,7 @@ export function BookingPanel() {
       .concat(hold);
     setRoomHolds(nextHolds);
     await saveStoredRoomHolds(nextHolds);
+    await saveRoomHold(hold);
   }
 
   function ensureSelectedRoomsAreNotHeldByAnotherGuest() {
@@ -3207,8 +3260,10 @@ export function BookingPanel() {
       );
     });
     if (nextHolds.length === roomHolds.length) return;
+    const removedHoldIds = roomHolds.filter((hold) => !nextHolds.some((item) => item.id === hold.id)).map((hold) => hold.id);
     setRoomHolds(nextHolds);
     await saveStoredRoomHolds(nextHolds);
+    await Promise.allSettled(removedHoldIds.map((holdId) => deleteRoomHold(holdId, syncClientIdRef.current)));
   }
 
   function toggleBookingRoom(roomId: string) {

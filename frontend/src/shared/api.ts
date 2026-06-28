@@ -1,4 +1,4 @@
-import type { BookingDraft, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, Room } from "./types";
+import type { BookingDraft, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, Room, RoomHold } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8765";
 const LOCAL_ROOMS_STORAGE_KEY = "gpb-booking-rooms";
@@ -33,6 +33,11 @@ export async function getHealth(): Promise<{ ok: boolean; service: string }> {
     throw new Error(`Backend health failed: ${response.status}`);
   }
   return response.json();
+}
+
+export function getRealtimeEventsUrl(clientId: string) {
+  const params = new URLSearchParams({ clientId });
+  return `${API_BASE_URL}/api/events?${params.toString()}`;
 }
 
 export async function createDraftFromMessage(message: string): Promise<BookingDraft> {
@@ -360,6 +365,32 @@ export async function deleteReservation(reservationId: string): Promise<void> {
   } catch {
     return;
   }
+}
+
+export async function getRoomHolds(): Promise<RoomHold[]> {
+  const response = await fetch(`${API_BASE_URL}/api/room-holds`);
+  if (!response.ok) throw new Error(`Room holds request failed: ${response.status}`);
+  return response.json() as Promise<RoomHold[]>;
+}
+
+export async function saveRoomHold(hold: RoomHold): Promise<RoomHold> {
+  const response = await fetch(`${API_BASE_URL}/api/room-holds/${encodeURIComponent(hold.id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(hold)
+  });
+  if (!response.ok) throw new Error(`Room hold save failed: ${response.status}`);
+  return response.json() as Promise<RoomHold>;
+}
+
+export async function deleteRoomHold(holdId: string, clientId = ""): Promise<void> {
+  const params = new URLSearchParams();
+  if (clientId) params.set("clientId", clientId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`${API_BASE_URL}/api/room-holds/${encodeURIComponent(holdId)}${suffix}`, {
+    method: "DELETE"
+  });
+  if (!response.ok && response.status !== 404) throw new Error(`Room hold delete failed: ${response.status}`);
 }
 
 export async function clearBookingStatistics(): Promise<void> {

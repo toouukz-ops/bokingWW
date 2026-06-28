@@ -21861,14 +21861,19 @@ async function createFileFromMediaPath(path: string) {
 }
 
 async function createRawMediaFileFromPath(path: string) {
-  const compatiblePath = await ensureWhatsappVideoMedia(path);
-  const response = await fetch(getMediaUrl(compatiblePath));
+  const response = await fetch(getMediaUrl(path));
   if (!response.ok) {
-    throw new Error(`Media fetch failed: ${response.status}`);
+    const compatiblePath = await ensureWhatsappVideoMedia(path);
+    const compatibleResponse = await fetch(getMediaUrl(compatiblePath));
+    if (!compatibleResponse.ok) {
+      throw new Error(`Media fetch failed: ${compatibleResponse.status}`);
+    }
+    const compatibleBlob = await compatibleResponse.blob();
+    return new File([compatibleBlob], getRawMediaFileName(compatiblePath, compatibleBlob.type), { type: compatibleBlob.type || "video/mp4" });
   }
 
   const blob = await response.blob();
-  return new File([blob], getRawMediaFileName(compatiblePath, blob.type), { type: blob.type || "video/mp4" });
+  return new File([blob], getRawMediaFileName(path, blob.type), { type: blob.type || "video/mp4" });
 }
 
 function getMediaFileName(path: string) {

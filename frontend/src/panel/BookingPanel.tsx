@@ -14049,12 +14049,7 @@ function useMediaObjectUrl(path: string) {
 
     async function loadMedia() {
       try {
-        const response = await fetch(getMediaUrl(path));
-        if (!response.ok) {
-          throw new Error(`Media fetch failed: ${response.status}`);
-        }
-
-        const blob = await response.blob();
+        const blob = await fetchCachedMediaBlob(path);
         nextObjectUrl = URL.createObjectURL(blob);
         if (isMounted) {
           setObjectUrl(nextObjectUrl);
@@ -21850,30 +21845,50 @@ async function sendImageFileToActiveWhatsAppChat(file: File, caption: string) {
 }
 
 async function createFileFromMediaPath(path: string) {
-  const response = await fetch(getMediaUrl(path));
-  if (!response.ok) {
-    throw new Error(`Media fetch failed: ${response.status}`);
-  }
-
-  const blob = await response.blob();
+  const blob = await fetchCachedMediaBlob(path);
   const jpegBlob = blob.type === "image/jpeg" ? blob : await convertImageBlobToJpeg(blob);
   return new File([jpegBlob], getMediaFileName(path), { type: "image/jpeg" });
 }
 
 async function createRawMediaFileFromPath(path: string) {
-  const response = await fetch(getMediaUrl(path));
-  if (!response.ok) {
+  try {
+    const blob = await fetchCachedMediaBlob(path);
+    return new File([blob], getRawMediaFileName(path, blob.type), { type: blob.type || "video/mp4" });
+  } catch {
     const compatiblePath = await ensureWhatsappVideoMedia(path);
-    const compatibleResponse = await fetch(getMediaUrl(compatiblePath));
-    if (!compatibleResponse.ok) {
-      throw new Error(`Media fetch failed: ${compatibleResponse.status}`);
-    }
-    const compatibleBlob = await compatibleResponse.blob();
+    const compatibleBlob = await fetchCachedMediaBlob(compatiblePath);
     return new File([compatibleBlob], getRawMediaFileName(compatiblePath, compatibleBlob.type), { type: compatibleBlob.type || "video/mp4" });
   }
+}
 
-  const blob = await response.blob();
-  return new File([blob], getRawMediaFileName(path, blob.type), { type: blob.type || "video/mp4" });
+async function fetchCachedMediaBlob(path: string) {
+  const url = getMediaUrl(path);
+  const cache = await openMediaCache();
+  if (cache) {
+    const cachedResponse = await cache.match(url);
+    if (cachedResponse?.ok) {
+      return cachedResponse.blob();
+    }
+  }
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Media fetch failed: ${response.status}`);
+  }
+
+  if (cache) {
+    await cache.put(url, response.clone()).catch(() => undefined);
+  }
+  return response.blob();
+}
+
+async function openMediaCache() {
+  if (!("caches" in window)) return null;
+  try {
+    return await window.caches.open("gpb-media-cache-v1");
+  } catch {
+    return null;
+  }
 }
 
 function getMediaFileName(path: string) {

@@ -310,14 +310,31 @@ export async function cropRoomMedia(
 export async function getReservations(): Promise<Reservation[]> {
   const localReservations = await getLocalReservations();
   try {
-    const response = await fetch(`${API_BASE_URL}/api/reservations`);
-    if (!response.ok) throw new Error(`Reservations request failed: ${response.status}`);
-    const reservations = (await response.json()) as Reservation[];
+    const reservations = await fetchReservationsWithRetry();
     await saveReservations(reservations);
     return reservations;
   } catch {
     return localReservations;
   }
+}
+
+async function fetchReservationsWithRetry(): Promise<Reservation[]> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/reservations`);
+      if (!response.ok) throw new Error(`Reservations request failed: ${response.status}`);
+      return (await response.json()) as Reservation[];
+    } catch (error) {
+      lastError = error;
+      await delay(Math.min(500 * 2 ** attempt, 4000));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Reservations request failed");
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 export async function saveReservation(reservation: Reservation): Promise<Reservation> {

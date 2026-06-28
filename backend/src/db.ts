@@ -6,6 +6,8 @@ export const db = mongoClient.db(config.mongodbDbName);
 
 export async function connectDatabase() {
   await mongoClient.connect();
+  await ensureCollection("rooms");
+  await ensureCollection("guestContacts");
   await dropLegacyNumberIndex();
   await migrateLegacyRooms();
   await migrateLegacyGuestContacts();
@@ -16,6 +18,13 @@ export async function connectDatabase() {
 
 export async function closeDatabase() {
   await mongoClient.close();
+}
+
+async function ensureCollection(name: string) {
+  const exists = await db.listCollections({ name }, { nameOnly: true }).hasNext();
+  if (!exists) {
+    await db.createCollection(name);
+  }
 }
 
 async function dropLegacyNumberIndex() {

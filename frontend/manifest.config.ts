@@ -5,8 +5,8 @@ const manifest: ManifestV3Export = {
   name: "GPB WhatsApp Booking",
   version: "0.1.0",
   description: "Локальная панель бронирования поверх WhatsApp Web.",
-  permissions: ["storage"],
-  host_permissions: ["https://web.whatsapp.com/*", "http://127.0.0.1:8765/*", "https://*.onrender.com/*", "https://api.open-meteo.com/*"],
+  permissions: ["storage", "activeTab", "tabs"],
+  host_permissions: ["<all_urls>", "https://web.whatsapp.com/*", "http://127.0.0.1:8765/*", "https://*.onrender.com/*", "https://api.open-meteo.com/*"],
   content_scripts: [
     {
       matches: ["https://web.whatsapp.com/*"],
@@ -15,6 +15,10 @@ const manifest: ManifestV3Export = {
       run_at: "document_idle"
     }
   ],
+  background: {
+    service_worker: "src/background/service-worker.ts",
+    type: "module"
+  },
   web_accessible_resources: [
     {
       resources: ["whatsapp-store-bridge.js", "whatsapp-contact-form-bridge.js"],

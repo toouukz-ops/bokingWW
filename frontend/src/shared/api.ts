@@ -378,11 +378,26 @@ export function getPaymentSettings(): Promise<PaymentSettings> {
       const objectGalleryPhotoPaths = Array.isArray(settings?.objectGalleryPhotoPaths)
         ? settings.objectGalleryPhotoPaths.filter((path: unknown): path is string => typeof path === "string" && path.trim().length > 0)
         : [];
+      const objectGalleryPhotoDescriptions = settings?.objectGalleryPhotoDescriptions && typeof settings.objectGalleryPhotoDescriptions === "object" && !Array.isArray(settings.objectGalleryPhotoDescriptions)
+        ? Object.fromEntries(
+          Object.entries(settings.objectGalleryPhotoDescriptions).filter(
+            (entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string"
+          )
+        )
+        : {};
+      const objectGallerySelectedPhotoPaths = Array.isArray(settings?.objectGallerySelectedPhotoPaths)
+        ? settings.objectGallerySelectedPhotoPaths.filter((path: unknown): path is string => typeof path === "string" && objectGalleryPhotoPaths.includes(path))
+        : objectGalleryPhotoPaths;
       const objectGalleryVideoPaths = Array.isArray(settings?.objectGalleryVideoPaths)
         ? settings.objectGalleryVideoPaths.filter((path: unknown): path is string => typeof path === "string" && path.trim().length > 0)
         : [];
+      const includedCardPages = Array.isArray(settings?.includedCardPages)
+        ? settings.includedCardPages
+          .map((page: unknown) => normalizeIncludedCardPage(page, objectGalleryPhotoPaths))
+          .filter((page): page is PaymentSettings["includedCardPages"][number] => Boolean(page))
+        : [];
       const menuItems = Array.isArray(settings?.menuItems)
-        ? settings.menuItems.map(normalizeMenuItem).filter((item): item is MenuItem => Boolean(item))
+        ? settings.menuItems.map(normalizeMenuItem).filter((item: MenuItem | null): item is MenuItem => Boolean(item))
         : [];
       const pricePdfRoomIds = Array.isArray(settings?.pricePdfRoomIds)
         ? settings.pricePdfRoomIds.filter((id: unknown): id is string => typeof id === "string" && id.trim().length > 0)
@@ -398,8 +413,11 @@ export function getPaymentSettings(): Promise<PaymentSettings> {
         paymentMethods,
         linkMethods,
         companyRequisites,
+        objectGalleryPhotoDescriptions,
         objectGalleryPhotoPaths,
+        objectGallerySelectedPhotoPaths,
         objectGalleryVideoPaths,
+        includedCardPages,
         menuItems,
         pricePdfRoomIds,
         pricePdfSummaryOptions,
@@ -418,6 +436,11 @@ export function getPaymentSettings(): Promise<PaymentSettings> {
         customHolidayDates,
         inventoryAirBeds: typeof settings?.inventoryAirBeds === "number" ? settings.inventoryAirBeds : 0,
         inventoryRollaways: typeof settings?.inventoryRollaways === "number" ? settings.inventoryRollaways : 3,
+        inventoryAirBedPrice: typeof settings?.inventoryAirBedPrice === "number" ? settings.inventoryAirBedPrice : 0,
+        inventoryRollawayPrice: typeof settings?.inventoryRollawayPrice === "number" ? settings.inventoryRollawayPrice : 0,
+        inventoryExtraPlacePrice: typeof settings?.inventoryExtraPlacePrice === "number" ? settings.inventoryExtraPlacePrice : 0,
+        inventoryExtraPlaceAdultPercent: typeof settings?.inventoryExtraPlaceAdultPercent === "number" ? settings.inventoryExtraPlaceAdultPercent : 100,
+        inventoryExtraPlaceChildPercent: typeof settings?.inventoryExtraPlaceChildPercent === "number" ? settings.inventoryExtraPlaceChildPercent : 50,
         inventoryCustomFields,
         packageDiscountPercent: typeof settings?.packageDiscountPercent === "number" ? settings.packageDiscountPercent : 0,
         packagePeriodDiscountPercent: typeof settings?.packagePeriodDiscountPercent === "number" ? settings.packagePeriodDiscountPercent : 0,
@@ -431,7 +454,10 @@ export function getPaymentSettings(): Promise<PaymentSettings> {
         packageMinRooms: typeof settings?.packageMinRooms === "number" ? settings.packageMinRooms : 0,
         packageIncludeAmenities: typeof settings?.packageIncludeAmenities === "boolean" ? settings.packageIncludeAmenities : true,
         packageCustomFields,
-        servicePassword: typeof settings?.servicePassword === "string" && settings.servicePassword.trim() ? settings.servicePassword : "0000"
+        servicePassword: typeof settings?.servicePassword === "string" && settings.servicePassword.trim() ? settings.servicePassword : "0000",
+        agreementHoldMinutes: typeof settings?.agreementHoldMinutes === "number" && Number.isFinite(settings.agreementHoldMinutes)
+          ? Math.max(1, Math.round(settings.agreementHoldMinutes))
+          : 30
       });
     });
   });
@@ -567,16 +593,35 @@ function mergeSettings(currentValue: unknown, incomingValue: unknown) {
     customSleepingPlaceOptions: mergeStringArrays(currentValue.customSleepingPlaceOptions, incomingValue.customSleepingPlaceOptions),
     inventoryCustomFields: mergeRecords(currentValue.inventoryCustomFields, incomingValue.inventoryCustomFields),
     linkMethods: mergeRecords(currentValue.linkMethods, incomingValue.linkMethods),
+    objectGalleryPhotoDescriptions: mergeRecords(currentValue.objectGalleryPhotoDescriptions, incomingValue.objectGalleryPhotoDescriptions),
     objectGalleryPhotoPaths: mergeStringArrays(currentValue.objectGalleryPhotoPaths, incomingValue.objectGalleryPhotoPaths),
+    objectGallerySelectedPhotoPaths: mergeStringArrays(currentValue.objectGallerySelectedPhotoPaths, incomingValue.objectGallerySelectedPhotoPaths),
     objectGalleryVideoPaths: mergeStringArrays(currentValue.objectGalleryVideoPaths, incomingValue.objectGalleryVideoPaths),
+    includedCardPages: Array.isArray(currentValue.includedCardPages) ? currentValue.includedCardPages : incomingValue.includedCardPages,
     menuItems: mergeById(currentValue.menuItems, incomingValue.menuItems),
     packageCustomFields: mergeRecords(currentValue.packageCustomFields, incomingValue.packageCustomFields),
     paymentMethods: mergeRecords(currentValue.paymentMethods, incomingValue.paymentMethods),
     pricePdfLinkIds: mergeStringArrays(currentValue.pricePdfLinkIds, incomingValue.pricePdfLinkIds),
     pricePdfRoomIds: mergeStringArrays(currentValue.pricePdfRoomIds, incomingValue.pricePdfRoomIds),
     pricePdfSummaryOptions: mergeStringArrays(currentValue.pricePdfSummaryOptions, incomingValue.pricePdfSummaryOptions),
-    quickPhrases: mergeStringArrays(currentValue.quickPhrases, incomingValue.quickPhrases)
+    quickPhrases: Array.isArray(currentValue.quickPhrases) ? currentValue.quickPhrases : incomingValue.quickPhrases
   };
+}
+
+function normalizeIncludedCardPage(page: unknown, photoPaths: string[]): PaymentSettings["includedCardPages"][number] | null {
+  if (!isPlainObject(page)) return null;
+  const id = typeof page.id === "string" && page.id.trim() ? page.id : `included-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const template = page.template === "photo-description" ? "photo-description" : "hero-thumbs-description";
+  const mainPhotoPath = typeof page.mainPhotoPath === "string" && photoPaths.includes(page.mainPhotoPath) ? page.mainPhotoPath : "";
+  const thumbnailPaths = Array.isArray(page.thumbnailPaths)
+    ? page.thumbnailPaths.filter((path: unknown): path is string => typeof path === "string" && photoPaths.includes(path) && path !== mainPhotoPath).slice(0, 8)
+    : [];
+  const thumbnailRows = typeof page.thumbnailRows === "number" && Number.isFinite(page.thumbnailRows)
+    ? Math.min(2, Math.max(1, Math.round(page.thumbnailRows)))
+    : thumbnailPaths.length > 4 ? 2 : 1;
+  const description = typeof page.description === "string" ? page.description : "";
+  if (!mainPhotoPath && !thumbnailPaths.length && !description.trim()) return null;
+  return { description, id, mainPhotoPath, template, thumbnailRows, thumbnailPaths: thumbnailPaths.slice(0, thumbnailRows * 4) };
 }
 
 function normalizeMenuItem(item: unknown): MenuItem | null {

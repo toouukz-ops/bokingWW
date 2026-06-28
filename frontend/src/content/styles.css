@@ -18,6 +18,74 @@ body.gpb-booking-panel-open #app {
   transition: width 120ms ease, max-width 120ms ease;
 }
 
+.gpb-wa-chat-status-row {
+  position: relative !important;
+}
+
+.gpb-wa-chat-status-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 4px;
+  border-radius: 0 999px 999px 0;
+  background: #64748b;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.gpb-wa-chat-status-badge {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  max-width: 92px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #475569;
+  color: #ffffff;
+  font-size: 8px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 3px 5px;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  z-index: 6;
+}
+
+.gpb-wa-chat-status-info::before,
+.gpb-wa-chat-status-info .gpb-wa-chat-status-badge {
+  background: #2563eb;
+}
+
+.gpb-wa-chat-status-pending::before,
+.gpb-wa-chat-status-pending .gpb-wa-chat-status-badge {
+  background: #b45309;
+}
+
+.gpb-wa-chat-status-success::before,
+.gpb-wa-chat-status-success .gpb-wa-chat-status-badge {
+  background: #15803d;
+}
+
+.gpb-wa-chat-status-extended::before,
+.gpb-wa-chat-status-extended .gpb-wa-chat-status-badge {
+  background: #7c3aed;
+}
+
+.gpb-wa-chat-status-muted::before,
+.gpb-wa-chat-status-muted .gpb-wa-chat-status-badge {
+  background: #64748b;
+}
+
+.gpb-wa-chat-status-danger::before,
+.gpb-wa-chat-status-danger .gpb-wa-chat-status-badge {
+  background: #b42318;
+}
+
 .gpb-panel {
   position: relative;
   height: 100vh;
@@ -162,6 +230,17 @@ body.gpb-booking-panel-open #app {
 .gpb-booking-summary-section {
   background: #f8fafb;
   padding: 10px 12px;
+}
+
+.gpb-booking-date-warning {
+  margin-top: 8px;
+  border: 1px solid #f2b8b5;
+  border-radius: 8px;
+  background: #fff2f1;
+  color: #b42318;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .gpb-booking-summary-grid {
@@ -544,7 +623,7 @@ body.gpb-booking-panel-open #app {
   align-items: center;
   justify-content: center;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 16 / 9;
   overflow: hidden;
   border-radius: 6px;
   background: #eef1f4;
@@ -555,7 +634,7 @@ body.gpb-booking-panel-open #app {
 .gpb-panel-object-thumb video {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
 }
 
 .gpb-panel-object-thumb .gpb-media-placeholder {
@@ -627,6 +706,11 @@ body.gpb-booking-panel-open #app {
   padding: 7px 8px;
 }
 
+.gpb-availability-conflict-row.is-hold {
+  border-color: rgba(15, 107, 87, 0.3);
+  background: #eef8f4;
+}
+
 .gpb-availability-conflict-row b {
   overflow: hidden;
   color: #b42318;
@@ -647,13 +731,41 @@ body.gpb-booking-panel-open #app {
   white-space: nowrap;
 }
 
+.gpb-availability-conflict-row.is-hold b,
+.gpb-availability-conflict-row.is-hold small {
+  color: #0f6b57;
+}
+
+.gpb-availability-conflict-row.is-hold span {
+  color: #24463d;
+}
+
 .gpb-availability-conflict-row em {
   color: #8a4b00;
 }
 
-.gpb-availability-conflict-row small:last-child {
+.gpb-availability-conflict-row small {
   color: #b42318;
   font-weight: 800;
+}
+
+.gpb-availability-conflict-row button {
+  justify-self: start;
+  min-height: 22px;
+  border: 1px solid #f0a7a0;
+  border-radius: 5px;
+  background: #fff5f4;
+  color: #b42318;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 900;
+  padding: 3px 7px;
+}
+
+.gpb-availability-conflict-row button:hover {
+  border-color: #b42318;
+  background: #ffe7e5;
 }
 
 .gpb-panel-object-info {
@@ -734,7 +846,7 @@ body.gpb-booking-panel-open #app {
 .gpb-card-actions {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
   min-width: 0;
 }
@@ -761,6 +873,86 @@ body.gpb-booking-panel-open #app {
   background: #eef1f4;
   color: #8a949e;
   cursor: default;
+}
+
+.gpb-card-actions > button.gpb-room-hold-button {
+  position: relative;
+  border-color: #0f6b57;
+  background: #0f6b57;
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.gpb-card-actions > button.gpb-room-hold-button.is-hold-active {
+  border-color: #b45309;
+  background: #b45309;
+}
+
+.gpb-room-hold-tooltip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  display: none;
+  min-width: 210px;
+  max-width: 280px;
+  gap: 4px;
+  border: 1px solid rgba(15, 32, 43, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #16202a;
+  box-shadow: 0 8px 22px rgba(15, 32, 43, 0.22);
+  padding: 7px;
+  text-align: left;
+}
+
+.gpb-room-hold-tooltip::after {
+  content: "";
+  position: absolute;
+  right: 14px;
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  background: #ffffff;
+  border-right: 1px solid rgba(15, 32, 43, 0.12);
+  border-bottom: 1px solid rgba(15, 32, 43, 0.12);
+  transform: rotate(45deg);
+}
+
+.gpb-room-hold-button:hover .gpb-room-hold-tooltip,
+.gpb-room-hold-button:focus-visible .gpb-room-hold-tooltip {
+  display: grid;
+}
+
+.gpb-room-hold-tooltip > span {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.gpb-room-hold-tooltip > span.is-empty {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.gpb-room-hold-tooltip b,
+.gpb-room-hold-tooltip small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+}
+
+.gpb-room-hold-tooltip b {
+  color: #16202a;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.gpb-room-hold-tooltip small {
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .gpb-card-extra-badge {
@@ -910,7 +1102,7 @@ body.gpb-booking-panel-open #app {
 
 .gpb-send-object-actions {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -1347,6 +1539,12 @@ body.gpb-booking-panel-open #app {
   gap: 8px;
 }
 
+.gpb-agreement-summary-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .gpb-agreement-summary-head button {
   display: inline-flex;
   align-items: center;
@@ -1376,6 +1574,16 @@ body.gpb-booking-panel-open #app {
   border-color: #0f6b57;
   background: #eef8f4;
   color: #0f6b57;
+}
+
+.gpb-agreement-summary-head button.is-error {
+  border-color: #e1a6a6;
+  background: #fff4f4;
+  color: #b42318;
+}
+
+.gpb-agreement-summary-head button.is-refreshing svg {
+  animation: gpb-spin 0.8s linear infinite;
 }
 
 .gpb-total-head {
@@ -1487,6 +1695,31 @@ body.gpb-booking-panel-open #app {
   color: #ffffff;
 }
 
+.gpb-room-hold-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: calc(100% - 20px);
+  border-radius: 999px;
+  background: #0f6b57;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 6px 8px;
+  pointer-events: none;
+  text-shadow: 0 1px 1px rgb(0 0 0 / 22%);
+  box-shadow: 0 5px 14px rgb(0 0 0 / 24%);
+  z-index: 2;
+}
+
+.gpb-room-hold-badge.is-other {
+  background: #b45309;
+}
+
 .gpb-payment-mark-button.is-done svg {
   color: #ffffff;
 }
@@ -1499,24 +1732,24 @@ body.gpb-booking-panel-open #app {
 
 .gpb-package-discount-toggle {
   display: grid;
-  grid-template-columns: 15px minmax(0, 1fr);
+  grid-template-columns: 14px minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
-  min-height: 32px;
+  gap: 4px;
+  min-height: 28px;
   border: 1px solid #d2dbe3;
   border-radius: 6px;
   background: #ffffff;
   color: #25313d;
   cursor: pointer;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 900;
-  padding: 4px 7px;
+  padding: 3px 5px;
 }
 
 .gpb-package-toggle-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
 }
 
 .gpb-package-discount-toggle.is-active {
@@ -1526,8 +1759,8 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-package-discount-toggle input {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   accent-color: #0f7a63;
 }
 
@@ -1820,6 +2053,12 @@ body.gpb-booking-panel-open #app {
   font-weight: 800;
 }
 
+.gpb-date-field-title {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
 .gpb-date-guest-grid .gpb-date-field input {
   height: 44px;
   border: 2px solid #0f6b57;
@@ -2080,9 +2319,14 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-contact-row .gpb-secondary-contact-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
   border-color: #cfd6dd;
   background: #ffffff;
   color: #25313d;
+  padding: 0;
 }
 
 .gpb-contact-row .gpb-secondary-contact-action:disabled {
@@ -2655,6 +2899,7 @@ body.gpb-booking-panel-open #app {
   inset: 0;
   z-index: 1000000;
   display: flex;
+  min-height: 100dvh;
   background: rgb(15 23 32 / 42%);
   pointer-events: auto;
 }
@@ -2664,6 +2909,7 @@ body.gpb-booking-panel-open #app {
   flex-direction: column;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   background: #f4f6f8;
   color: #16202a;
   font: 14px/1.4 Arial, sans-serif;
@@ -2774,7 +3020,26 @@ body.gpb-booking-panel-open #app {
 .gpb-settings-modal {
   background: #f6f8fa;
   height: 100vh;
+  height: 100dvh;
   max-height: none;
+}
+
+.gpb-settings-modal .gpb-catalog-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.gpb-settings-modal .gpb-catalog-header > div {
+  min-width: 0;
+}
+
+.gpb-settings-modal .gpb-catalog-header > button {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  border-radius: 8px;
 }
 
 .gpb-reservations-modal {
@@ -3667,6 +3932,31 @@ body.gpb-booking-panel-open #app {
   background: #e8f4f1;
 }
 
+.gpb-price-pdf-room-option.is-booked {
+  border-color: #ef9a9a;
+  background: #fff1f1;
+}
+
+.gpb-price-pdf-room-option.is-booked.is-selected {
+  border-color: #d12b2b;
+  box-shadow: inset 0 0 0 1px rgba(209, 43, 43, 0.22);
+}
+
+.gpb-price-pdf-room-option.is-hold {
+  border-color: #e2b94f;
+  background: #fff8df;
+}
+
+.gpb-price-pdf-room-option.is-hold.is-selected {
+  border-color: #b7791f;
+  box-shadow: inset 0 0 0 1px rgba(183, 121, 31, 0.22);
+}
+
+.gpb-price-pdf-room-option.is-repair {
+  border-color: #c7ccd3;
+  background: #f0f2f5;
+}
+
 .gpb-price-pdf-room-option.is-dragging {
   opacity: 0.48;
 }
@@ -3722,6 +4012,37 @@ body.gpb-booking-panel-open #app {
   color: #64707d;
   font-size: 10px;
   font-weight: 800;
+}
+
+.gpb-price-pdf-room-option em {
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #e7f2ef;
+  color: #0f6b57;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gpb-price-pdf-room-option.is-booked em {
+  background: #ffe1e1;
+  color: #b42318;
+}
+
+.gpb-price-pdf-room-option.is-hold em {
+  background: #fff0b8;
+  color: #8a5a13;
+}
+
+.gpb-price-pdf-room-option.is-repair em {
+  background: #e1e6ec;
+  color: #4d5966;
 }
 
 .gpb-price-pdf-option b,
@@ -4171,6 +4492,406 @@ body.gpb-booking-panel-open #app {
   place-items: center;
 }
 
+.gpb-included-builder-modal {
+  width: min(1180px, calc(100vw - 40px));
+  height: min(860px, calc(100vh - 40px));
+}
+
+.gpb-included-builder {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.gpb-included-pages {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  overflow: auto;
+  border-right: 1px solid #d8dee5;
+  background: #f8fafb;
+  padding: 12px;
+}
+
+.gpb-included-pages button,
+.gpb-included-toolbar button {
+  min-height: 38px;
+  border: 1px solid #cfd6dd;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #25313d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 8px;
+  text-align: left;
+}
+
+.gpb-included-pages button.is-active {
+  border-color: #0f6b57;
+  background: #e9f7f2;
+  color: #0f6b57;
+}
+
+.gpb-included-pages small {
+  display: block;
+  margin-top: 2px;
+  color: #64707d;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.gpb-included-editor {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.gpb-included-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  border-bottom: 1px solid #d8dee5;
+  padding: 12px;
+}
+
+.gpb-included-toolbar label,
+.gpb-included-preview-panel label {
+  display: grid;
+  gap: 6px;
+  color: #5c6670;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.gpb-included-toolbar select,
+.gpb-included-preview-panel textarea {
+  width: 100%;
+  border: 1px solid #cfd6dd;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #16202a;
+  font: inherit;
+  padding: 8px 10px;
+}
+
+.gpb-included-preview-panel textarea {
+  min-height: 112px;
+  resize: vertical;
+}
+
+.gpb-included-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.42fr) minmax(360px, 0.58fr);
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px;
+}
+
+.gpb-included-photo-picker {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  gap: 10px;
+}
+
+.gpb-included-photo-picker > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: start;
+  gap: 8px;
+  overflow: auto;
+}
+
+.gpb-included-photo-picker button {
+  display: grid;
+  gap: 4px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: #ffffff;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.gpb-included-photo-picker button.is-main {
+  border-color: #0f6b57;
+}
+
+.gpb-included-photo-picker button.is-thumb {
+  border-color: #f59e0b;
+}
+
+.gpb-included-photo-picker .gpb-panel-object-thumb {
+  aspect-ratio: 16 / 9;
+}
+
+.gpb-included-photo-picker span,
+.gpb-included-photo-picker em {
+  overflow: hidden;
+  color: #25313d;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gpb-included-photo-picker em {
+  color: #0f6b57;
+}
+
+.gpb-included-preview-panel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+  min-height: 0;
+}
+
+.gpb-included-preview {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  overflow: auto;
+  border: 1px solid #d8dee5;
+  border-radius: 10px;
+  background: #f4f7f4;
+  padding: 14px;
+}
+
+.gpb-included-preview > .gpb-panel-object-thumb,
+.gpb-included-preview > .gpb-media-placeholder {
+  width: 100%;
+  aspect-ratio: 45 / 31;
+  border-radius: 10px;
+}
+
+.gpb-included-preview.is-photo-description > .gpb-panel-object-thumb {
+  aspect-ratio: 4 / 5;
+}
+
+.gpb-included-preview-thumbs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.gpb-included-preview-thumbs .gpb-panel-object-thumb {
+  aspect-ratio: 45 / 31;
+  border-radius: 7px;
+}
+
+.gpb-included-preview-description {
+  display: grid;
+  gap: 6px;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.gpb-included-preview-description span {
+  color: #25313d;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.gpb-gallery-builder-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.44fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.gpb-included-settings-builder {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d8dee5;
+  border-radius: 8px;
+  background: #f8fafb;
+  padding: 12px;
+}
+
+.gpb-included-settings-header {
+  display: grid;
+  gap: 3px;
+}
+
+.gpb-included-settings-header strong {
+  color: #16202a;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.gpb-included-settings-header span {
+  color: #64707d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.gpb-included-settings-pages,
+.gpb-included-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gpb-included-settings-pages button,
+.gpb-included-settings-actions button {
+  min-height: 30px;
+  border: 1px solid #cfd6dd;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #25313d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 0 9px;
+}
+
+.gpb-included-settings-pages button.is-active {
+  border-color: #0f6b57;
+  background: #e9f7f2;
+  color: #0f6b57;
+}
+
+.gpb-included-settings-field {
+  display: grid;
+  gap: 5px;
+  color: #5c6670;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.gpb-included-settings-field select,
+.gpb-included-drop-preview textarea {
+  width: 100%;
+  border: 1px solid #cfd6dd;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #16202a;
+  font: inherit;
+  padding: 8px;
+}
+
+.gpb-included-drop-preview {
+  display: grid;
+  gap: 8px;
+}
+
+.gpb-included-drop-main,
+.gpb-included-drop-thumbs {
+  display: grid;
+  border: 1px dashed #b9c7d4;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 7px;
+}
+
+.gpb-included-drop-main {
+  min-height: 180px;
+  place-items: center;
+}
+
+.gpb-included-drop-main img,
+.gpb-included-drop-main .gpb-media-placeholder {
+  width: 100%;
+  aspect-ratio: 45 / 31;
+  border-radius: 7px;
+}
+
+.gpb-included-drop-main img {
+  display: block;
+  height: auto;
+  object-fit: cover;
+}
+
+.gpb-included-drop-main > span,
+.gpb-included-drop-thumbs > span {
+  color: #64707d;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.gpb-included-thumbs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #5c6670;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.gpb-included-thumbs-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #0f6b57;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #0f6b57;
+  cursor: pointer;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0;
+}
+
+.gpb-included-drop-thumbs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  min-height: 72px;
+}
+
+.gpb-included-drop-thumbs button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.gpb-included-thumb-slot {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 45 / 31;
+  place-items: center;
+  border: 1px dashed #cfd6dd;
+  border-radius: 5px;
+  background: #f5f8fa;
+  color: #8b97a3;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.gpb-included-drop-thumbs img,
+.gpb-included-drop-thumbs .gpb-media-placeholder {
+  width: 100%;
+  aspect-ratio: 45 / 31;
+  border-radius: 5px;
+}
+
+.gpb-included-drop-thumbs img {
+  display: block;
+  height: auto;
+  object-fit: cover;
+}
+
+.gpb-included-drop-preview textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
 .gpb-delete-expense-body {
   padding: 16px 18px;
 }
@@ -4410,16 +5131,17 @@ body.gpb-booking-panel-open #app {
   display: flex;
   align-items: end;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .gpb-reservation-layer-toggles button,
 .gpb-reservation-layer-toggles label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 40px;
+  gap: 7px;
+  min-height: 34px;
   border: 1px solid #cfd6dd;
   border-radius: 6px;
   background: #ffffff;
@@ -4427,7 +5149,7 @@ body.gpb-booking-panel-open #app {
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
-  padding: 0 10px;
+  padding: 0 8px;
   white-space: nowrap;
 }
 
@@ -4445,6 +5167,34 @@ body.gpb-booking-panel-open #app {
   padding: 0;
 }
 
+.gpb-reservation-layer-toggles .gpb-layer-toggle-input {
+  position: absolute;
+  width: 1px;
+  min-height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.gpb-reservation-layer-toggles .gpb-layer-color-input {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  border: 1px solid #cfd6dd;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.gpb-reservation-layer-toggles .gpb-layer-color-input::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.gpb-reservation-layer-toggles .gpb-layer-color-input::-webkit-color-swatch {
+  border: 0;
+  border-radius: 4px;
+}
+
 .gpb-reservation-layer-toggles i {
   display: block;
   width: 18px;
@@ -4454,7 +5204,7 @@ body.gpb-booking-panel-open #app {
 
 .gpb-reservations-layout {
   display: grid;
-  grid-template-rows: minmax(0, 2fr) minmax(160px, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(150px, 180px);
   gap: 14px;
   height: 100%;
   min-height: 0;
@@ -4468,11 +5218,15 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-reservation-timeline-board {
+  display: grid;
+  grid-template-rows: 28px 42px minmax(0, 1fr);
   height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
+.gpb-reservation-timeline-months,
 .gpb-reservation-timeline-header,
 .gpb-reservation-timeline-row {
   display: grid;
@@ -4480,14 +5234,20 @@ body.gpb-booking-panel-open #app {
   min-width: calc(170px + var(--gpb-timeline-days) * 42px);
 }
 
+.gpb-reservation-timeline-months {
+  z-index: 40;
+  border-bottom: 1px solid #d8dee5;
+  background: #e8edf2;
+}
+
 .gpb-reservation-timeline-header {
-  position: sticky;
-  top: 0;
   z-index: 30;
   border-bottom: 1px solid #d8dee5;
   background: #f1f4f6;
 }
 
+.gpb-timeline-month-spacer,
+.gpb-timeline-month-cell,
 .gpb-timeline-room-header,
 .gpb-timeline-day-header {
   min-height: 42px;
@@ -4498,6 +5258,31 @@ body.gpb-booking-panel-open #app {
   font: inherit;
   font-size: 11px;
   font-weight: 800;
+}
+
+.gpb-timeline-month-spacer,
+.gpb-timeline-month-cell {
+  min-height: 28px;
+  display: grid;
+  align-items: center;
+  border: 0;
+  border-right: 1px solid #d8dee5;
+  background: #e8edf2;
+  color: #25313d;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 0 12px;
+}
+
+.gpb-timeline-month-spacer {
+  position: sticky;
+  left: 0;
+  z-index: 41;
+}
+
+.gpb-timeline-month-cell {
+  justify-content: center;
+  text-transform: capitalize;
 }
 
 .gpb-timeline-room-header {
@@ -4533,20 +5318,53 @@ body.gpb-booking-panel-open #app {
   background: #fff4f4;
 }
 
-.gpb-timeline-day-header.is-selected {
-  background: #e5f3ef;
-  box-shadow: inset 0 -2px 0 #0f6b57;
+.gpb-timeline-day-header.is-selected,
+.gpb-timeline-day-header.is-today {
+  background: var(--gpb-timeline-selected-day-color, #0f6b57);
+  box-shadow: inset 0 -2px 0 rgb(0 0 0 / 18%);
+}
+
+.gpb-timeline-day-header.is-selected strong,
+.gpb-timeline-day-header.is-today strong {
+  color: var(--gpb-timeline-selected-day-text-color, #ffffff);
+}
+
+.gpb-timeline-day-header.is-selected span,
+.gpb-timeline-day-header.is-today span {
+  color: var(--gpb-timeline-selected-day-muted-text-color, rgb(255 255 255 / 82%));
+}
+
+.gpb-timeline-day-header.is-selected.is-today {
+  box-shadow: inset 0 0 0 2px rgb(255 255 255 / 72%), inset 0 -2px 0 rgb(0 0 0 / 18%);
 }
 
 .gpb-reservation-timeline-rows {
   display: grid;
-  align-content: start;
+  grid-template-rows: repeat(var(--gpb-timeline-room-count, 1), minmax(0, 1fr));
+  min-height: 0;
 }
 
 .gpb-reservation-timeline-row {
   position: relative;
-  min-height: calc(34px + var(--gpb-timeline-lanes, 1) * 13px);
+  min-height: 0;
   border-bottom: 1px solid #e6ebef;
+  background: #ffffff;
+}
+
+.gpb-reservation-timeline-row.is-alternate {
+  background: var(--gpb-timeline-alternate-row-color, #f7f9fc);
+}
+
+.gpb-reservation-timeline-row.is-alternate .gpb-timeline-room-cell {
+  background: var(--gpb-timeline-alternate-row-color, #f7f9fc);
+}
+
+.gpb-reservation-timeline-row.is-alternate .gpb-timeline-room-cell strong {
+  color: var(--gpb-timeline-alternate-row-text-color, #16202a);
+}
+
+.gpb-reservation-timeline-row.is-alternate .gpb-timeline-room-cell span {
+  color: var(--gpb-timeline-alternate-row-muted-text-color, #64707d);
 }
 
 .gpb-timeline-room-cell {
@@ -4558,7 +5376,8 @@ body.gpb-booking-panel-open #app {
   gap: 1px;
   border-right: 1px solid #d8dee5;
   background: #ffffff;
-  padding: 6px 12px;
+  min-height: 0;
+  padding: 3px 12px;
 }
 
 .gpb-timeline-room-cell strong {
@@ -4578,56 +5397,83 @@ body.gpb-booking-panel-open #app {
 
 .gpb-timeline-date-cell {
   grid-row: 1;
-  min-height: 100%;
+  min-height: 0;
   border: 0;
   border-right: 1px solid #edf1f4;
-  background: #ffffff;
+  background: transparent;
   cursor: pointer;
 }
 
 .gpb-timeline-date-cell.is-weekend {
-  background: #fffafa;
+  background: rgb(255 244 244 / 72%);
 }
 
 .gpb-timeline-date-cell.is-selected {
-  background: #ecf8f5;
+  border-left: 1px solid color-mix(in srgb, var(--gpb-timeline-selected-day-color, #0f6b57) 42%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--gpb-timeline-selected-day-color, #0f6b57) 42%, transparent);
+  background: color-mix(in srgb, var(--gpb-timeline-selected-day-color, #0f6b57) 18%, transparent);
 }
 
-.gpb-timeline-reservation-bar,
-.gpb-timeline-status-bar,
-.gpb-timeline-checkin-marker {
+.gpb-reservation-timeline-row.is-alternate .gpb-timeline-date-cell.is-weekend {
+  background: rgb(255 255 255 / 8%);
+}
+
+.gpb-reservation-timeline-row.is-alternate .gpb-timeline-date-cell.is-selected {
+  border-left: 1px solid color-mix(in srgb, var(--gpb-timeline-selected-day-color, #0f6b57) 48%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--gpb-timeline-selected-day-color, #0f6b57) 48%, transparent);
+  background: color-mix(in srgb, var(--gpb-timeline-selected-day-color, #0f6b57) 24%, var(--gpb-timeline-alternate-row-color, #f7f9fc));
+}
+
+.gpb-timeline-status-bar {
   grid-row: 1;
   align-self: start;
-  margin-top: calc(26px + var(--gpb-timeline-lane, 0) * 13px);
+  margin-top: calc(50% - 2px + var(--gpb-timeline-lane, 0) * 8px);
 }
 
 .gpb-timeline-reservation-bar {
+  position: absolute;
+  top: calc(50% - 21px + var(--gpb-timeline-lane, 0) * 8px + var(--gpb-timeline-segment-offset, 0px));
+  left: calc(170px + var(--gpb-timeline-start, 0) * ((100% - 170px) / var(--gpb-timeline-days)));
   z-index: 2;
-  height: 7px;
-  border-radius: 999px;
-  background: #8e98a3;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 38%);
-  color: transparent;
-  overflow: hidden;
+  width: max(8px, calc(var(--gpb-timeline-span, 1) * ((100% - 170px) / var(--gpb-timeline-days))));
+  height: 42px;
+  overflow: visible;
 }
 
-.gpb-timeline-checkin-marker {
+.gpb-timeline-reservation-bar line {
+  stroke: var(--gpb-timeline-lodging-color, #8e98a3);
+  stroke-linecap: round;
+  stroke-width: 7px;
+  vector-effect: non-scaling-stroke;
+}
+
+.gpb-timeline-point {
+  position: absolute;
+  top: calc(50% + var(--gpb-timeline-lane, 0) * 8px + var(--gpb-timeline-point-offset, 0px));
+  left: calc(170px + var(--gpb-timeline-start, 0) * ((100% - 170px) / var(--gpb-timeline-days)));
   z-index: 3;
   width: 9px;
   height: 9px;
   border: 2px solid #ffffff;
   border-radius: 999px;
-  background: #138a63;
-  box-shadow: 0 0 0 1px rgb(19 138 99 / 35%);
-  justify-self: start;
-  transform: translateY(-1px);
+  transform: translate(-50%, -50%);
+}
+
+.gpb-timeline-point.is-checkin {
+  background: var(--gpb-timeline-checkin-color, #138a63);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--gpb-timeline-checkin-color, #138a63) 40%, transparent);
+}
+
+.gpb-timeline-point.is-checkout {
+  background: var(--gpb-timeline-checkout-color, #64748b);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--gpb-timeline-checkout-color, #64748b) 40%, transparent);
 }
 
 .gpb-timeline-status-bar {
   z-index: 2;
   display: grid;
   place-items: center;
-  height: 5px;
+  height: 4px;
   border-radius: 999px;
   color: #ffffff;
   font-size: 0;
@@ -4636,11 +5482,18 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-timeline-status-bar.is-cleaning {
-  background: #7c3aed;
+  position: absolute;
+  top: calc(50% - 2px + var(--gpb-timeline-lane, 0) * 8px);
+  left: calc(170px + var(--gpb-timeline-start, 0) * ((100% - 170px) / var(--gpb-timeline-days)));
+  width: max(5px, calc(var(--gpb-timeline-span, 0.0417) * ((100% - 170px) / var(--gpb-timeline-days))));
+  margin-top: 0;
+  background: var(--gpb-timeline-cleaning-color, #7c3aed);
+  height: 3px;
+  opacity: 0.92;
 }
 
 .gpb-timeline-status-bar.is-repair {
-  background: #d12b2b;
+  background: var(--gpb-timeline-repair-color, #d12b2b);
 }
 
 .gpb-reservation-list-panel {
@@ -4884,6 +5737,7 @@ body.gpb-booking-panel-open #app {
   grid-template-columns: 220px minmax(0, 1fr);
   align-items: start;
   gap: 16px;
+  height: calc(100dvh - 72px);
   min-height: 0;
   flex: 1;
   overflow: hidden;
@@ -4896,7 +5750,7 @@ body.gpb-booking-panel-open #app {
   display: grid;
   align-content: start;
   gap: 6px;
-  max-height: calc(100vh - 112px);
+  max-height: 100%;
   overflow: auto;
   border: 1px solid #d8dee5;
   border-radius: 10px;
@@ -4943,8 +5797,10 @@ body.gpb-booking-panel-open #app {
   display: grid;
   align-content: start;
   gap: 14px;
+  height: 100%;
   min-width: 0;
-  max-height: calc(100vh - 112px);
+  min-height: 0;
+  max-height: none;
   overflow: auto;
 }
 
@@ -4964,6 +5820,7 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-settings-panel {
+  position: relative;
   align-self: start;
   min-width: 0;
   overflow: hidden;
@@ -4972,6 +5829,20 @@ body.gpb-booking-panel-open #app {
   background: #ffffff;
   box-shadow: 0 1px 0 rgb(16 24 40 / 3%);
   padding: 14px;
+}
+
+.gpb-settings-panel > .gpb-editor-title,
+.gpb-settings-panel > .gpb-settings-note:first-of-type {
+  max-width: calc(100% - 430px);
+}
+
+.gpb-gallery-settings-panel {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
 }
 
 .gpb-settings-panel.is-hidden {
@@ -5128,20 +5999,23 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-settings-panel-actions {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 4;
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
   justify-content: flex-end;
-  margin-top: 9px;
+  margin: 0;
 }
 
 .gpb-settings-gallery-actions {
-  display: grid;
-  grid-template-columns: minmax(150px, auto) minmax(150px, auto) minmax(150px, auto);
-  align-items: stretch;
-  clear: both;
-  justify-content: flex-end;
-  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  clear: none;
+  background: transparent;
+  padding: 0;
 }
 
 .gpb-settings-panel-actions .gpb-settings-add-button {
@@ -5154,14 +6028,15 @@ body.gpb-booking-panel-open #app {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  width: 100%;
-  height: 38px;
-  min-width: 150px;
-  min-height: 38px;
-  border-radius: 7px;
+  width: auto;
+  height: 36px;
+  min-width: 0;
+  min-height: 36px;
+  border-radius: 8px;
   font-size: 13px;
   font-weight: 900;
   line-height: 1;
+  padding: 0 12px;
   white-space: nowrap;
 }
 
@@ -5171,10 +6046,10 @@ body.gpb-booking-panel-open #app {
 .gpb-backup-actions .gpb-secondary,
 .gpb-backup-actions .gpb-settings-add-button {
   width: auto;
-  min-width: 132px;
+  min-width: 0;
   min-height: 36px;
   margin-top: 0;
-  padding: 0 14px;
+  padding: 0 12px;
 }
 
 .gpb-settings-panel .gpb-primary,
@@ -5186,9 +6061,12 @@ body.gpb-booking-panel-open #app {
 
 .gpb-object-gallery-settings-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  align-content: start;
   gap: 8px;
-  max-height: 430px;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
   margin-top: 10px;
   overflow: auto;
   padding: 2px;
@@ -5196,12 +6074,36 @@ body.gpb-booking-panel-open #app {
 
 .gpb-object-gallery-settings-item {
   position: relative;
+  display: grid;
+  gap: 6px;
   min-width: 0;
-  height: 180px;
-  overflow: hidden;
+  overflow: visible;
+  padding: 6px;
   border: 1px solid #d8dee5;
   border-radius: 8px;
   background: #f6f8fa;
+  cursor: grab;
+}
+
+.gpb-object-gallery-settings-item:active {
+  cursor: grabbing;
+}
+
+.gpb-object-gallery-settings-item.is-video {
+  aspect-ratio: 16 / 9;
+  display: block;
+  overflow: hidden;
+  padding: 0;
+  cursor: default;
+}
+
+.gpb-object-gallery-settings-preview {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 6px;
+  background: #eef1f4;
 }
 
 .gpb-object-gallery-settings-item img,
@@ -5216,6 +6118,47 @@ body.gpb-booking-panel-open #app {
   width: 100%;
   height: 100%;
   border-radius: 0;
+}
+
+.gpb-object-gallery-settings-preview > span {
+  position: absolute;
+  left: 8px;
+  bottom: 7px;
+  z-index: 1;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 58%);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 3px 6px;
+}
+
+.gpb-object-gallery-send-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid #d8dee5;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #25313d;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 7px 8px;
+}
+
+.gpb-object-gallery-send-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: #0f6b57;
+}
+
+.gpb-object-gallery-send-toggle span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .gpb-object-gallery-settings-item.is-video::after {
@@ -5234,6 +6177,25 @@ body.gpb-booking-panel-open #app {
   color: #ffffff;
   font-size: 11px;
   font-weight: 900;
+}
+
+.gpb-object-gallery-settings-item textarea {
+  min-height: 64px;
+  resize: vertical;
+  border: 1px solid #d8dee5;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #25313d;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.35;
+  padding: 8px;
+  cursor: text;
+}
+
+.gpb-object-gallery-settings-item textarea:focus {
+  border-color: #0f6b57;
+  outline: 2px solid rgb(15 107 87 / 14%);
 }
 
 .gpb-object-gallery-settings-item button {
@@ -5347,7 +6309,7 @@ body.gpb-booking-panel-open #app {
 
 .gpb-menu-settings-card {
   display: grid;
-  grid-template-columns: 120px minmax(190px, 1.15fr) 96px 120px minmax(300px, 1.75fr) 164px;
+  grid-template-columns: 120px minmax(170px, 1fr) 86px 110px minmax(260px, 2fr) 138px;
   align-items: end;
   gap: 8px;
   border: 1px solid #d8dee5;
@@ -5411,8 +6373,9 @@ body.gpb-booking-panel-open #app {
 
 .gpb-menu-settings-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 42px);
   gap: 6px;
+  justify-content: end;
   align-items: stretch;
 }
 
@@ -5421,8 +6384,7 @@ body.gpb-booking-panel-open #app {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  width: 100%;
+  width: 42px;
   min-width: 0;
   height: 40px;
   min-height: 40px;
@@ -5430,31 +6392,6 @@ body.gpb-booking-panel-open #app {
   border-radius: 7px;
   font-size: 12px;
   font-weight: 900;
-}
-
-.gpb-menu-panel-actions {
-  display: grid;
-  grid-template-columns: minmax(150px, auto) minmax(150px, auto);
-  justify-content: flex-end;
-  align-items: stretch;
-}
-
-.gpb-menu-panel-actions .gpb-settings-add-button,
-.gpb-menu-panel-actions .gpb-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  width: 100%;
-  height: 38px;
-  min-width: 150px;
-  min-height: 38px;
-  margin: 0;
-  border-radius: 7px;
-  font-size: 13px;
-  font-weight: 900;
-  line-height: 1;
-  white-space: nowrap;
 }
 
 .gpb-upload-spinner {
@@ -5520,11 +6457,15 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-backup-actions {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 4;
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
   justify-content: flex-end;
-  margin-top: 10px;
+  margin: 0;
 }
 
 .gpb-backup-actions .gpb-settings-add-button {
@@ -5569,14 +6510,12 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-inline-prepayment-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 4;
+  z-index: 1000003;
   display: grid;
   align-items: center;
-  background: rgba(248, 250, 251, 0.96);
-  border: 1px solid #b8dfd5;
-  border-radius: 8px;
+  background: rgba(15, 32, 43, 0.26);
   padding: 16px;
 }
 
@@ -5819,10 +6758,12 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-weather-settings-grid button {
-  grid-column: 1 / -1;
-  justify-self: end;
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 4;
   width: auto;
-  min-width: 132px;
+  min-width: 0;
   min-height: 36px;
   border: 1px solid #0f6b57;
   border-radius: 6px;
@@ -6775,9 +7716,16 @@ body.gpb-booking-panel-open #app {
 
 .gpb-price-input {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   color: #5c6670;
   font-size: 12px;
+}
+
+.gpb-price-input small {
+  color: #7a5b14;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.1;
 }
 
 .gpb-price-copy-actions {
@@ -7260,6 +8208,120 @@ body.gpb-booking-panel-open #app {
   font-size: 12px;
 }
 
+.gpb-client-media-section {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e1e6eb;
+}
+
+.gpb-client-media-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gpb-client-media-head strong {
+  color: #16202a;
+  font-size: 13px;
+}
+
+.gpb-client-media-head span {
+  color: #68717c;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.gpb-client-media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 8px;
+}
+
+.gpb-client-media-card {
+  overflow: hidden;
+  border: 1px solid #d8dee5;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.gpb-client-media-preview {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #eef1f4;
+}
+
+.gpb-client-media-preview img,
+.gpb-client-media-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.gpb-client-media-card.is-video .gpb-client-media-preview::after {
+  content: "Видео";
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 62%);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 900;
+  padding: 3px 6px;
+}
+
+.gpb-client-media-meta {
+  display: grid;
+  gap: 5px;
+  padding: 7px;
+}
+
+.gpb-client-media-meta span,
+.gpb-client-media-meta small {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gpb-client-media-meta > span {
+  color: #25313d;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.gpb-client-media-meta small {
+  color: #68717c;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.gpb-client-media-meta button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.gpb-client-media-empty {
+  border: 1px dashed #c9d1d9;
+  border-radius: 8px;
+  background: #f8fafb;
+  color: #68717c;
+  padding: 10px;
+  font-size: 12px;
+  text-align: center;
+}
+
 .gpb-group-plan b {
   color: #b42318;
 }
@@ -7302,7 +8364,7 @@ body.gpb-booking-panel-open #app {
 
 .gpb-gallery {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: 10px;
   margin-top: 14px;
 }
@@ -7310,7 +8372,7 @@ body.gpb-booking-panel-open #app {
 .gpb-gallery-item {
   position: relative;
   overflow: hidden;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 16 / 9;
   border: 1px solid #d8dee5;
   border-radius: 8px;
   background: #eef1f4;
@@ -7366,6 +8428,7 @@ body.gpb-booking-panel-open #app {
   background: rgb(22 32 42 / 80%);
   color: #ffffff;
   cursor: pointer;
+  padding: 0 12px;
 }
 
 .gpb-gallery-item .gpb-gallery-crop {
@@ -8032,6 +9095,19 @@ body.gpb-booking-panel-open #app {
   .gpb-settings-content {
     max-height: none;
     overflow: visible;
+  }
+
+  .gpb-settings-panel > .gpb-editor-title,
+  .gpb-settings-panel > .gpb-settings-note:first-of-type {
+    max-width: none;
+  }
+
+  .gpb-settings-panel-actions,
+  .gpb-backup-actions,
+  .gpb-weather-settings-grid button {
+    position: static;
+    justify-content: flex-start;
+    margin-top: 10px;
   }
 
   .gpb-analytics-row,

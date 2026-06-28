@@ -38,7 +38,13 @@ export interface Reservation {
   extraBedType?: "air-bed" | "rollaway";
   airMattressCount: number;
   rollawayCount?: number;
-  extraInventoryByRoomId?: Record<string, { airBeds: number; rollaways: number }>;
+  extraInventoryByRoomId?: Record<string, { airBeds: number; rollaways: number; extraPlaces?: number }>;
+  extraInventoryChargeEnabled?: boolean;
+  inventoryAirBedPrice?: number;
+  inventoryRollawayPrice?: number;
+  inventoryExtraPlacePrice?: number;
+  inventoryExtraPlaceAdultPercent?: number;
+  inventoryExtraPlaceChildPercent?: number;
   extraInventoryManual?: boolean;
   hourlyHours: number;
   discountPercent: number;
@@ -95,8 +101,11 @@ export interface PaymentSettings {
   paymentMethods: Record<string, string>;
   linkMethods: Record<string, string>;
   companyRequisites: Record<string, string>;
+  objectGalleryPhotoDescriptions: Record<string, string>;
   objectGalleryPhotoPaths: string[];
+  objectGallerySelectedPhotoPaths: string[];
   objectGalleryVideoPaths: string[];
+  includedCardPages: IncludedCardPage[];
   menuItems: MenuItem[];
   pricePdfRoomIds: string[];
   pricePdfSummaryOptions: string[];
@@ -115,6 +124,11 @@ export interface PaymentSettings {
   customHolidayDates: string[];
   inventoryAirBeds: number;
   inventoryRollaways: number;
+  inventoryAirBedPrice: number;
+  inventoryRollawayPrice: number;
+  inventoryExtraPlacePrice: number;
+  inventoryExtraPlaceAdultPercent: number;
+  inventoryExtraPlaceChildPercent: number;
   inventoryCustomFields: Record<string, string>;
   packageDiscountPercent: number;
   packagePeriodDiscountPercent: number;
@@ -129,6 +143,18 @@ export interface PaymentSettings {
   packageIncludeAmenities: boolean;
   packageCustomFields: Record<string, string>;
   servicePassword: string;
+  agreementHoldMinutes: number;
+}
+
+export type IncludedCardTemplate = "hero-thumbs-description" | "photo-description";
+
+export interface IncludedCardPage {
+  description: string;
+  id: string;
+  mainPhotoPath: string;
+  template: IncludedCardTemplate;
+  thumbnailRows?: number;
+  thumbnailPaths: string[];
 }
 
 export interface MenuItem {
@@ -191,11 +217,18 @@ export interface ChatBookingDraft {
   extraBedType?: "air-bed" | "rollaway";
   airMattressCount: number;
   rollawayCount?: number;
-  extraInventoryByRoomId?: Record<string, { airBeds: number; rollaways: number }>;
+  extraInventoryByRoomId?: Record<string, { airBeds: number; rollaways: number; extraPlaces?: number }>;
+  extraInventoryChargeEnabled?: boolean;
+  inventoryAirBedPrice?: number;
+  inventoryRollawayPrice?: number;
+  inventoryExtraPlacePrice?: number;
+  inventoryExtraPlaceAdultPercent?: number;
+  inventoryExtraPlaceChildPercent?: number;
   extraInventoryManual?: boolean;
   hourlyHours: number;
   discountPercent: number;
   packageDiscountEnabled?: boolean;
+  periodDiscountEnabled?: boolean;
   breakfastIncluded?: boolean;
   manualTotalAmount: number;
   manualSaleOpen?: boolean;
@@ -204,6 +237,7 @@ export interface ChatBookingDraft {
   manualSalePaymentMethod: string;
   manualSalePeriod: "day" | "half-day";
   prepaymentAlreadyPaid: boolean;
+  chatStartedAt?: string;
   catalogStatus?: "price-sent" | "room-sent";
   catalogStatusAt?: string;
   agreementSent: boolean;

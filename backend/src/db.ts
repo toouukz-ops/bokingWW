@@ -8,6 +8,7 @@ export async function connectDatabase() {
   await mongoClient.connect();
   await dropLegacyNumberIndex();
   await migrateLegacyRooms();
+  await migrateLegacyGuestContacts();
   await db.collection("rooms").createIndex({ id: 1 }, { unique: true });
   await db.collection("guestContacts").createIndex({ phone: 1 }, { unique: true });
   await db.collection("guestContacts").createIndex({ inquiryDate: -1 });
@@ -44,4 +45,45 @@ async function migrateLegacyRooms() {
       )
     )
   );
+}
+
+async function migrateLegacyGuestContacts() {
+  const contacts = db.collection("guestContacts");
+  const documents = await contacts.find().toArray();
+  const byPhone = new Map<string, typeof documents>();
+
+  documents.forEach((document) => {
+    const phone = typeof document.phone === "string" ? normalizeGuestPhone(document.phone) : "";
+    if (!phone) return;
+    byPhone.set(phone, (byPhone.get(phone) ?? []).concat(document));
+  });
+
+  for (const [phone, group] of byPhone.entries()) {
+    const sorted = group.slice().sort((left, right) => {
+      const leftDate = new Date(String(left.inquiryDate ?? left.updatedAt ?? left.createdAt ?? 0)).getTime();
+      const rightDate = new Date(String(right.inquiryDate ?? right.updatedAt ?? right.createdAt ?? 0)).getTime();
+      return rightDate - leftDate;
+    });
+    const latest = sorted[0];
+    if (!latest) continue;
+
+    const needsMerge = group.length > 1 || latest.phone !== phone;
+    if (!needsMerge) continue;
+
+    await contacts.deleteMany({ _id: { $in: group.map((document) => document._id) } });
+    await contacts.insertOne({
+      ...latest,
+      _id: latest._id,
+      phone
+    });
+  }
+}
+
+function normalizeGuestPhone(value: string) {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return value.trim();
+  if (/^8\d{10}$/.test(digits)) return `+7${digits.slice(1)}`;
+  if (/^7\d{10}$/.test(digits)) return `+${digits}`;
+  if (/^\d{10}$/.test(digits)) return `+7${digits}`;
+  return `+${digits}`;
 }

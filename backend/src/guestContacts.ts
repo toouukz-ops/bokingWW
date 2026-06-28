@@ -23,12 +23,16 @@ export async function listGuestContacts(): Promise<GuestContact[]> {
 
 export async function saveGuestContact(contact: GuestContact): Promise<GuestContact> {
   const now = new Date();
+  const normalizedContact = {
+    ...contact,
+    phone: normalizeGuestPhone(contact.phone)
+  };
 
   await guestContacts.updateOne(
-    { phone: contact.phone },
+    { phone: normalizedContact.phone },
     {
       $set: {
-        ...contact,
+        ...normalizedContact,
         updatedAt: now
       },
       $setOnInsert: {
@@ -38,17 +42,26 @@ export async function saveGuestContact(contact: GuestContact): Promise<GuestCont
     { upsert: true }
   );
 
-  return contact;
+  return normalizedContact;
 }
 
 export async function deleteGuestContact(phone: string): Promise<void> {
-  await guestContacts.deleteOne({ phone });
+  await guestContacts.deleteOne({ phone: normalizeGuestPhone(phone) });
 }
 
 function mapGuestContactDocument(document: GuestContactDocument): GuestContact {
   return {
-    phone: document.phone,
+    phone: normalizeGuestPhone(document.phone),
     appeal: document.appeal,
     inquiryDate: document.inquiryDate
   };
+}
+
+function normalizeGuestPhone(value: string) {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return value.trim();
+  if (/^8\d{10}$/.test(digits)) return `+7${digits.slice(1)}`;
+  if (/^7\d{10}$/.test(digits)) return `+${digits}`;
+  if (/^\d{10}$/.test(digits)) return `+7${digits}`;
+  return `+${digits}`;
 }

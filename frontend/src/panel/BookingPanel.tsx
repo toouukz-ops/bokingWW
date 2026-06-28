@@ -24,9 +24,11 @@ import {
   MoveUp,
   PanelRightClose,
   PanelRightOpen,
+  RefreshCw,
   Send,
   Settings,
   Share2,
+  Timer,
   Trash2,
   Utensils,
   Users,
@@ -34,7 +36,7 @@ import {
   X
 } from "lucide-react";
 import { jsPDF } from "jspdf";
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import {
   clearBookingStatistics,
   cropRoomMedia,
@@ -82,8 +84,26 @@ const MANUAL_SALE_MODE_KEY = "gpb-manual-sale-mode";
 const CUSTOM_HOLIDAY_DATES_STORAGE_KEY = "gpb-custom-holiday-dates";
 const CUSTOM_AMENITY_OPTIONS_STORAGE_KEY = "gpb-custom-amenity-options";
 const CUSTOM_FOOD_OPTIONS_STORAGE_KEY = "gpb-custom-food-options";
+const ROOM_HOLDS_STORAGE_KEY = "gpb-room-holds";
+const DEFAULT_ROOM_HOLD_MINUTES = 30;
+const TIMELINE_ALTERNATE_ROW_COLOR_KEY = "gpb-timeline-alternate-row-color";
+const DEFAULT_TIMELINE_ALTERNATE_ROW_COLOR = "#f7f9fc";
+const TIMELINE_SELECTED_DAY_COLOR_KEY = "gpb-timeline-selected-day-color";
+const DEFAULT_TIMELINE_SELECTED_DAY_COLOR = "#0f6b57";
+const TIMELINE_LODGING_COLOR_KEY = "gpb-timeline-lodging-color";
+const DEFAULT_TIMELINE_LODGING_COLOR = "#8e98a3";
+const TIMELINE_CHECKIN_COLOR_KEY = "gpb-timeline-checkin-color";
+const DEFAULT_TIMELINE_CHECKIN_COLOR = "#138a63";
+const TIMELINE_CHECKOUT_COLOR_KEY = "gpb-timeline-checkout-color";
+const DEFAULT_TIMELINE_CHECKOUT_COLOR = "#64748b";
+const TIMELINE_CLEANING_COLOR_KEY = "gpb-timeline-cleaning-color";
+const DEFAULT_TIMELINE_CLEANING_COLOR = "#7c3aed";
+const TIMELINE_REPAIR_COLOR_KEY = "gpb-timeline-repair-color";
+const DEFAULT_TIMELINE_REPAIR_COLOR = "#d12b2b";
+const BOOKING_ERROR_CANCEL_REASON = "Ошибка бронирования";
 const PANEL_WIDTH_RATIO = 0.4;
 const DAY_MS = 24 * 60 * 60 * 1000;
+let whatsAppAutoSendProtectionUntil = 0;
 
 function debugContactFlow(event: string, details: Record<string, unknown> = {}) {
   console.debug(`[GPB contact] ${event}`, details);
@@ -110,13 +130,30 @@ type WeatherDayPart = {
   precipitationProbability: number;
 };
 type ExtraBedType = "air-bed" | "rollaway";
+type ExtraInventoryType = ExtraBedType | "extra-place";
+type ExtraInventoryItem = { airBeds: number; rollaways: number; extraPlaces?: number };
 type SettingMethod = { id: string; label: string };
 type AvailabilityConflict = {
   busyFrom?: string;
   busyTo?: string;
+  hold?: RoomHold;
   releaseDate: string;
-  reservation: Reservation;
+  reservation?: Reservation;
   room: Room;
+};
+type RoomHold = {
+  id: string;
+  roomId: string;
+  checkIn: string;
+  checkOut: string;
+  checkInTime: string;
+  checkOutTime: string;
+  ownerId: string;
+  ownerTitle: string;
+  guestName: string;
+  phone: string;
+  createdAt: string;
+  expiresAt: string;
 };
 type CatalogAvailabilitySummary = {
   airBeds: number;
@@ -127,6 +164,29 @@ type CatalogAvailabilitySummary = {
   saunas: number;
   sleepingPlaces: number;
 };
+type PricePdfRoomStatus = {
+  kind: "available" | "booked" | "hold" | "repair";
+  label: string;
+};
+type PdfImageFit = "cover" | "contain";
+type PdfLoadedImage = { image: HTMLImageElement; objectUrl: string };
+type IncludedCardTemplate = "hero-thumbs-description" | "photo-description";
+type IncludedCardPage = {
+  description: string;
+  id: string;
+  mainPhotoPath: string;
+  template: IncludedCardTemplate;
+  thumbnailRows?: number;
+  thumbnailPaths: string[];
+};
+const INCLUDED_CARD_THUMB_COLUMNS = 4;
+const INCLUDED_CARD_MAX_THUMB_ROWS = 2;
+function getIncludedCardThumbnailRows(page: IncludedCardPage) {
+  return clampNumber(page.thumbnailRows ?? (page.thumbnailPaths.length > INCLUDED_CARD_THUMB_COLUMNS ? 2 : 1), 1, INCLUDED_CARD_MAX_THUMB_ROWS);
+}
+function getIncludedCardThumbnailLimit(page: IncludedCardPage) {
+  return getIncludedCardThumbnailRows(page) * INCLUDED_CARD_THUMB_COLUMNS;
+}
 type PricePdfSummaryOptionKey =
   | "period"
   | "rooms"
@@ -357,6 +417,203 @@ function getDefaultCheckOutDate() {
   return formatDateInput(addDays(new Date(), 1));
 }
 
+function isDateBeforeToday(date: string) {
+  return Boolean(date && date < getDefaultCheckInDate());
+}
+
+function getMinimumCheckOutDate(checkIn: string) {
+  const today = getDefaultCheckInDate();
+  const baseDate = checkIn && checkIn >= today ? checkIn : today;
+  return formatDateInput(addDays(parseDateInput(baseDate), 1));
+}
+
+function isRoomDateOverrideAlignedWithBooking(
+  override: { checkIn: string; checkOut: string } | undefined,
+  checkIn: string,
+  checkOut: string
+) {
+  return Boolean(
+    override?.checkIn &&
+    override?.checkOut &&
+    override.checkIn >= checkIn &&
+    override.checkOut <= checkOut &&
+    override.checkOut > override.checkIn
+  );
+}
+
+function sanitizeRoomDateOverridesForBooking(
+  overrides: Record<string, { checkIn: string; checkOut: string }>,
+  checkIn: string,
+  checkOut: string
+) {
+  return Object.fromEntries(
+    Object.entries(overrides).filter(([, override]) => isRoomDateOverrideAlignedWithBooking(override, checkIn, checkOut))
+  );
+}
+
+function isReservationDateInPast(reservation: Pick<Reservation, "checkIn" | "checkOut" | "items">) {
+  const today = getDefaultCheckInDate();
+  if (reservation.checkIn < today || reservation.checkOut < today) return true;
+  return Boolean(reservation.items?.some((item) => item.checkIn < today || item.checkOut < today));
+}
+
+function reservationDateFieldsEqual(left: Pick<Reservation, "checkIn" | "checkOut" | "items">, right: Pick<Reservation, "checkIn" | "checkOut" | "items">) {
+  if (left.checkIn !== right.checkIn || left.checkOut !== right.checkOut) return false;
+  const leftItems = [...(left.items ?? [])].sort((a, b) => a.roomId.localeCompare(b.roomId));
+  const rightItems = [...(right.items ?? [])].sort((a, b) => a.roomId.localeCompare(b.roomId));
+  if (leftItems.length !== rightItems.length) return false;
+  return leftItems.every((item, index) => {
+    const other = rightItems[index];
+    return Boolean(other && item.roomId === other.roomId && item.checkIn === other.checkIn && item.checkOut === other.checkOut);
+  });
+}
+
+function isReservationPastStay(reservation: Pick<Reservation, "checkOut"> | null | undefined) {
+  return Boolean(reservation?.checkOut && reservation.checkOut < getDefaultCheckInDate());
+}
+
+function isChatDraftPastStay(draft: Pick<ChatBookingDraft, "checkOut" | "lastReservation">) {
+  return Boolean((draft.checkOut && draft.checkOut < getDefaultCheckInDate()) || isReservationPastStay(draft.lastReservation));
+}
+
+function getStoredTimelineAlternateRowColor() {
+  try {
+    const storedColor = window.localStorage.getItem(TIMELINE_ALTERNATE_ROW_COLOR_KEY);
+    return storedColor && /^#[0-9a-f]{6}$/i.test(storedColor) ? storedColor : DEFAULT_TIMELINE_ALTERNATE_ROW_COLOR;
+  } catch {
+    return DEFAULT_TIMELINE_ALTERNATE_ROW_COLOR;
+  }
+}
+
+function getStoredTimelineSelectedDayColor() {
+  return getStoredTimelineColor(TIMELINE_SELECTED_DAY_COLOR_KEY, DEFAULT_TIMELINE_SELECTED_DAY_COLOR);
+}
+
+function getStoredTimelineColor(key: string, fallback: string) {
+  try {
+    const storedColor = window.localStorage.getItem(key);
+    return storedColor && /^#[0-9a-f]{6}$/i.test(storedColor) ? storedColor : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function getReadableTimelineTextColor(backgroundColor: string, fallback = "#16202a") {
+  const normalizedColor = backgroundColor.replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(normalizedColor)) return fallback;
+  const red = Number.parseInt(normalizedColor.slice(0, 2), 16);
+  const green = Number.parseInt(normalizedColor.slice(2, 4), 16);
+  const blue = Number.parseInt(normalizedColor.slice(4, 6), 16);
+  const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
+  return luminance < 0.56 ? "#ffffff" : fallback;
+}
+
+function buildPastReservationWarning(reservation: Pick<Reservation, "checkIn" | "checkOut" | "items">) {
+  const today = getDefaultCheckInDate();
+  const pastItem = reservation.items?.find((item) => item.checkIn < today || item.checkOut < today);
+  const pastDate = pastItem?.checkIn && pastItem.checkIn < today
+    ? pastItem.checkIn
+    : reservation.checkIn < today
+      ? reservation.checkIn
+      : pastItem?.checkOut && pastItem.checkOut < today
+        ? pastItem.checkOut
+        : reservation.checkOut;
+  return `Нельзя создать или подтвердить бронь в прошлом: ${formatKazakhDate(pastDate)}. Проверьте месяц и выберите дату не раньше ${formatKazakhDate(today)}.`;
+}
+
+function getStoredRoomHolds(): Promise<RoomHold[]> {
+  return new Promise((resolve) => {
+    try {
+      if (!chrome?.runtime?.id || !chrome.storage?.local) {
+        resolve([]);
+        return;
+      }
+      chrome.storage.local.get([ROOM_HOLDS_STORAGE_KEY], (result) => {
+        if (chrome.runtime.lastError) {
+          resolve([]);
+          return;
+        }
+        resolve(normalizeRoomHolds(result[ROOM_HOLDS_STORAGE_KEY]));
+      });
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
+function saveStoredRoomHolds(holds: RoomHold[]): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      if (!chrome?.runtime?.id || !chrome.storage?.local) {
+        resolve();
+        return;
+      }
+      chrome.storage.local.set({ [ROOM_HOLDS_STORAGE_KEY]: filterActiveRoomHolds(holds) }, () => resolve());
+    } catch {
+      resolve();
+    }
+  });
+}
+
+function normalizeRoomHolds(value: unknown): RoomHold[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is RoomHold =>
+    item &&
+    typeof item === "object" &&
+    typeof item.id === "string" &&
+    typeof item.roomId === "string" &&
+    typeof item.checkIn === "string" &&
+    typeof item.checkOut === "string" &&
+    typeof item.ownerId === "string" &&
+    typeof item.expiresAt === "string"
+  );
+}
+
+function filterActiveRoomHolds(holds: RoomHold[], nowMs = Date.now()) {
+  return holds.filter((hold) => new Date(hold.expiresAt).getTime() > nowMs);
+}
+
+function getCurrentRoomHoldOwnerId(activeChat: ActiveChat | null, guestPhone: string, guestPhonePrefix: string, guestFirstName: string) {
+  if (activeChat?.id) return activeChat.id;
+  const phone = buildPhoneWithPrefix(guestPhone, guestPhonePrefix);
+  if (phone) return createChatId(`phone:${phone}`);
+  const name = normalizeExtractedText(guestFirstName);
+  return createChatId(name ? `guest:${name}` : "local:booking-panel");
+}
+
+function roomHoldOverlapsRange(hold: RoomHold, range: { checkIn: string; checkOut: string }, checkInTime: string, checkOutTime: string) {
+  if (hold.checkIn === hold.checkOut || range.checkIn === range.checkOut) {
+    if (hold.checkIn !== range.checkIn) return false;
+    if (hold.checkInTime && hold.checkOutTime) {
+      return timeRangesOverlap(checkInTime, checkOutTime, hold.checkInTime, hold.checkOutTime) || !checkInTime || !checkOutTime;
+    }
+    return true;
+  }
+  return dateRangesOverlap(range.checkIn, range.checkOut, hold.checkIn, hold.checkOut);
+}
+
+function formatHoldCountdown(expiresAt: string, nowMs = Date.now()) {
+  const remainingMs = Math.max(0, new Date(expiresAt).getTime() - nowMs);
+  const minutes = Math.floor(remainingMs / 60_000);
+  const seconds = Math.floor((remainingMs % 60_000) / 1000);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatHoldTime(expiresAt: string) {
+  const date = new Date(expiresAt);
+  if (Number.isNaN(date.getTime())) return "после таймера";
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function formatHourlyConflictTimes(conflict: AvailabilityConflict) {
+  if (conflict.hold) return `${conflict.hold.checkInTime}-${conflict.hold.checkOutTime}`;
+  if (!conflict.reservation) return "";
+  return `${conflict.reservation.checkInTime}-${getReservationHourlyEndTime(conflict.reservation)}`;
+}
+
 export function BookingPanel() {
   const [isOpen, setIsOpen] = useState(true);
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
@@ -398,9 +655,10 @@ export function BookingPanel() {
   const [extraBedType, setExtraBedType] = useState<ExtraBedType>("air-bed");
   const [airMattressCount, setAirMattressCount] = useState(0);
   const [rollawayCount, setRollawayCount] = useState(0);
+  const [extraInventoryChargeEnabled, setExtraInventoryChargeEnabled] = useState(false);
   const [extraInventoryManual, setExtraInventoryManual] = useState(false);
   const [extraInventoryPickerRoomId, setExtraInventoryPickerRoomId] = useState("");
-  const [extraInventoryByRoomId, setExtraInventoryByRoomId] = useState<Record<string, { airBeds: number; rollaways: number }>>({});
+  const [extraInventoryByRoomId, setExtraInventoryByRoomId] = useState<Record<string, ExtraInventoryItem>>({});
   const [hourlyHours, setHourlyHours] = useState(2);
   const [addOnSaleDate, setAddOnSaleDate] = useState(() => formatDateInput(new Date()));
   const [addOnSaleStartTime, setAddOnSaleStartTime] = useState("15:00");
@@ -417,6 +675,7 @@ export function BookingPanel() {
   const [kitchenSaleState, setKitchenSaleState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [discountPercent, setDiscountPercent] = useState(0);
   const [packageDiscountEnabled, setPackageDiscountEnabled] = useState(false);
+  const [periodDiscountEnabled, setPeriodDiscountEnabled] = useState(false);
   const [packageDiscountWasApplied, setPackageDiscountWasApplied] = useState(false);
   const [discountManualOverride, setDiscountManualOverride] = useState(false);
   const [breakfastIncluded, setBreakfastIncluded] = useState(true);
@@ -428,13 +687,17 @@ export function BookingPanel() {
   const [manualSalePaymentMethod, setManualSalePaymentMethod] = useState("");
   const [manualSalePeriod, setManualSalePeriod] = useState<"day" | "half-day">("day");
   const [prepaymentAlreadyPaid, setPrepaymentAlreadyPaid] = useState(false);
+  const [chatStartedAt, setChatStartedAt] = useState("");
   const [paymentLink, setPaymentLink] = useState("");
   const [paymentMethods, setPaymentMethods] = useState<Record<string, string>>({});
   const [linkMethods, setLinkMethods] = useState<Record<string, string>>({});
   const [companyRequisites, setCompanyRequisites] = useState<Record<string, string>>({});
   const [isInvoiceOpen, setIsInvoiceOpen] = useState(false);
+  const [objectGalleryPhotoDescriptions, setObjectGalleryPhotoDescriptions] = useState<Record<string, string>>({});
   const [objectGalleryPhotoPaths, setObjectGalleryPhotoPaths] = useState<string[]>([]);
+  const [objectGallerySelectedPhotoPaths, setObjectGallerySelectedPhotoPaths] = useState<string[]>([]);
   const [objectGalleryVideoPaths, setObjectGalleryVideoPaths] = useState<string[]>([]);
+  const [includedCardPages, setIncludedCardPages] = useState<IncludedCardPage[]>([]);
   const [objectGalleryUploadState, setObjectGalleryUploadState] = useState<{
     message: string;
     status: "idle" | "uploading" | "error";
@@ -448,6 +711,7 @@ export function BookingPanel() {
   const [newQuickPhrase, setNewQuickPhrase] = useState("");
   const [isQuickPhraseFormOpen, setIsQuickPhraseFormOpen] = useState(false);
   const [draggedQuickPhraseIndex, setDraggedQuickPhraseIndex] = useState<number | null>(null);
+  const [draggedObjectGalleryPhotoPath, setDraggedObjectGalleryPhotoPath] = useState("");
   const [quickPhraseSendState, setQuickPhraseSendState] = useState<"idle" | "sending" | "error">("idle");
   const [weatherLocationName, setWeatherLocationName] = useState("Алматы");
   const [weatherLatitude, setWeatherLatitude] = useState(43.2389);
@@ -455,6 +719,11 @@ export function BookingPanel() {
   const [customHolidayDates, setCustomHolidayDates] = useState<string[]>([]);
   const [inventoryAirBeds, setInventoryAirBeds] = useState(0);
   const [inventoryRollaways, setInventoryRollaways] = useState(3);
+  const [inventoryAirBedPrice, setInventoryAirBedPrice] = useState(0);
+  const [inventoryRollawayPrice, setInventoryRollawayPrice] = useState(0);
+  const [inventoryExtraPlacePrice, setInventoryExtraPlacePrice] = useState(0);
+  const [inventoryExtraPlaceAdultPercent, setInventoryExtraPlaceAdultPercent] = useState(100);
+  const [inventoryExtraPlaceChildPercent, setInventoryExtraPlaceChildPercent] = useState(50);
   const [inventoryCustomFields, setInventoryCustomFields] = useState<Record<string, string>>({});
   const [packageDiscountPercent, setPackageDiscountPercent] = useState(0);
   const [packagePeriodDiscountPercent, setPackagePeriodDiscountPercent] = useState(0);
@@ -480,7 +749,11 @@ export function BookingPanel() {
   const [socialPriceRoomIds, setSocialPriceRoomIds] = useState<string[]>([]);
   const [socialPriceDescription, setSocialPriceDescription] = useState("");
   const [servicePassword, setServicePassword] = useState("0000");
+  const [agreementHoldMinutes, setAgreementHoldMinutes] = useState(DEFAULT_ROOM_HOLD_MINUTES);
   const [lastReservation, setLastReservation] = useState<Reservation | null>(null);
+  const [bookingDateWarning, setBookingDateWarning] = useState("");
+  const [bookingDateWarningHoldId, setBookingDateWarningHoldId] = useState("");
+  const [ignoredRoomHoldIds, setIgnoredRoomHoldIds] = useState<string[]>([]);
   const [cancelReservationTarget, setCancelReservationTarget] = useState<Reservation | null>(null);
   const [deleteReservationTarget, setDeleteReservationTarget] = useState<Reservation | null>(null);
   const [prepaymentAmountTarget, setPrepaymentAmountTarget] = useState<Reservation | null>(null);
@@ -497,14 +770,19 @@ export function BookingPanel() {
   const [catalogStatusAt, setCatalogStatusAt] = useState("");
   const [sendState, setSendState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [agreementCopyState, setAgreementCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [agreementRefreshState, setAgreementRefreshState] = useState<"idle" | "refreshing" | "refreshed" | "error">("idle");
   const [clearBookingState, setClearBookingState] = useState<"idle" | "clearing" | "cleared">("idle");
   const [contactSaveState, setContactSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [roomHolds, setRoomHolds] = useState<RoomHold[]>([]);
+  const [holdNowMs, setHoldNowMs] = useState(() => Date.now());
   const [todayWeatherState, setTodayWeatherState] = useState<WeatherState>({ status: "idle" });
   const [isDiscountFocused, setIsDiscountFocused] = useState(false);
   const [isManualTotalFocused, setIsManualTotalFocused] = useState(false);
   const [isManualSaleAmountFocused, setIsManualSaleAmountFocused] = useState(false);
   const [focusedGroupInput, setFocusedGroupInput] = useState("");
   const guestPhoneInputRef = useRef<HTMLInputElement | null>(null);
+  const bookingDatesSnapshotRef = useRef<HTMLDivElement | null>(null);
+  const catalogSnapshotRef = useRef<HTMLElement | null>(null);
   const adminCommentValueRef = useRef("");
   const adminCommentRecognitionRef = useRef<{
     stop: () => void;
@@ -515,6 +793,10 @@ export function BookingPanel() {
   const suppressActiveChatSyncRef = useRef(false);
   const recentContactExtractionAtRef = useRef(0);
   const saveChatDraftTimerRef = useRef<number | null>(null);
+  const draftCacheRef = useRef<Record<string, ChatBookingDraft>>({});
+  const draftCacheLoadPromiseRef = useRef<Promise<Record<string, ChatBookingDraft>> | null>(null);
+  const draftRestoreVersionRef = useRef(0);
+  const activeChatBeforeRestoreRef = useRef<ActiveChat | null>(null);
   const saveAdminCommentTimerRef = useRef<number | null>(null);
   const quickPhraseSendingRef = useRef(false);
   const pricedRooms = useMemo(
@@ -529,13 +811,28 @@ export function BookingPanel() {
     }),
     [checkIn, dynamicPricingEnabled, dynamicPricingMarginPercent, dynamicPricingSeasonEnd, expenseEntries, reservations, rooms]
   );
+  const activeRoomHolds = useMemo(
+    () => roomHolds.filter((hold) => new Date(hold.expiresAt).getTime() > holdNowMs),
+    [holdNowMs, roomHolds]
+  );
+  const agreementHoldDurationMs = useMemo(
+    () => Math.max(1, Math.round(agreementHoldMinutes || DEFAULT_ROOM_HOLD_MINUTES)) * 60 * 1000,
+    [agreementHoldMinutes]
+  );
+  const currentHoldOwnerId = useMemo(
+    () => getCurrentRoomHoldOwnerId(activeChat, guestPhone, guestPhonePrefix, guestFirstName),
+    [activeChat?.id, guestFirstName, guestPhone, guestPhonePrefix]
+  );
   const availableRooms = useMemo(
-    () => pricedRooms.filter((room) => isRoomAvailableInBookingPanel(room) && (isHourlyBookingObject(room) || !isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations))),
+    () => pricedRooms.filter((room) =>
+      isRoomAvailableInBookingPanel(room) &&
+      (isHourlyBookingObject(room) || !isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations))
+    ),
     [checkIn, checkOut, checkInTime, checkOutTime, pricedRooms, reservations]
   );
   const availableExtraInventory = useMemo(
-    () => getAvailableExtraInventory(reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways),
-    [checkIn, checkOut, inventoryAirBeds, inventoryRollaways, reservations]
+    () => getAvailableExtraInventory(reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms),
+    [checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms, reservations]
   );
   const visibleAvailableRooms = useMemo(
     () => availableRooms,
@@ -576,25 +873,25 @@ export function BookingPanel() {
   const configuredLinkMethods = useMemo(() => buildSettingMethodList(LINK_METHODS, linkMethods), [linkMethods]);
   const configuredPaymentMethods = useMemo(() => buildPaymentMethodSelectionList(paymentMethods), [paymentMethods]);
   const roomAvailabilityConflicts = useMemo(
-    () => buildRoomAvailabilityConflicts(pricedRooms, reservations, checkIn, checkOut),
-    [checkIn, checkOut, reservations, pricedRooms]
+    () => buildRoomAvailabilityConflicts(pricedRooms, reservations, checkIn, checkOut, checkInTime, checkOutTime, activeRoomHolds, currentHoldOwnerId),
+    [activeRoomHolds, checkIn, checkOut, checkInTime, checkOutTime, currentHoldOwnerId, reservations, pricedRooms]
   );
   const saunaBusySlotsByRoomId = useMemo(
     () => buildHourlyBusySlotsByRoomId(pricedRooms, reservations, checkIn),
     [checkIn, reservations, pricedRooms]
   );
   const bookedReservationRooms = useMemo(
-    () => lastReservation?.status === "booked"
+    () => isBookingPanelActiveReservation(lastReservation)
       ? lastReservation.roomIds
         .map((roomId) => pricedRooms.find((room) => room.id === roomId))
         .filter((room): room is Room => Boolean(room))
       : [],
-    [lastReservation?.roomIds, lastReservation?.status, pricedRooms]
+    [lastReservation?.checkOut, lastReservation?.checkOutTime, lastReservation?.checkedInAt, lastReservation?.checkedOutAt, lastReservation?.roomIds, lastReservation?.status, pricedRooms]
   );
   const catalogPanelRooms = useMemo(() => {
-    const sourceRooms = lastReservation?.status !== "booked" ? visibleAvailableRooms : bookedReservationRooms;
+    const sourceRooms = isBookingPanelActiveReservation(lastReservation) ? bookedReservationRooms : visibleAvailableRooms;
     return sourceRooms.filter((room) => room.objectType !== "gazebo");
-  }, [bookedReservationRooms, lastReservation?.status, visibleAvailableRooms]);
+  }, [bookedReservationRooms, lastReservation, visibleAvailableRooms]);
   const addOnSaleServiceRoom = useMemo(
     () => pricedRooms.find((room) => room.objectType === "sauna" && isRoomAvailableInBookingPanel(room)) ?? null,
     [pricedRooms]
@@ -605,9 +902,9 @@ export function BookingPanel() {
   );
   const addOnSaleConflicts = useMemo(
     () => addOnSaleServiceRoom
-      ? getHourlyRoomTimeConflicts(addOnSaleServiceRoom, reservations, addOnSaleDate, addOnSaleStartTime, addOnSaleEndTime)
+      ? getHourlyRoomTimeConflicts(addOnSaleServiceRoom, reservations, addOnSaleDate, addOnSaleStartTime, addOnSaleEndTime, activeRoomHolds, currentHoldOwnerId)
       : [],
-    [addOnSaleDate, addOnSaleEndTime, addOnSaleServiceRoom, addOnSaleStartTime, reservations]
+    [activeRoomHolds, addOnSaleDate, addOnSaleEndTime, addOnSaleServiceRoom, addOnSaleStartTime, currentHoldOwnerId, reservations]
   );
   const addOnSaleTotal = useMemo(
     () => addOnSaleServiceRoom ? calculateRoomStayPrice(addOnSaleServiceRoom, addOnSaleDate, addOnSaleDate, addOnSaleHours) : 0,
@@ -616,6 +913,27 @@ export function BookingPanel() {
   const activeMenuItems = useMemo(
     () => menuItems.filter((item) => item.title.trim()),
     [menuItems]
+  );
+  const objectGalleryMediaItems = useMemo(
+    () => [
+      ...objectGalleryPhotoPaths.map((path, index) => ({
+        description: objectGalleryPhotoDescriptions[path] ?? "",
+        id: `object-photo-${index}-${path}`,
+        path,
+        type: "photo" as const,
+        title: `Фото ${index + 1}`
+      })),
+      ...objectGalleryVideoPaths.map((path, index) => ({ id: `object-video-${index}-${path}`, path, type: "video" as const, title: `Видео ${index + 1}` }))
+    ],
+    [objectGalleryPhotoDescriptions, objectGalleryPhotoPaths, objectGalleryVideoPaths]
+  );
+  const selectedObjectGalleryPhotoPaths = useMemo(
+    () => objectGalleryPhotoPaths.filter((path) => objectGallerySelectedPhotoPaths.includes(path)),
+    [objectGalleryPhotoPaths, objectGallerySelectedPhotoPaths]
+  );
+  const menuGalleryItems = useMemo(
+    () => activeMenuItems.filter((item) => item.photoPath),
+    [activeMenuItems]
   );
   const selectedKitchenMenuItem = useMemo(
     () => activeMenuItems.find((item) => item.id === kitchenMenuItemId) ?? null,
@@ -636,19 +954,35 @@ export function BookingPanel() {
     [kitchenAddOnSales]
   );
   const catalogAvailabilitySummary = useMemo(
-    () => lastReservation?.status === "booked"
+    () => isBookingPanelActiveReservation(lastReservation)
       ? buildBookedCatalogSummary(bookedReservationRooms, lastReservation)
-      : buildCatalogAvailabilitySummary(catalogPanelRooms, reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways),
-    [bookedReservationRooms, catalogPanelRooms, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, lastReservation, reservations]
+      : buildCatalogAvailabilitySummary(catalogPanelRooms, reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms),
+    [bookedReservationRooms, catalogPanelRooms, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, lastReservation, pricedRooms, reservations]
+  );
+  const pricePdfCandidateRooms = useMemo(() => {
+    const roomsForPrice = pricedRooms.filter(isRoomAvailableInBookingPanel);
+    return packageIncludeAmenities ? roomsForPrice : roomsForPrice.filter((room) => room.category !== "amenity");
+  }, [packageIncludeAmenities, pricedRooms]);
+  const pricePdfRoomStatuses = useMemo(
+    () => buildPricePdfRoomStatuses(
+      pricePdfCandidateRooms,
+      reservations,
+      activeRoomHolds,
+      checkIn,
+      checkOut,
+      defaultCheckInTime,
+      DEFAULT_CHECK_OUT_TIME,
+      currentHoldOwnerId
+    ),
+    [activeRoomHolds, checkIn, checkOut, currentHoldOwnerId, defaultCheckInTime, pricePdfCandidateRooms, reservations]
   );
   const pricePdfAvailabilitySummary = useMemo(() => {
-    const availableRoomsForPrice = packageIncludeAmenities ? visibleAvailableRooms : visibleAvailableRooms.filter((room) => room.category !== "amenity");
     const selectedRoomIdSet = new Set(pricePdfRoomIds);
     const selectedRoomsForPrice = pricePdfRoomIds.length
-      ? availableRoomsForPrice.filter((room) => selectedRoomIdSet.has(room.id))
-      : availableRoomsForPrice;
-    return buildCatalogAvailabilitySummary(selectedRoomsForPrice, reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways);
-  }, [checkIn, checkOut, inventoryAirBeds, inventoryRollaways, packageIncludeAmenities, pricePdfRoomIds, reservations, visibleAvailableRooms]);
+      ? pricePdfCandidateRooms.filter((room) => selectedRoomIdSet.has(room.id))
+      : pricePdfCandidateRooms;
+    return buildCatalogAvailabilitySummary(selectedRoomsForPrice, reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms);
+  }, [checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricePdfCandidateRooms, pricePdfRoomIds, pricedRooms, reservations]);
   const selectedRoom = pricedRooms.find((room) => room.id === selectedRoomId) ?? null;
   const selectedBookingRooms = selectedBookingRoomIds
     .map((roomId) => pricedRooms.find((room) => room.id === roomId))
@@ -658,22 +992,52 @@ export function BookingPanel() {
   const packageDiscountRequiredRooms = packageMinRooms > 0 ? packageMinRooms : packageDiscountRoomPool.length;
   const packageDiscountSelectedRooms = proposalRooms.filter((room) => isStayBookingObject(room) && isRoomIncludedInBookingSummary(room)).length;
   const isPackageDiscountEligible = packageDiscountPercent > 0 && packageDiscountRequiredRooms > 0 && packageDiscountSelectedRooms >= packageDiscountRequiredRooms;
-  const isPeriodDiscountEligible = packagePeriodDiscountPercent > 0 && isDateRangeOverlapping(checkIn, checkOut, packagePeriodDiscountFrom, packagePeriodDiscountTo);
+  const isPeriodDiscountEligible = packagePeriodDiscountPercent > 0 && isCheckInWithinDatePeriod(checkIn, packagePeriodDiscountFrom, packagePeriodDiscountTo);
   const activeAutoDiscountPercent = Math.max(
     packageDiscountEnabled && isPackageDiscountEligible ? packageDiscountPercent : 0,
-    isPeriodDiscountEligible ? packagePeriodDiscountPercent : 0
+    periodDiscountEnabled && isPeriodDiscountEligible ? packagePeriodDiscountPercent : 0
   );
   const selectedHourlyConflicts = useMemo(
     () => proposalRooms.flatMap((room) => isHourlyBookingObject(room) ? getHourlyRoomTimeConflicts(room, reservations, checkIn, checkInTime, checkOutTime) : []),
     [checkIn, checkInTime, checkOutTime, proposalRooms, reservations]
   );
   const hasHourlyBookingObject = proposalRooms.some(isHourlyBookingObject);
-  const extraInventoryCount = airMattressCount + rollawayCount;
-  const bookingTotals = calculateBookingTotalsWithRoomDates(proposalRooms, checkIn, checkOut, roomDateOverrides, needsExtraBed, extraInventoryByRoomId, extraInventoryCount, hourlyHours, discountPercent, breakfastIncluded, breakfastPricePerPerson);
+  const extraInventoryCount = getExtraInventoryTotalCount(extraInventoryByRoomId);
+  const bookingTotals = calculateBookingTotalsWithRoomDates(
+    proposalRooms,
+    checkIn,
+    checkOut,
+    roomDateOverrides,
+    needsExtraBed,
+    extraInventoryByRoomId,
+    extraInventoryCount,
+    hourlyHours,
+    discountPercent,
+    breakfastIncluded,
+    breakfastPricePerPerson,
+    extraInventoryChargeEnabled,
+    inventoryAirBedPrice,
+    inventoryRollawayPrice,
+    inventoryExtraPlaceAdultPercent,
+    inventoryExtraPlaceChildPercent,
+    guestAdults,
+    guestChildren
+  );
   const effectiveBookingTotals = getEffectiveBookingTotals(bookingTotals, manualTotalAmount, discountPercent);
   const isManualSaleMode = manualSaleOpen;
   const isNewBookingChatMode = bookingNewChatOpen;
   const bookingPaymentAmount = isManualSaleMode ? effectiveBookingTotals.total : effectiveBookingTotals.prepayment;
+
+  useEffect(() => {
+    const stopDomProbe = startWhatsAppContactDomProbe();
+    const stopClickTrace = startWhatsAppManualClickTrace();
+    const stopAutoSendGuard = startWhatsAppAutoSendGuard();
+    return () => {
+      stopDomProbe();
+      stopClickTrace();
+      stopAutoSendGuard();
+    };
+  }, []);
 
   useEffect(() => {
     adminCommentValueRef.current = adminComment;
@@ -696,26 +1060,31 @@ export function BookingPanel() {
   }, [checkIn, checkOut, hasHourlyBookingObject, selectedBookingRoomIds]);
 
   useEffect(() => {
-    chrome.storage.local.remove("gpb-guests");
+    setRoomDateOverrides((currentOverrides) => {
+      const nextOverrides = sanitizeRoomDateOverridesForBooking(currentOverrides, checkIn, checkOut);
+      return Object.keys(nextOverrides).length === Object.keys(currentOverrides).length ? currentOverrides : nextOverrides;
+    });
+  }, [checkIn, checkOut]);
+
+  useEffect(() => {
+    try {
+      chrome.storage?.local?.remove("gpb-guests");
+    } catch {
+      // The extension context can be invalidated after reloading the unpacked extension.
+    }
     clearPendingContactSave();
     window.localStorage.removeItem(MANUAL_SALE_MODE_KEY);
     isRestoringChatDraftRef.current = true;
     setActiveChat(null);
     resetChatBookingDraft();
     setManualSaleOpen(false);
-    waitForElement(() => document.querySelector<HTMLElement>("#main header"), 5000)
-      .then(async () => {
-        await closeActiveWhatsAppChat();
-      })
-      .finally(() => {
-        setActiveChat(null);
-        resetChatBookingDraft();
-        setManualSaleOpen(false);
-        window.setTimeout(() => {
-          isRestoringChatDraftRef.current = false;
-          setStartupCleanDone(true);
-        }, 120);
-      });
+    window.setTimeout(() => {
+      setActiveChat(null);
+      resetChatBookingDraft();
+      setManualSaleOpen(false);
+      isRestoringChatDraftRef.current = false;
+      setStartupCleanDone(true);
+    }, 120);
 
     getHealth()
       .then(() => setBackendState("online"))
@@ -728,6 +1097,65 @@ export function BookingPanel() {
     loadPaymentSettings();
     loadGuestContacts();
     loadPanelExpenseEntries();
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      void processAutoCheckedOutReservations(reservations).then((processedReservations) => {
+        if (processedReservations !== reservations) setReservations(processedReservations);
+      });
+    }, 60_000);
+    return () => window.clearInterval(intervalId);
+  }, [reservations]);
+
+  useEffect(() => {
+    let isMounted = true;
+    getStoredRoomHolds().then((holds) => {
+      if (!isMounted) return;
+      const activeHolds = filterActiveRoomHolds(holds);
+      setRoomHolds(activeHolds);
+      if (activeHolds.length !== holds.length) {
+        void saveStoredRoomHolds(activeHolds);
+      }
+    });
+
+    const handleStorageChange = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
+      if (areaName !== "local" || !changes[ROOM_HOLDS_STORAGE_KEY]) return;
+      setRoomHolds(normalizeRoomHolds(changes[ROOM_HOLDS_STORAGE_KEY].newValue));
+    };
+    try {
+      chrome.storage?.onChanged?.addListener(handleStorageChange);
+    } catch {
+      // Chrome throws here when a previously injected content script survives extension reload.
+    }
+
+    return () => {
+      isMounted = false;
+      try {
+        chrome.storage?.onChanged?.removeListener(handleStorageChange);
+      } catch {
+        // The extension context can be gone by cleanup time after a reload.
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setHoldNowMs(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setRoomHolds((currentHolds) => {
+        const activeHolds = filterActiveRoomHolds(currentHolds);
+        if (activeHolds.length !== currentHolds.length) {
+          void saveStoredRoomHolds(activeHolds);
+        }
+        return activeHolds.length === currentHolds.length ? currentHolds : activeHolds;
+      });
+    }, 15_000);
+
+    return () => window.clearInterval(intervalId);
   }, []);
 
   useEffect(() => {
@@ -868,14 +1296,26 @@ export function BookingPanel() {
   }, [guestPhonePrefix, guestPhone, guestFirstName, contactExtracted, contactSavedInWhatsApp, activeChat?.id, activeChat?.phone, activeChat?.title, bookingNewChatOpen]);
 
   useEffect(() => {
+    void ensureDraftCacheLoaded();
+  }, []);
+
+  useEffect(() => {
     if (suppressActiveChatSyncRef.current) return;
     if (!activeChat) {
       if (manualSaleOpen || bookingNewChatOpen) return;
       clearBookingContactFields();
+      activeChatBeforeRestoreRef.current = null;
       return;
     }
 
     let isCancelled = false;
+    const restoreVersion = draftRestoreVersionRef.current + 1;
+    draftRestoreVersionRef.current = restoreVersion;
+    const previousChat = activeChatBeforeRestoreRef.current;
+    if (previousChat && previousChat.id !== activeChat.id && !isRestoringChatDraftRef.current) {
+      void saveChatDraftForChat(previousChat);
+    }
+    activeChatBeforeRestoreRef.current = activeChat;
     isRestoringChatDraftRef.current = true;
     const appliedBeforeRestore = applyStoredGuestContactForActiveChat(activeChat);
     const preserveRecentExtraction = shouldPreserveRecentlyExtractedContact();
@@ -883,7 +1323,7 @@ export function BookingPanel() {
       clearBookingContactFields();
     }
     getStoredChatDraftForActiveChat(activeChat).then((draft) => {
-      if (isCancelled) return;
+      if (isCancelled || draftRestoreVersionRef.current !== restoreVersion || activeChatIdRef.current !== activeChat.id) return;
       if (draft) {
         restoreChatDraft(draft);
       } else {
@@ -896,13 +1336,16 @@ export function BookingPanel() {
       }
       window.setTimeout(() => {
         if (isCancelled) return;
+        if (draftRestoreVersionRef.current !== restoreVersion || activeChatIdRef.current !== activeChat.id) return;
         isRestoringChatDraftRef.current = false;
       }, 0);
     });
 
     return () => {
       isCancelled = true;
-      isRestoringChatDraftRef.current = false;
+      if (draftRestoreVersionRef.current === restoreVersion) {
+        isRestoringChatDraftRef.current = false;
+      }
     };
   }, [activeChat?.id, activeChat?.phone, activeChat?.title, manualSaleOpen, bookingNewChatOpen]);
 
@@ -930,6 +1373,7 @@ export function BookingPanel() {
     airMattressCount,
     defaultCheckInTime,
     extraBedType,
+    extraInventoryChargeEnabled,
     extraInventoryByRoomId,
     roomDateOverrides,
     rollawayCount,
@@ -944,6 +1388,11 @@ export function BookingPanel() {
     guestPhonePrefix,
     hasPet,
     hourlyHours,
+    inventoryAirBedPrice,
+    inventoryRollawayPrice,
+    inventoryExtraPlacePrice,
+    inventoryExtraPlaceAdultPercent,
+    inventoryExtraPlaceChildPercent,
     lastReservation,
     manualSaleAmount,
     manualSaleComment,
@@ -953,9 +1402,22 @@ export function BookingPanel() {
     manualTotalAmount,
     needsExtraBed,
     prepaymentAlreadyPaid,
+    chatStartedAt,
     selectedBookingRoomIds,
     selectedRoomId
   ]);
+
+  useEffect(() => {
+    const handleOutgoingMessageSent = () => {
+      if (!activeChat || chatStartedAt || isRestoringChatDraftRef.current) return;
+      const startedAt = new Date().toISOString();
+      setChatStartedAt(startedAt);
+      void saveChatDraftForChat(activeChat, { chatStartedAt: startedAt });
+    };
+
+    window.addEventListener("gpb-whatsapp-message-sent", handleOutgoingMessageSent);
+    return () => window.removeEventListener("gpb-whatsapp-message-sent", handleOutgoingMessageSent);
+  }, [activeChat?.id, chatStartedAt]);
 
   async function loadPanelRooms() {
     const loadedRooms = mergeRooms(await getRooms());
@@ -965,13 +1427,57 @@ export function BookingPanel() {
 
   async function loadReservations() {
     const loadedReservations = await getReservations();
-    const processedReservations = await processNoShowReservations(loadedReservations);
-    const repairedReservations = await repairReservationDatesFromChatDrafts(processedReservations);
+    const identityRepairedReservations = await repairLocalPhoneIdentityLinks(loadedReservations);
+    const processedReservations = await processNoShowReservations(identityRepairedReservations);
+    const checkedOutReservations = await processAutoCheckedOutReservations(processedReservations);
+    const repairedReservations = await repairReservationDatesFromChatDrafts(checkedOutReservations);
     setReservations(repairedReservations);
+  }
+
+  async function repairLocalPhoneIdentityLinks(sourceReservations: Reservation[]) {
+    const drafts = await getAllChatBookingDrafts();
+    draftCacheRef.current = { ...drafts, ...draftCacheRef.current };
+    const normalizedReservations = sourceReservations.map(normalizeReservationPhoneIdentity);
+    const reservationChanged = normalizedReservations.some((reservation, index) => reservation !== sourceReservations[index]);
+    const normalizedReservationById = new Map(normalizedReservations.map((reservation) => [reservation.id, reservation]));
+    const repairedDraftEntries = Object.entries(drafts)
+      .map(([chatId, draft]) => {
+        const repairedDraft = repairChatDraftPhoneIdentity(draft, normalizedReservationById);
+        return repairedDraft === draft ? null : { chatId, draft: repairedDraft };
+      })
+      .filter((entry): entry is { chatId: string; draft: ChatBookingDraft } => Boolean(entry));
+    const draftSaveMap = new Map<string, ChatBookingDraft>(repairedDraftEntries.map(({ chatId, draft }) => [chatId, draft]));
+
+    Object.entries(drafts).forEach(([chatId, draft]) => {
+      const repairedDraft = draftSaveMap.get(chatId) ?? repairChatDraftPhoneIdentity(draft, normalizedReservationById);
+      const normalizedPhone = formatPhoneDigits(repairedDraft.phone);
+      if (!normalizedPhone) return;
+      const phoneChatId = createChatId(`phone:${normalizedPhone}`);
+      if (phoneChatId === chatId) return;
+      const currentAliasDraft = draftSaveMap.get(phoneChatId) ?? drafts[phoneChatId];
+      const mergedAliasDraft = mergeChatDraftForPhoneAlias(currentAliasDraft, repairedDraft);
+      if (mergedAliasDraft !== currentAliasDraft) {
+        draftSaveMap.set(phoneChatId, mergedAliasDraft);
+      }
+    });
+
+    if (reservationChanged || draftSaveMap.size) {
+      await Promise.all([
+        ...normalizedReservations.map((reservation, index) => reservation === sourceReservations[index] ? Promise.resolve() : saveReservation(reservation)),
+        ...Array.from(draftSaveMap.entries()).map(([chatId, draft]) => saveCachedChatBookingDraft(chatId, draft))
+      ]);
+      void sendDebugLog("phone-identity-links-repaired", {
+        reservationChanged,
+        repairedDrafts: draftSaveMap.size
+      });
+    }
+
+    return normalizedReservations;
   }
 
   async function repairReservationDatesFromChatDrafts(sourceReservations: Reservation[]) {
     const drafts = await getAllChatBookingDrafts();
+    draftCacheRef.current = { ...drafts, ...draftCacheRef.current };
     const repairedDrafts: Array<{ chatId: string; draft: ChatBookingDraft }> = [];
     const repairedReservations = sourceReservations.map((reservation) => {
       const matchingDraftEntry = Object.entries(drafts).find(([, draft]) => shouldExpandReservationDatesFromDraft(reservation, draft));
@@ -1005,7 +1511,7 @@ export function BookingPanel() {
     if (hasChanges) {
       await Promise.all([
         ...repairedReservations.map((reservation, index) => reservation === sourceReservations[index] ? Promise.resolve() : saveReservation(reservation)),
-        ...repairedDrafts.map(({ chatId, draft }) => saveChatBookingDraft(chatId, draft))
+        ...repairedDrafts.map(({ chatId, draft }) => saveCachedChatBookingDraft(chatId, draft))
       ]);
     }
 
@@ -1014,10 +1520,51 @@ export function BookingPanel() {
 
   async function loadGuestContacts() {
     try {
-      setGuestContacts(await getGuestContacts());
+      setGuestContacts(await repairGuestContactPhoneIdentity(await getGuestContacts()));
     } catch {
       setGuestContacts([]);
     }
+  }
+
+  async function repairGuestContactPhoneIdentity(sourceContacts: GuestContact[]) {
+    const repairedContacts = sourceContacts.map((contact) => {
+      const phone = formatPhoneDigits(contact.phone);
+      return phone && phone !== contact.phone ? { ...contact, phone } : contact;
+    });
+    const changedContacts = repairedContacts
+      .map((contact, index) => ({ contact, source: sourceContacts[index] }))
+      .filter(({ contact, source }) => source && contact.phone !== source.phone);
+
+    if (!changedContacts.length) return sourceContacts;
+
+    await Promise.all(changedContacts.map(async ({ contact, source }) => {
+      try {
+        await saveGuestContact(contact);
+        if (source.phone && normalizePhoneSearch(source.phone) !== normalizePhoneSearch(contact.phone)) {
+          await deleteGuestContact(source.phone);
+        }
+      } catch (error) {
+        void sendDebugLog("guest-contact-phone-identity-repair-failed", {
+          phone: source.phone,
+          nextPhone: contact.phone,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }));
+
+    void sendDebugLog("guest-contact-phone-identity-repaired", {
+      count: changedContacts.length
+    });
+
+    const contactsByPhone = new Map<string, GuestContact>();
+    repairedContacts.forEach((contact) => {
+      const key = normalizePhoneSearch(contact.phone);
+      const current = contactsByPhone.get(key);
+      if (!current || contact.inquiryDate.localeCompare(current.inquiryDate) >= 0) {
+        contactsByPhone.set(key, contact);
+      }
+    });
+    return Array.from(contactsByPhone.values()).sort((left, right) => right.inquiryDate.localeCompare(left.inquiryDate));
   }
 
   async function loadPanelExpenseEntries() {
@@ -1066,6 +1613,57 @@ export function BookingPanel() {
     return processedReservations;
   }
 
+  async function processAutoCheckedOutReservations(sourceReservations: Reservation[]) {
+    const nowIso = new Date().toISOString();
+    const processedReservations = sourceReservations.map((reservation) => {
+      if (
+        reservation.status !== "booked" ||
+        reservation.isAddOnSale ||
+        reservation.checkedOutAt ||
+        !isReservationCheckedOut(reservation)
+      ) {
+        return reservation;
+      }
+
+      const checkedOutAt = getReservationScheduledCheckOutIso(reservation) || nowIso;
+      return {
+        ...reservation,
+        checkedOutAt,
+        items: getReservationItems(reservation).map((item) => ({
+          ...item,
+          checkedOutAt: item.checkedOutAt || checkedOutAt
+        }))
+      };
+    });
+
+    const hasChanges = processedReservations.some((reservation, index) => reservation !== sourceReservations[index]);
+    if (!hasChanges) return sourceReservations;
+
+    const drafts = await getAllChatBookingDrafts();
+    draftCacheRef.current = { ...drafts, ...draftCacheRef.current };
+    await Promise.all([
+      ...processedReservations.map((reservation, index) => reservation === sourceReservations[index] ? Promise.resolve() : saveReservation(reservation)),
+      ...Object.entries(drafts).map(([chatId, draft]) => {
+        const updatedReservation = draft.lastReservation
+          ? processedReservations.find((reservation) => reservation.id === draft.lastReservation?.id)
+          : null;
+        if (!updatedReservation || updatedReservation === draft.lastReservation) return Promise.resolve();
+        return saveCachedChatBookingDraft(chatId, {
+          ...draft,
+          lastReservation: updatedReservation,
+          updatedAt: new Date().toISOString()
+        });
+      })
+    ]);
+
+    setLastReservation((currentReservation) => {
+      if (!currentReservation) return currentReservation;
+      return processedReservations.find((reservation) => reservation.id === currentReservation.id) ?? currentReservation;
+    });
+
+    return processedReservations;
+  }
+
   async function loadPaymentSettings() {
     const settings = await getPaymentSettings();
     setPaymentLink(settings.paymentLink);
@@ -1075,8 +1673,11 @@ export function BookingPanel() {
     });
     setLinkMethods(settings.linkMethods);
     setCompanyRequisites(settings.companyRequisites);
+    setObjectGalleryPhotoDescriptions(settings.objectGalleryPhotoDescriptions);
     setObjectGalleryPhotoPaths(settings.objectGalleryPhotoPaths);
+    setObjectGallerySelectedPhotoPaths(settings.objectGallerySelectedPhotoPaths);
     setObjectGalleryVideoPaths(settings.objectGalleryVideoPaths);
+    setIncludedCardPages(settings.includedCardPages);
     setMenuItems(settings.menuItems);
     setPricePdfRoomIds(settings.pricePdfRoomIds);
     const storedPricePdfSummaryOptions = settings.pricePdfSummaryOptions.filter(isPricePdfSummaryOptionKey);
@@ -1088,7 +1689,7 @@ export function BookingPanel() {
     setPricePdfLinkIds(settings.pricePdfLinkIds);
     setIncludeGalleryInPricePdf(settings.pricePdfIncludeGallery);
     setPricePdfGroupPeriodTotals(settings.pricePdfGroupPeriodTotals);
-    setQuickPhrases(settings.quickPhrases.length ? settings.quickPhrases : DEFAULT_QUICK_PHRASES);
+    setQuickPhrases(settings.quickPhrases);
     setCustomAmenityOptions(settings.customAmenityOptions);
     setCustomFoodOptions(settings.customFoodOptions);
     setCustomSleepingPlaceOptions(settings.customSleepingPlaceOptions);
@@ -1101,6 +1702,11 @@ export function BookingPanel() {
     saveCustomHolidayDatesToLocal(settings.customHolidayDates);
     setInventoryAirBeds(settings.inventoryAirBeds);
     setInventoryRollaways(settings.inventoryRollaways);
+    setInventoryAirBedPrice(settings.inventoryAirBedPrice);
+    setInventoryRollawayPrice(settings.inventoryRollawayPrice);
+    setInventoryExtraPlacePrice(settings.inventoryExtraPlacePrice);
+    setInventoryExtraPlaceAdultPercent(settings.inventoryExtraPlaceAdultPercent);
+    setInventoryExtraPlaceChildPercent(settings.inventoryExtraPlaceChildPercent);
     setInventoryCustomFields(settings.inventoryCustomFields);
     setPackageDiscountPercent(settings.packageDiscountPercent);
     setPackagePeriodDiscountPercent(settings.packagePeriodDiscountPercent);
@@ -1115,6 +1721,7 @@ export function BookingPanel() {
     setPackageIncludeAmenities(settings.packageIncludeAmenities);
     setPackageCustomFields(settings.packageCustomFields);
     setServicePassword(settings.servicePassword);
+    setAgreementHoldMinutes(settings.agreementHoldMinutes);
   }
 
   function buildPaymentSettingsPatch(overrides: Partial<PaymentSettings> = {}) {
@@ -1123,8 +1730,11 @@ export function BookingPanel() {
       paymentMethods,
       linkMethods,
       companyRequisites,
+      objectGalleryPhotoDescriptions,
       objectGalleryPhotoPaths,
+      objectGallerySelectedPhotoPaths,
       objectGalleryVideoPaths,
+      includedCardPages,
       menuItems,
       pricePdfRoomIds,
       pricePdfSummaryOptions,
@@ -1143,6 +1753,11 @@ export function BookingPanel() {
       customHolidayDates,
       inventoryAirBeds,
       inventoryRollaways,
+      inventoryAirBedPrice,
+      inventoryRollawayPrice,
+      inventoryExtraPlacePrice,
+      inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceChildPercent,
       inventoryCustomFields,
       packageDiscountPercent,
       packagePeriodDiscountPercent,
@@ -1157,12 +1772,14 @@ export function BookingPanel() {
       packageIncludeAmenities,
       packageCustomFields,
       servicePassword,
+      agreementHoldMinutes,
       ...overrides
     };
   }
 
   function buildChatDraft(): ChatBookingDraft {
-    const phone = buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone;
+    const phone = formatPhoneDigits(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+    const draftGuestName = resolveGuestNameForPhone(guestFirstName, phone);
     const draftCheckInTime = hasHourlyBookingObject ? checkInTime : defaultCheckInTime;
     const draftCheckOutTime = hasHourlyBookingObject ? checkOutTime : DEFAULT_CHECK_OUT_TIME;
 
@@ -1176,7 +1793,7 @@ export function BookingPanel() {
       checkOutTime: draftCheckOutTime,
       comment: bookingComment,
       adminComment,
-      guestFirstName,
+      guestFirstName: draftGuestName,
       phone,
       adults: guestAdults,
       children: guestChildren,
@@ -1186,10 +1803,17 @@ export function BookingPanel() {
       airMattressCount,
       rollawayCount,
       extraInventoryByRoomId,
+      extraInventoryChargeEnabled,
+      inventoryAirBedPrice,
+      inventoryRollawayPrice,
+      inventoryExtraPlacePrice,
+      inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceChildPercent,
       extraInventoryManual,
       hourlyHours,
       discountPercent,
       packageDiscountEnabled,
+      periodDiscountEnabled,
       breakfastIncluded,
       manualTotalAmount,
       manualSaleOpen,
@@ -1198,6 +1822,7 @@ export function BookingPanel() {
       manualSalePaymentMethod,
       manualSalePeriod,
       prepaymentAlreadyPaid,
+      chatStartedAt: chatStartedAt || undefined,
       catalogStatus,
       catalogStatusAt,
       agreementSent,
@@ -1215,7 +1840,64 @@ export function BookingPanel() {
   async function saveChatDraftForChat(chat: ActiveChat, patch: Partial<ChatBookingDraft> = {}) {
     if (isRestoringChatDraftRef.current) return;
     const draft = reconcileDraftReservationDates({ ...buildChatDraft(), ...patch, updatedAt: new Date().toISOString() });
-    await saveChatBookingDraft(chat.id, draft);
+    await saveCachedChatBookingDraft(chat.id, draft);
+    const normalizedPhone = formatPhoneDigits(draft.phone);
+    const phoneChatId = normalizedPhone ? createChatId(`phone:${normalizedPhone}`) : "";
+    if (phoneChatId && phoneChatId !== chat.id) {
+      const existingPhoneDraft = getCachedChatBookingDraft(phoneChatId) ?? await getChatBookingDraft(phoneChatId);
+      const mergedDraft = mergeChatDraftForPhoneAlias(existingPhoneDraft ?? undefined, draft);
+      await saveCachedChatBookingDraft(phoneChatId, mergedDraft);
+    }
+    const title = draft.lastReservation?.guestFirstName || draft.guestFirstName || chat.title;
+    const titleChatId = title ? createChatId(`title:${title}`) : "";
+    if (titleChatId && titleChatId !== chat.id && titleChatId !== phoneChatId) {
+      const existingTitleDraft = getCachedChatBookingDraft(titleChatId) ?? await getChatBookingDraft(titleChatId);
+      const mergedDraft = mergeChatDraftForPhoneAlias(existingTitleDraft ?? undefined, draft);
+      await saveCachedChatBookingDraft(titleChatId, mergedDraft);
+    }
+  }
+
+  function updateDraftCache(chatId: string, draft: ChatBookingDraft) {
+    if (!chatId) return;
+    draftCacheRef.current = {
+      ...draftCacheRef.current,
+      [chatId]: draft
+    };
+  }
+
+  function getCachedChatBookingDraft(chatId: string) {
+    return chatId ? draftCacheRef.current[chatId] ?? null : null;
+  }
+
+  async function saveCachedChatBookingDraft(chatId: string, draft: ChatBookingDraft) {
+    updateDraftCache(chatId, draft);
+    await saveChatBookingDraft(chatId, draft);
+  }
+
+  async function deleteCachedChatBookingDraft(chatId: string) {
+    if (chatId) {
+      const nextCache = { ...draftCacheRef.current };
+      delete nextCache[chatId];
+      draftCacheRef.current = nextCache;
+    }
+    await deleteChatBookingDraft(chatId);
+  }
+
+  async function ensureDraftCacheLoaded() {
+    if (draftCacheLoadPromiseRef.current) return draftCacheLoadPromiseRef.current;
+    draftCacheLoadPromiseRef.current = getAllChatBookingDrafts()
+      .then((drafts) => {
+        draftCacheRef.current = {
+          ...drafts,
+          ...draftCacheRef.current
+        };
+        return draftCacheRef.current;
+      })
+      .catch(() => draftCacheRef.current)
+      .finally(() => {
+        draftCacheLoadPromiseRef.current = null;
+      });
+    return draftCacheLoadPromiseRef.current;
   }
 
   function updateGuestCount(type: "adults" | "children", value: number) {
@@ -1229,7 +1911,8 @@ export function BookingPanel() {
   }
 
   async function getStoredChatDraftForActiveChat(chat: ActiveChat) {
-    const draft = await getChatBookingDraft(chat.id);
+    const drafts = await ensureDraftCacheLoaded();
+    const draft = drafts[chat.id] ?? await findFallbackChatDraftForActiveChat(chat, drafts);
     debugContactFlow("chat-draft-strict-restore", {
       activeChatId: chat.id,
       activeChatTitle: chat.title,
@@ -1240,6 +1923,23 @@ export function BookingPanel() {
       draftReservationId: draft?.lastReservation?.id ?? ""
     });
     return draft;
+  }
+
+  async function findFallbackChatDraftForActiveChat(chat: ActiveChat, cachedDrafts?: Record<string, ChatBookingDraft>) {
+    const drafts = cachedDrafts ?? await ensureDraftCacheLoaded();
+    const chatPhone = normalizePhoneSearch(chat.phone || "");
+    const chatTitle = normalizeExtractedText(chat.title);
+    const titleKey = chatTitle.toLowerCase();
+    const matches = Object.values(drafts).filter((draft) => {
+      const draftPhone = normalizePhoneSearch(draft.phone || draft.lastReservation?.phone || "");
+      if (chatPhone && draftPhone && phonesMatchForContactLookup(chatPhone, draftPhone)) return true;
+      if (!titleKey || titleKey.length < 5) return false;
+      const draftName = normalizeExtractedText(draft.guestFirstName || draft.lastReservation?.guestFirstName || "").toLowerCase();
+      return Boolean(draftName && draftName === titleKey);
+    });
+    const phoneGroups = new Set(matches.map((draft) => normalizePhoneSearch(draft.phone || draft.lastReservation?.phone || "")).filter(Boolean));
+    if (phoneGroups.size > 1) return null;
+    return matches.sort((left, right) => getChatDraftLinkScore(right) - getChatDraftLinkScore(left) || right.updatedAt.localeCompare(left.updatedAt))[0] ?? null;
   }
 
   function clearBookingContactFields() {
@@ -1261,13 +1961,8 @@ export function BookingPanel() {
     const currentPhone = buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone;
     const normalizedCurrentPhone = normalizePhoneSearch(currentPhone);
     const normalizedChatPhone = normalizePhoneSearch(chat.phone);
-    const normalizedCurrentAppeal = normalizeContactLookupText(guestFirstName);
-    const normalizedChatTitle = normalizeContactLookupText(chat.title);
 
-    return Boolean(
-      (normalizedCurrentPhone && normalizedChatPhone && phonesMatchForContactLookup(normalizedCurrentPhone, normalizedChatPhone)) ||
-      (normalizedCurrentAppeal && normalizedChatTitle && normalizedCurrentAppeal === normalizedChatTitle)
-    );
+    return Boolean(normalizedCurrentPhone && normalizedChatPhone && phonesMatchForContactLookup(normalizedCurrentPhone, normalizedChatPhone));
   }
 
   function shouldPreserveRecentlyExtractedContact() {
@@ -1317,29 +2012,59 @@ export function BookingPanel() {
 
   function findStoredGuestContactForActiveChat(chat: ActiveChat) {
     const normalizedPhone = normalizePhoneSearch(chat.phone || "");
-    const normalizedTitle = normalizeContactLookupText(chat.title);
+    const normalizedTitle = normalizeContactLookupText(chat.title || "");
+    if (!normalizedPhone && !normalizedTitle) return null;
+
+    const byPhone = normalizedPhone ? guestContacts.find((contact) => {
+      const contactPhone = normalizePhoneSearch(contact.phone);
+      return Boolean(contactPhone && phonesMatchForContactLookup(normalizedPhone, contactPhone));
+    }) : null;
+    if (byPhone) return byPhone;
+
+    return guestContacts.find((contact) =>
+      Boolean(contact.appeal && normalizedTitle && normalizeContactLookupText(contact.appeal) === normalizedTitle)
+    ) ?? null;
+  }
+
+  function findStoredGuestContactByPhone(phone: string) {
+    const normalizedPhone = normalizePhoneSearch(phone);
+    if (!normalizedPhone) return null;
 
     return guestContacts.find((contact) => {
       const contactPhone = normalizePhoneSearch(contact.phone);
-      const contactAppeal = normalizeContactLookupText(contact.appeal);
-      return Boolean(
-        (normalizedPhone && contactPhone && phonesMatchForContactLookup(normalizedPhone, contactPhone)) ||
-        (normalizedTitle && contactAppeal && normalizedTitle === contactAppeal)
-      );
+      return Boolean(contactPhone && phonesMatchForContactLookup(normalizedPhone, contactPhone));
     }) ?? null;
   }
 
+  function resolveReservationGuestName(name: string, phone: string) {
+    const resolvedName = resolveGuestNameForPhone(name, phone);
+    if (resolvedName && !isGuestFallbackName(resolvedName)) return resolvedName;
+
+    const storedContactName = findStoredGuestContactByPhone(phone)?.appeal || "";
+    const resolvedStoredName = resolveGuestNameForPhone(storedContactName, phone);
+    if (resolvedStoredName && !isGuestFallbackName(resolvedStoredName)) return resolvedStoredName;
+
+    return resolvedName || resolvedStoredName;
+  }
+
   function restoreChatDraft(draft: ChatBookingDraft) {
-    const restoredDraft = reconcileDraftReservationDates(draft);
+    const restoredDraft = sanitizeChatDraftReservationLink(reconcileDraftReservationDates(draft), activeChat);
+    const shouldResetPastBookingFields = isChatDraftPastStay(restoredDraft);
+    const restoredCheckIn = shouldResetPastBookingFields ? getDefaultCheckInDate() : restoredDraft.checkIn;
+    const restoredCheckOut = shouldResetPastBookingFields ? getDefaultCheckOutDate() : restoredDraft.checkOut;
     if (restoredDraft !== draft && activeChat) {
-      void saveReservation(restoredDraft.lastReservation as Reservation);
-      void saveChatBookingDraft(activeChat.id, {
+      if (restoredDraft.lastReservation) {
+        void saveReservation(restoredDraft.lastReservation);
+      }
+      void saveCachedChatBookingDraft(activeChat.id, {
         ...restoredDraft,
         updatedAt: new Date().toISOString()
       });
-      setReservations((currentReservations) => currentReservations.map((reservation) =>
-        reservation.id === restoredDraft.lastReservation?.id ? restoredDraft.lastReservation as Reservation : reservation
-      ));
+      if (restoredDraft.lastReservation) {
+        setReservations((currentReservations) => currentReservations.map((reservation) =>
+          reservation.id === restoredDraft.lastReservation?.id ? restoredDraft.lastReservation as Reservation : reservation
+        ));
+      }
       void sendDebugLog("chat-draft-reservation-date-repaired-on-restore", {
         activeChatId: activeChat.id,
         reservationId: restoredDraft.lastReservation?.id ?? "",
@@ -1350,47 +2075,61 @@ export function BookingPanel() {
     draft = restoredDraft;
     const shouldKeepCurrentContact = !draft.phone && !draft.guestFirstName && contactExtracted && Boolean(guestPhone.trim() || guestFirstName.trim());
     const phoneParts = splitPhoneForInput(shouldKeepCurrentContact ? buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone : draft.phone);
-    setSelectedRoomId(draft.selectedRoomId);
-    setSelectedBookingRoomIds(draft.selectedBookingRoomIds);
-    setRoomDateOverrides(draft.roomDateOverrides ?? buildRoomDateOverridesFromReservation(draft.lastReservation));
-    setCheckIn(draft.checkIn);
-    setCheckOut(draft.checkOut);
+    setSelectedRoomId(shouldResetPastBookingFields ? "" : draft.selectedRoomId);
+    setSelectedBookingRoomIds(shouldResetPastBookingFields ? [] : draft.selectedBookingRoomIds);
+    setRoomDateOverrides(shouldResetPastBookingFields ? {} : draft.roomDateOverrides ?? buildRoomDateOverridesFromReservation(draft.lastReservation));
+    setCheckIn(restoredCheckIn);
+    setCheckOut(restoredCheckOut);
     setCheckInTime(draft.checkInTime || defaultCheckInTime);
     setCheckOutTime(draft.hourlyHours && draft.hourlyHours > 2 ? draft.checkOutTime || DEFAULT_CHECK_OUT_TIME : DEFAULT_CHECK_OUT_TIME);
     setBookingComment(draft.comment ?? "");
     setAdminComment(draft.adminComment ?? draft.lastReservation?.adminComment ?? "");
     setGuestAdults(clampNumber(Math.round(draft.adults ?? draft.lastReservation?.adults ?? 0), 0, 99));
     setGuestChildren(clampNumber(Math.round(draft.children ?? draft.lastReservation?.children ?? 0), 0, 99));
-    if (!shouldKeepCurrentContact) setGuestFirstName(draft.guestFirstName);
+    if (!shouldKeepCurrentContact) setGuestFirstName(resolveGuestNameForPhone(draft.guestFirstName, draft.phone));
     setGuestPhonePrefix(phoneParts.prefix);
-    setGuestPhone(phoneParts.local);
+    setGuestPhone(formatLocalPhoneInput(phoneParts.local));
     const draftExtraInventory = getDraftExtraInventoryCounts(draft);
     setHasPet(Boolean(draft.hasPet));
     setNeedsExtraBed(draft.extraBed);
     setExtraBedType(draft.extraBedType ?? "air-bed");
     setAirMattressCount(draftExtraInventory.airBeds);
     setRollawayCount(draftExtraInventory.rollaways);
+    setExtraInventoryChargeEnabled(Boolean(draft.extraInventoryChargeEnabled ?? draft.lastReservation?.extraInventoryChargeEnabled));
     setExtraInventoryManual(Boolean(draft.extraInventoryManual));
     setExtraInventoryByRoomId(draft.extraInventoryByRoomId ?? buildExtraInventoryMapFromDraft(draft));
+    if (typeof draft.inventoryExtraPlacePrice === "number") setInventoryExtraPlacePrice(draft.inventoryExtraPlacePrice);
+    if (typeof draft.inventoryExtraPlaceAdultPercent === "number") setInventoryExtraPlaceAdultPercent(draft.inventoryExtraPlaceAdultPercent);
+    if (typeof draft.inventoryExtraPlaceChildPercent === "number") setInventoryExtraPlaceChildPercent(draft.inventoryExtraPlaceChildPercent);
     setHourlyHours(Math.max(2, draft.hourlyHours ?? 2));
-    setDiscountPercent(draft.discountPercent);
-    setDiscountManualOverride(Boolean(draft.discountPercent && !draft.packageDiscountEnabled));
+    const isLegacyAutoPeriodDiscount = draft.periodDiscountEnabled === undefined &&
+      !draft.packageDiscountEnabled &&
+      !draft.lastReservation &&
+      draft.discountPercent > 0 &&
+      (draft.discountPercent === packagePeriodDiscountPercent || draft.discountPercent === packageDiscountPercent);
+    const restoredDiscountPercent = isLegacyAutoPeriodDiscount ? 0 : draft.discountPercent;
+    setDiscountPercent(restoredDiscountPercent);
+    setDiscountManualOverride(Boolean(restoredDiscountPercent && !draft.packageDiscountEnabled && !draft.periodDiscountEnabled));
     setPackageDiscountEnabled(draft.packageDiscountEnabled ?? false);
+    setPeriodDiscountEnabled(draft.periodDiscountEnabled ?? false);
     setPackageDiscountWasApplied(false);
     setBreakfastIncluded(draft.breakfastIncluded ?? true);
     setManualTotalAmount(draft.manualTotalAmount ?? 0);
-    setManualSaleOpen(Boolean(draft.manualSaleOpen));
+    const shouldRestoreManualSale = Boolean(draft.manualSaleOpen && window.localStorage.getItem(MANUAL_SALE_MODE_KEY) === "true");
+    setManualSaleOpen(shouldRestoreManualSale);
     setBookingNewChatOpen(false);
     setManualSaleAmount(draft.manualSaleAmount ?? 0);
     setManualSaleComment(draft.manualSaleComment ?? "");
     setManualSalePaymentMethod(draft.manualSalePaymentMethod ?? "");
     setManualSalePeriod(draft.manualSalePeriod ?? "day");
     setPrepaymentAlreadyPaid(Boolean(draft.prepaymentAlreadyPaid));
+    setChatStartedAt(draft.chatStartedAt ?? "");
     setLastReservation(draft.lastReservation);
     setAgreementSent(Boolean(draft.agreementSent));
     setAgreementEverSent(Boolean(draft.agreementEverSent || draft.agreementSent));
     setCatalogStatus(draft.catalogStatus);
     setCatalogStatusAt(draft.catalogStatusAt ?? "");
+    setBookingDateWarning("");
     setSendState("idle");
   }
 
@@ -1416,6 +2155,7 @@ export function BookingPanel() {
     setExtraBedType("air-bed");
     setAirMattressCount(0);
     setRollawayCount(0);
+    setExtraInventoryChargeEnabled(false);
     setExtraInventoryManual(false);
     setExtraInventoryByRoomId({});
     setHourlyHours(2);
@@ -1423,6 +2163,7 @@ export function BookingPanel() {
     setDiscountManualOverride(false);
     setBreakfastIncluded(true);
     setPackageDiscountEnabled(false);
+    setPeriodDiscountEnabled(false);
     setPackageDiscountWasApplied(false);
     setManualTotalAmount(0);
     if (!options.preserveManualSale) {
@@ -1434,6 +2175,7 @@ export function BookingPanel() {
     setManualSalePaymentMethod("");
     setManualSalePeriod("day");
     setPrepaymentAlreadyPaid(false);
+    setChatStartedAt("");
     setLastReservation(null);
     setAgreementSent(false);
     setAgreementEverSent(false);
@@ -1464,23 +2206,26 @@ export function BookingPanel() {
     setExtraBedType("air-bed");
     setAirMattressCount(0);
     setRollawayCount(0);
+    setExtraInventoryChargeEnabled(false);
     setExtraInventoryManual(false);
     setExtraInventoryByRoomId({});
     setDiscountPercent(0);
     setDiscountManualOverride(false);
     setPackageDiscountEnabled(false);
+    setPeriodDiscountEnabled(false);
     setPackageDiscountWasApplied(false);
     setManualTotalAmount(0);
     setManualSaleOpen(false);
     window.localStorage.removeItem(MANUAL_SALE_MODE_KEY);
     setPrepaymentAlreadyPaid(false);
+    setChatStartedAt("");
     setLastReservation(null);
     setAgreementSent(false);
     setCatalogStatus(undefined);
     setCatalogStatusAt("");
     setSendState("idle");
     if (activeChat) {
-      await saveChatBookingDraft(activeChat.id, {
+      await saveCachedChatBookingDraft(activeChat.id, {
         selectedRoomId,
         selectedBookingRoomIds: [],
         roomDateOverrides: {},
@@ -1500,9 +2245,12 @@ export function BookingPanel() {
         airMattressCount: 0,
         rollawayCount: 0,
         extraInventoryByRoomId: {},
+        extraInventoryChargeEnabled: false,
         extraInventoryManual: false,
         hourlyHours: 2,
         discountPercent: 0,
+        packageDiscountEnabled: false,
+        periodDiscountEnabled: false,
         manualTotalAmount: 0,
         manualSaleOpen: false,
         manualSaleAmount: 0,
@@ -1510,6 +2258,7 @@ export function BookingPanel() {
         manualSalePaymentMethod: "",
         manualSalePeriod: "day",
         prepaymentAlreadyPaid: false,
+        chatStartedAt: undefined,
         catalogStatus: undefined,
         catalogStatusAt: undefined,
         agreementSent: false,
@@ -1529,9 +2278,39 @@ export function BookingPanel() {
 
   useEffect(() => {
     const visibleIds = new Set(catalogPanelRooms.map((room) => room.id));
-    setSelectedRoomId((currentId) => visibleIds.has(currentId) ? currentId : catalogPanelRooms[0]?.id || "");
-    setSelectedBookingRoomIds((currentIds) => currentIds.filter((roomId) => visibleIds.has(roomId)));
-  }, [catalogPanelRooms]);
+    const activeReservationRoomIds = new Set(isBookingPanelActiveReservation(lastReservation) ? lastReservation.roomIds : []);
+    setSelectedRoomId((currentId) =>
+      visibleIds.has(currentId) || activeReservationRoomIds.has(currentId)
+        ? currentId
+        : catalogPanelRooms[0]?.id || ""
+    );
+    setSelectedBookingRoomIds((currentIds) => currentIds.filter((roomId) => visibleIds.has(roomId) || activeReservationRoomIds.has(roomId)));
+  }, [catalogPanelRooms, lastReservation]);
+
+  useEffect(() => {
+    if (lastReservation || !guestPhone.trim()) return;
+    const currentPhone = normalizePhoneSearch(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+    if (!currentPhone) return;
+    const matchingReservation = reservations
+      .filter((reservation) =>
+        !reservation.isAddOnSale &&
+        isBookingPanelActiveReservation(reservation) &&
+        phonesMatchForContactLookup(currentPhone, reservation.phone) &&
+        dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+    if (!matchingReservation) return;
+    setLastReservation(matchingReservation);
+    setSelectedRoomId(matchingReservation.roomIds[0] || "");
+    setSelectedBookingRoomIds(matchingReservation.roomIds);
+    setAgreementSent(true);
+    setAgreementEverSent(true);
+    void saveCurrentChatDraft({
+      agreementSent: true,
+      agreementEverSent: true,
+      lastReservation: matchingReservation
+    });
+  }, [checkIn, checkOut, guestPhone, guestPhonePrefix, lastReservation, reservations]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -1554,19 +2333,34 @@ export function BookingPanel() {
     if (backendState === "offline") return "API offline";
     return "Проверка API";
   }, [backendState]);
+  const phoneMatchedActiveReservation = useMemo(() => {
+    const currentPhone = normalizePhoneSearch(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+    if (!currentPhone) return null;
+    return reservations
+      .filter((reservation) =>
+        !reservation.isAddOnSale &&
+        isBookingPanelActiveReservation(reservation) &&
+        phonesMatchForContactLookup(currentPhone, reservation.phone) &&
+        dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+  }, [checkIn, checkOut, guestPhone, guestPhonePrefix, reservations]);
+  const hasActiveLastReservation = isBookingPanelActiveReservation(lastReservation);
   const hasBookingSelection = Boolean(selectedBookingRooms.length);
-  const currentReservationDraft = hasBookingSelection ? buildReservationDraft(lastReservation?.status ?? "pending") : null;
+  const currentReservationDraft = hasBookingSelection ? buildReservationDraft(hasActiveLastReservation ? lastReservation?.status ?? "pending" : "pending") : null;
   const hasSelectedHourlyConflict = selectedHourlyConflicts.length > 0;
-  const canSendAgreementText = Boolean(currentReservationDraft && !hasSelectedHourlyConflict);
-  const canConfirmAgreement = Boolean(currentReservationDraft && currentReservationDraft.status !== "cancelled" && !hasSelectedHourlyConflict);
-  const isBookingConfirmed = lastReservation?.status === "booked";
+  const currentReservationHasPastDate = Boolean(currentReservationDraft && isReservationDateInPast(currentReservationDraft));
+  const canSendAgreementText = Boolean(currentReservationDraft && !hasSelectedHourlyConflict && !currentReservationHasPastDate);
+  const canConfirmAgreement = Boolean(currentReservationDraft && currentReservationDraft.status !== "cancelled" && !hasSelectedHourlyConflict && !currentReservationHasPastDate);
+  const isBookingConfirmed = isBookingPanelActiveReservation(lastReservation);
+  const cancelableReservation = isBookingConfirmed ? lastReservation : phoneMatchedActiveReservation;
   const isBookingLocked = isBookingConfirmed;
   const contactMatchesActiveChatName = Boolean(
     activeChat?.title &&
     guestFirstName.trim() &&
     normalizeContactLookupText(activeChat.title) === normalizeContactLookupText(guestFirstName)
   );
-  const isContactRowLocked = isBookingLocked || (contactSavedInWhatsApp && contactMatchesActiveChatName);
+  const isContactRowLocked = isBookingLocked;
 
   useEffect(() => {
     if (isBookingLocked || manualTotalAmount > 0 || discountManualOverride) return;
@@ -1596,6 +2390,7 @@ export function BookingPanel() {
     isPeriodDiscountEligible,
     manualTotalAmount,
     packageDiscountEnabled,
+    periodDiscountEnabled,
     packageDiscountPercent,
     packagePeriodDiscountPercent,
     packagePeriodDiscountFrom,
@@ -1604,6 +2399,12 @@ export function BookingPanel() {
     packageDiscountSelectedRooms,
     packageDiscountWasApplied
   ]);
+
+  useEffect(() => {
+    if (currentReservationDraft && isReservationDateInPast(currentReservationDraft)) {
+      setBookingDateWarning(buildPastReservationWarning(currentReservationDraft));
+    }
+  }, [currentReservationHasPastDate, checkIn, checkOut, roomDateOverrides]);
 
   function startResize(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -1627,6 +2428,7 @@ export function BookingPanel() {
   async function sendSelectedRoomToWhatsApp() {
     const roomsToSend = selectedBookingRooms.length ? selectedBookingRooms : selectedRoom ? [selectedRoom] : [];
     if (!roomsToSend.length) return;
+    if (!ensureSelectedRoomsAreNotHeldByAnotherGuest()) return;
 
     suppressActiveChatSyncRef.current = true;
     setSendState("sending");
@@ -1690,10 +2492,9 @@ export function BookingPanel() {
   }
 
   function openPricePdfOptions() {
-    const availableRoomsForPrice = packageIncludeAmenities ? visibleAvailableRooms : visibleAvailableRooms.filter((room) => room.category !== "amenity");
-    const availableRoomIds = new Set(availableRoomsForPrice.map((room) => room.id));
+    const availableRoomIds = new Set(pricePdfCandidateRooms.map((room) => room.id));
     const savedRoomIds = pricePdfRoomIds.filter((roomId) => availableRoomIds.has(roomId));
-    const nextRoomIds = savedRoomIds.length ? savedRoomIds : availableRoomsForPrice.map((room) => room.id);
+    const nextRoomIds = savedRoomIds.length ? savedRoomIds : pricePdfCandidateRooms.map((room) => room.id);
     setPricePdfRoomIds(nextRoomIds);
     setIsPricePdfOptionsOpen(true);
   }
@@ -1796,8 +2597,7 @@ export function BookingPanel() {
   }
 
   async function downloadSocialPriceImage() {
-    const availableRoomsForPrice = packageIncludeAmenities ? visibleAvailableRooms : visibleAvailableRooms.filter((room) => room.category !== "amenity");
-    const roomById = new Map(availableRoomsForPrice.map((room) => [room.id, room]));
+    const roomById = new Map(pricePdfCandidateRooms.map((room) => [room.id, room]));
     const selectedRooms = socialPriceRoomIds.map((roomId) => roomById.get(roomId)).filter((room): room is Room => Boolean(room));
     if (!selectedRooms.length) return;
     const blob = await createSocialPriceImageBlob({
@@ -1814,8 +2614,7 @@ export function BookingPanel() {
   }
 
   async function downloadSocialPriceImagesFromPdfSelection() {
-    const availableRoomsForPrice = packageIncludeAmenities ? visibleAvailableRooms : visibleAvailableRooms.filter((room) => room.category !== "amenity");
-    const roomById = new Map(availableRoomsForPrice.map((room) => [room.id, room]));
+    const roomById = new Map(pricePdfCandidateRooms.map((room) => [room.id, room]));
     const selectedRooms = pricePdfRoomIds.map((roomId) => roomById.get(roomId)).filter((room): room is Room => Boolean(room));
     if (!selectedRooms.length) return;
 
@@ -1845,8 +2644,7 @@ export function BookingPanel() {
   }
 
   async function sendPriceProposalToWhatsApp(summaryOptions = pricePdfSummaryOptions, mode: "chat" | "external" = pricePdfMode) {
-    const availableRoomsForPrice = packageIncludeAmenities ? visibleAvailableRooms : visibleAvailableRooms.filter((room) => room.category !== "amenity");
-    const roomById = new Map(availableRoomsForPrice.map((room) => [room.id, room]));
+    const roomById = new Map(pricePdfCandidateRooms.map((room) => [room.id, room]));
     const proposalRooms = pricePdfRoomIds.map((roomId) => roomById.get(roomId)).filter((room): room is Room => Boolean(room));
     if (!proposalRooms.length) return;
 
@@ -1862,7 +2660,8 @@ export function BookingPanel() {
         checkOutTime: DEFAULT_CHECK_OUT_TIME,
         discountPercent: packageDiscountPercent,
         giftText: packageGiftText,
-        galleryPhotoPaths: objectGalleryPhotoPaths,
+        galleryPhotoDescriptions: objectGalleryPhotoDescriptions,
+        galleryPhotoPaths: selectedObjectGalleryPhotoPaths,
         galleryVideoPaths: objectGalleryVideoPaths,
         groupPeriodTotals: pricePdfGroupPeriodTotals,
         includeGallery: includeGalleryInPricePdf,
@@ -1913,6 +2712,7 @@ export function BookingPanel() {
   async function sendBookingPriceProposalToWhatsApp() {
     if (!currentReservationDraft || !selectedBookingRooms.length) return;
     if (hasSelectedHourlyConflict) return;
+    if (!ensureReservationDatesAreNotPast(currentReservationDraft)) return;
 
     const proposalRooms = selectedBookingRooms;
     const giftLines = [packageGiftText].filter(Boolean);
@@ -1940,6 +2740,7 @@ export function BookingPanel() {
         setLastReservation(currentReservationDraft);
         setAgreementSent(true);
         setAgreementEverSent(true);
+        await holdRoomsForAgreement(currentReservationDraft);
         await ensureGuestContactForReservation(currentReservationDraft);
         await saveAgreementDraftForReservation(currentReservationDraft);
       }
@@ -1974,14 +2775,14 @@ export function BookingPanel() {
   }
 
   async function sendObjectGalleryPhotosToWhatsApp() {
-    if (!objectGalleryPhotoPaths.length) return;
+    if (!selectedObjectGalleryPhotoPaths.length) return;
     suppressActiveChatSyncRef.current = true;
     setSendState("sending");
     try {
-      const photoFiles = await Promise.all(objectGalleryPhotoPaths.map((path) => createFileFromMediaPath(path)));
+      const photoFiles = await Promise.all(selectedObjectGalleryPhotoPaths.map((path) => createFileFromMediaPath(path)));
       const files = photoFiles.filter((file): file is File => Boolean(file));
       const sent = files.length
-        ? await sendMediaFilesToActiveWhatsAppChat(files, "Галерея объекта")
+        ? await sendMediaFilesToActiveWhatsAppChat(files, "")
         : false;
       if (sent) {
         await markCatalogStatus("price-sent");
@@ -2022,6 +2823,79 @@ export function BookingPanel() {
     }
   }
 
+  async function sendObjectGalleryMediaToWhatsApp(path: string, type: "photo" | "video", title: string) {
+    if (!path) return;
+
+    suppressActiveChatSyncRef.current = true;
+    setSendState("sending");
+    try {
+      const file = type === "photo"
+        ? await createFileFromMediaPath(path)
+        : await createRawMediaFileFromPath(path);
+      const sent = await sendMediaFilesToActiveWhatsAppChat(
+        [file],
+        type === "photo"
+          ? buildObjectGallerySinglePhotoCaption(path, title, objectGalleryPhotoDescriptions)
+          : `Галерея объекта: ${title.toLowerCase()}`
+      );
+      if (sent) {
+        await markCatalogStatus("price-sent");
+      }
+      setSendState(sent ? "sent" : "error");
+    } catch {
+      setSendState("error");
+    } finally {
+      window.setTimeout(() => {
+        suppressActiveChatSyncRef.current = false;
+        setSendState("idle");
+      }, 2600);
+    }
+  }
+
+  async function sendIncludedCardsToWhatsApp(pages: IncludedCardPage[]) {
+    const readyPages = pages.filter((page) => page.mainPhotoPath);
+    if (!readyPages.length) return;
+    suppressActiveChatSyncRef.current = true;
+    setSendState("sending");
+    try {
+      const blobs = await Promise.all(readyPages.map((page) => createIncludedCardImageBlob(page)));
+      const files = blobs.map((blob, index) => new File([blob], `included-${index + 1}.png`, { type: "image/png" }));
+      const sent = files.length
+        ? await sendMediaFilesToActiveWhatsAppChat(files, "")
+        : false;
+      if (sent) await markCatalogStatus("price-sent");
+      setSendState(sent ? "sent" : "error");
+    } catch {
+      setSendState("error");
+    } finally {
+      window.setTimeout(() => {
+        suppressActiveChatSyncRef.current = false;
+        setSendState("idle");
+      }, 2600);
+    }
+  }
+
+  async function sendAvailableRoomsSnapshotToWhatsApp() {
+    if (!bookingDatesSnapshotRef.current || !catalogSnapshotRef.current || !catalogPanelRooms.length) return;
+    suppressActiveChatSyncRef.current = true;
+    setSendState("sending");
+    try {
+      const blob = await createAvailableRoomsSnapshotBlob(bookingDatesSnapshotRef.current, catalogSnapshotRef.current);
+      const file = new File([blob], `available-rooms-${checkIn || "today"}.jpg`, { type: "image/jpeg" });
+      const sent = await sendImageFileToActiveWhatsAppChat(file, "");
+      if (sent) await markCatalogStatus("price-sent");
+      setSendState(sent ? "sent" : "error");
+    } catch (error) {
+      console.error("[GPB] Available rooms snapshot failed", error);
+      setSendState("error");
+    } finally {
+      window.setTimeout(() => {
+        suppressActiveChatSyncRef.current = false;
+        setSendState("idle");
+      }, 2600);
+    }
+  }
+
   async function sendMenuPdfToWhatsApp() {
     if (!activeMenuItems.length) return;
 
@@ -2030,6 +2904,28 @@ export function BookingPanel() {
     try {
       const pdfFile = await createMenuPdfFile(activeMenuItems);
       const sent = await sendFileToActiveWhatsAppChat(pdfFile, "Меню Green Pine Burabay");
+      if (sent) {
+        await markCatalogStatus("price-sent");
+      }
+      setSendState(sent ? "sent" : "error");
+    } catch {
+      setSendState("error");
+    } finally {
+      window.setTimeout(() => {
+        suppressActiveChatSyncRef.current = false;
+        setSendState("idle");
+      }, 2600);
+    }
+  }
+
+  async function sendMenuItemPhotoToWhatsApp(item: MenuItem) {
+    if (!item.photoPath) return;
+
+    suppressActiveChatSyncRef.current = true;
+    setSendState("sending");
+    try {
+      const photoFile = await createFileFromMediaPath(item.photoPath);
+      const sent = await sendImageFileToActiveWhatsAppChat(photoFile, buildMenuItemPhotoCaption(item));
       if (sent) {
         await markCatalogStatus("price-sent");
       }
@@ -2116,9 +3012,17 @@ export function BookingPanel() {
   }
 
   function handleCheckInChange(value: string) {
-    setCheckIn(value);
-    if (value) {
-      setCheckOut(formatDateInput(addDays(parseDateInput(value), 1)));
+    const today = getDefaultCheckInDate();
+    if (value && isDateBeforeToday(value)) {
+      setBookingDateWarning(`Нельзя поставить заезд в прошлом: ${formatKazakhDate(value)}. Дата изменена на ${formatKazakhDate(today)}.`);
+      setCheckIn(today);
+      setCheckOut(formatDateInput(addDays(parseDateInput(today), 1)));
+    } else {
+      setBookingDateWarning("");
+      setCheckIn(value);
+      if (value) {
+        setCheckOut(formatDateInput(addDays(parseDateInput(value), 1)));
+      }
     }
     setManualTotalAmount(0);
     setLastReservation(null);
@@ -2126,9 +3030,15 @@ export function BookingPanel() {
   }
 
   function handleCheckOutChange(value: string) {
-    if (checkIn && value && parseDateInput(value) <= parseDateInput(checkIn)) {
+    if (value && isDateBeforeToday(value)) {
+      const nextCheckOut = getMinimumCheckOutDate(checkIn || getDefaultCheckInDate());
+      setBookingDateWarning(`Нельзя поставить выезд в прошлом: ${formatKazakhDate(value)}. Дата изменена на ${formatKazakhDate(nextCheckOut)}.`);
+      setCheckOut(nextCheckOut);
+    } else if (checkIn && value && parseDateInput(value) <= parseDateInput(checkIn)) {
+      setBookingDateWarning("Дата выезда должна быть позже даты заезда.");
       setCheckOut(formatDateInput(addDays(parseDateInput(checkIn), 1)));
     } else {
+      setBookingDateWarning("");
       setCheckOut(value);
     }
     setManualTotalAmount(0);
@@ -2136,12 +3046,176 @@ export function BookingPanel() {
     setAgreementSent(false);
   }
 
-  function toggleBookingRoom(roomId: string) {
-    if (lastReservation?.status === "booked") {
-      setSelectedRoomId(roomId);
+  function ensureBookingDatesAreNotPast() {
+    const reservation = currentReservationDraft;
+    if (reservation) return ensureReservationDatesAreNotPast(reservation);
+
+    const today = getDefaultCheckInDate();
+    const activeRoomDateOverrides = sanitizeRoomDateOverridesForBooking(roomDateOverrides, checkIn, checkOut);
+    const pastRoomDate = Object.values(activeRoomDateOverrides).find((dates) => dates.checkIn < today || dates.checkOut < today);
+    if (checkIn < today || checkOut < today || pastRoomDate) {
+      setBookingDateWarning(`Нельзя создать бронь в прошлом. Проверьте даты: заезд должен быть не раньше ${formatKazakhDate(today)}.`);
+      return false;
+    }
+
+    setBookingDateWarning("");
+    return true;
+  }
+
+  function ensureReservationDatesAreNotPast(reservation: Reservation) {
+    if (!isReservationDateInPast(reservation)) {
+      setBookingDateWarning("");
+      return true;
+    }
+
+    setBookingDateWarning(buildPastReservationWarning(reservation));
+    return false;
+  }
+
+  function getRoomHoldForRoom(roomId: string) {
+    const dateRange = getRoomDateRange(roomId, checkIn, checkOut, roomDateOverrides);
+    return activeRoomHolds.find((hold) =>
+      hold.roomId === roomId &&
+      hold.ownerId === currentHoldOwnerId &&
+      roomHoldOverlapsRange(hold, dateRange, checkInTime, checkOutTime)
+    ) ?? null;
+  }
+
+  function getBlockingRoomHoldForRoom(roomId: string) {
+    const dateRange = getRoomDateRange(roomId, checkIn, checkOut, roomDateOverrides);
+    return activeRoomHolds.find((hold) =>
+      hold.roomId === roomId &&
+      hold.ownerId !== currentHoldOwnerId &&
+      roomHoldOverlapsRange(hold, dateRange, checkInTime, checkOutTime)
+    ) ?? null;
+  }
+
+  function getRoomHoldsForRoom(roomId: string) {
+    const dateRange = getRoomDateRange(roomId, checkIn, checkOut, roomDateOverrides);
+    return activeRoomHolds
+      .filter((hold) =>
+        hold.roomId === roomId &&
+        roomHoldOverlapsRange(hold, dateRange, checkInTime, checkOutTime)
+      )
+      .sort((left, right) => new Date(left.expiresAt).getTime() - new Date(right.expiresAt).getTime());
+  }
+
+  function getVisibleRoomHoldForRoom(roomId: string) {
+    return getRoomHoldForRoom(roomId) ?? getBlockingRoomHoldForRoom(roomId);
+  }
+
+  function createAgreementRoomHold(reservation: Reservation, item: ReservationItem, expiresAt: string): RoomHold {
+    const room = pricedRooms.find((candidate) => candidate.id === item.roomId);
+    const normalizedPhone = formatPhoneDigits(reservation.phone) || buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone;
+    return {
+      id: `hold-${item.roomId}-${currentHoldOwnerId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      roomId: item.roomId,
+      checkIn: item.checkIn,
+      checkOut: item.checkOut,
+      checkInTime: isHourlyBookingObject(room) ? item.checkInTime || reservation.checkInTime : DEFAULT_CHECK_IN_TIME,
+      checkOutTime: isHourlyBookingObject(room) ? item.checkOutTime || reservation.checkOutTime : DEFAULT_CHECK_OUT_TIME,
+      ownerId: currentHoldOwnerId,
+      ownerTitle: activeChat?.title ?? "",
+      guestName: reservation.guestFirstName || getGuestNameFallbackFromPhone(normalizedPhone) || activeChat?.title || "",
+      phone: normalizedPhone,
+      createdAt: new Date().toISOString(),
+      expiresAt
+    };
+  }
+
+  async function holdRoomsForAgreement(reservation: Reservation) {
+    const reservationItems = getReservationItems(reservation).filter((item) => reservation.roomIds.includes(item.roomId));
+    if (!reservationItems.length) return;
+
+    const expiresAt = new Date(Date.now() + agreementHoldDurationMs).toISOString();
+    const nextHolds = filterActiveRoomHolds(roomHolds)
+      .filter((hold) => {
+        if (hold.ownerId !== currentHoldOwnerId) return true;
+        return !reservationItems.some((item) =>
+          item.roomId === hold.roomId &&
+          roomHoldOverlapsRange(
+            hold,
+            { checkIn: item.checkIn, checkOut: item.checkOut },
+            item.checkInTime || reservation.checkInTime || DEFAULT_CHECK_IN_TIME,
+            item.checkOutTime || reservation.checkOutTime || DEFAULT_CHECK_OUT_TIME
+          )
+        );
+      })
+      .concat(reservationItems.map((item) => createAgreementRoomHold(reservation, item, expiresAt)));
+
+    setRoomHolds(nextHolds);
+    await saveStoredRoomHolds(nextHolds);
+  }
+
+  async function toggleRoomHold(room: Room) {
+    if (isBookingLocked) return;
+    const existingHold = getRoomHoldForRoom(room.id);
+    if (existingHold) {
+      const nextHolds = roomHolds.filter((hold) => hold.id !== existingHold.id);
+      setRoomHolds(nextHolds);
+      await saveStoredRoomHolds(nextHolds);
       return;
     }
 
+    const dateRange = getRoomDateRange(room.id, checkIn, checkOut, roomDateOverrides);
+    const expiresAt = new Date(Date.now() + agreementHoldDurationMs).toISOString();
+    const normalizedPhone = buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone;
+    const hold: RoomHold = {
+      id: `hold-${room.id}-${Date.now()}`,
+      roomId: room.id,
+      checkIn: dateRange.checkIn,
+      checkOut: dateRange.checkOut,
+      checkInTime: isHourlyBookingObject(room) ? checkInTime : DEFAULT_CHECK_IN_TIME,
+      checkOutTime: isHourlyBookingObject(room) ? checkOutTime : DEFAULT_CHECK_OUT_TIME,
+      ownerId: currentHoldOwnerId,
+      ownerTitle: activeChat?.title ?? "",
+      guestName: guestFirstName || getGuestNameFallbackFromPhone(normalizedPhone) || activeChat?.title || "",
+      phone: normalizedPhone,
+      createdAt: new Date().toISOString(),
+      expiresAt
+    };
+    const nextHolds = filterActiveRoomHolds(roomHolds)
+      .filter((item) => !(item.roomId === hold.roomId && item.ownerId === hold.ownerId && roomHoldOverlapsRange(item, dateRange, checkInTime, checkOutTime)))
+      .concat(hold);
+    setRoomHolds(nextHolds);
+    await saveStoredRoomHolds(nextHolds);
+  }
+
+  function ensureSelectedRoomsAreNotHeldByAnotherGuest() {
+    const blockingHold = selectedBookingRoomIds
+      .map((roomId) => ({ room: pricedRooms.find((item) => item.id === roomId), hold: getBlockingRoomHoldForRoom(roomId), ownHold: getRoomHoldForRoom(roomId) }))
+      .filter((item) => !item.ownHold)
+      .find((item): item is { room: Room; hold: RoomHold } => Boolean(item.room && item.hold));
+
+    if (!blockingHold) return true;
+    setBookingDateWarning(`${formatBookingPickerObjectLabel(blockingHold.room)} сейчас на согласовании до ${formatHoldTime(blockingHold.hold.expiresAt)} для ${blockingHold.hold.guestName || "другого гостя"}. Отправить предложение можно, но подтверждать бронь безопасно только после оплаты вашего гостя или окончания таймера.`);
+    return false;
+  }
+
+  async function clearRoomHoldsForReservation(reservation: Reservation, allOwners = false) {
+    const reservationItems = getReservationItems(reservation);
+    const nextHolds = roomHolds.filter((hold) => {
+      if (!allOwners && hold.ownerId !== currentHoldOwnerId) return true;
+      return !reservationItems.some((item) =>
+        item.roomId === hold.roomId &&
+        roomHoldOverlapsRange(
+          hold,
+          { checkIn: item.checkIn, checkOut: item.checkOut },
+          item.checkInTime || reservation.checkInTime || DEFAULT_CHECK_IN_TIME,
+          item.checkOutTime || reservation.checkOutTime || DEFAULT_CHECK_OUT_TIME
+        )
+      );
+    });
+    if (nextHolds.length === roomHolds.length) return;
+    setRoomHolds(nextHolds);
+    await saveStoredRoomHolds(nextHolds);
+  }
+
+  function toggleBookingRoom(roomId: string) {
+    if (isBookingPanelActiveReservation(lastReservation)) {
+      setSelectedRoomId(roomId);
+      return;
+    }
     setSelectedBookingRoomIds((currentIds) => {
       const nextIds = currentIds.includes(roomId) ? currentIds.filter((id) => id !== roomId) : currentIds.concat(roomId);
       return nextIds;
@@ -2152,10 +3226,11 @@ export function BookingPanel() {
     setAgreementSent(false);
   }
 
-  function updateExtraInventoryTotals(nextMap: Record<string, { airBeds: number; rollaways: number }>) {
+  function updateExtraInventoryTotals(nextMap: Record<string, ExtraInventoryItem>) {
     const nextAirBeds = Object.values(nextMap).reduce((sum, item) => sum + Math.max(0, item.airBeds || 0), 0);
     const nextRollaways = Object.values(nextMap).reduce((sum, item) => sum + Math.max(0, item.rollaways || 0), 0);
-    const nextTotal = nextAirBeds + nextRollaways;
+    const nextExtraPlaces = Object.values(nextMap).reduce((sum, item) => sum + Math.max(0, item.extraPlaces || 0), 0);
+    const nextTotal = nextAirBeds + nextRollaways + nextExtraPlaces;
     setAirMattressCount(nextAirBeds);
     setRollawayCount(nextRollaways);
     setExtraBedType(nextRollaways > 0 && nextAirBeds === 0 ? "rollaway" : "air-bed");
@@ -2166,23 +3241,32 @@ export function BookingPanel() {
     setAgreementSent(false);
   }
 
-  function addExtraInventoryFromCard(roomId: string, nextType: ExtraBedType) {
-    const availableCount = nextType === "rollaway" ? availableExtraInventory.rollaways : availableExtraInventory.airBeds;
-    const currentCount = nextType === "rollaway" ? rollawayCount : airMattressCount;
-    if (currentCount >= availableCount) {
+  function addExtraInventoryFromCard(roomId: string, nextType: ExtraInventoryType) {
+    if (nextType !== "extra-place") {
+      const availableCount = nextType === "rollaway" ? availableExtraInventory.rollaways : availableExtraInventory.airBeds;
+      const currentCount = nextType === "rollaway" ? rollawayCount : airMattressCount;
+      if (currentCount >= availableCount) {
+        setExtraInventoryPickerRoomId("");
+        return;
+      }
+    }
+
+    if (nextType === "extra-place" && !canAddExtraPlaceToRoom(roomId, extraInventoryByRoomId, pricedRooms)) {
       setExtraInventoryPickerRoomId("");
       return;
     }
 
     setSelectedBookingRoomIds((currentIds) => currentIds.includes(roomId) ? currentIds : currentIds.concat(roomId));
     setSelectedRoomId(roomId);
+    if (nextType === "extra-place") setExtraInventoryChargeEnabled(true);
     setExtraInventoryByRoomId((currentMap) => {
-      const currentRoomItem = currentMap[roomId] ?? { airBeds: 0, rollaways: 0 };
+      const currentRoomItem = currentMap[roomId] ?? { airBeds: 0, rollaways: 0, extraPlaces: 0 };
       const nextMap = {
         ...currentMap,
         [roomId]: {
           airBeds: currentRoomItem.airBeds + (nextType === "air-bed" ? 1 : 0),
-          rollaways: currentRoomItem.rollaways + (nextType === "rollaway" ? 1 : 0)
+          rollaways: currentRoomItem.rollaways + (nextType === "rollaway" ? 1 : 0),
+          extraPlaces: Math.max(0, currentRoomItem.extraPlaces || 0) + (nextType === "extra-place" ? 1 : 0)
         }
       };
       updateExtraInventoryTotals(nextMap);
@@ -2191,16 +3275,17 @@ export function BookingPanel() {
     setExtraInventoryPickerRoomId("");
   }
 
-  function removeExtraInventoryTypeFromCard(roomId: string, type: ExtraBedType) {
+  function removeExtraInventoryTypeFromCard(roomId: string, type: ExtraInventoryType) {
     const currentItem = extraInventoryByRoomId[roomId];
     if (!currentItem) return;
 
     const nextItem = {
       airBeds: type === "air-bed" ? 0 : currentItem.airBeds,
-      rollaways: type === "rollaway" ? 0 : currentItem.rollaways
+      rollaways: type === "rollaway" ? 0 : currentItem.rollaways,
+      extraPlaces: type === "extra-place" ? 0 : currentItem.extraPlaces
     };
     const nextMap = { ...extraInventoryByRoomId };
-    if (nextItem.airBeds || nextItem.rollaways) {
+    if (nextItem.airBeds || nextItem.rollaways || nextItem.extraPlaces) {
       nextMap[roomId] = nextItem;
     } else {
       delete nextMap[roomId];
@@ -2227,6 +3312,21 @@ export function BookingPanel() {
       setPackageDiscountWasApplied(true);
     } else if (!enabled && packageDiscountWasApplied) {
       setDiscountPercent((currentDiscount) => currentDiscount === packageDiscountPercent ? 0 : currentDiscount);
+      setPackageDiscountWasApplied(false);
+    }
+    setManualTotalAmount(0);
+    setLastReservation(null);
+    setAgreementSent(false);
+  }
+
+  function togglePeriodDiscount(enabled: boolean) {
+    setDiscountManualOverride(false);
+    setPeriodDiscountEnabled(enabled);
+    if (enabled && isPeriodDiscountEligible && manualTotalAmount <= 0) {
+      setDiscountPercent(packagePeriodDiscountPercent);
+      setPackageDiscountWasApplied(true);
+    } else if (!enabled && packageDiscountWasApplied) {
+      setDiscountPercent((currentDiscount) => currentDiscount === packagePeriodDiscountPercent ? 0 : currentDiscount);
       setPackageDiscountWasApplied(false);
     }
     setManualTotalAmount(0);
@@ -2317,12 +3417,16 @@ export function BookingPanel() {
 
     try {
       const uploaded = await Promise.all(files.map((file) => uploadObjectGalleryMedia(file)));
-      const nextPhotoPaths = objectGalleryPhotoPaths.concat(uploaded.filter((item) => item.mediaType === "photo").map((item) => item.path));
+      const uploadedPhotoPaths = uploaded.filter((item) => item.mediaType === "photo").map((item) => item.path);
+      const nextPhotoPaths = objectGalleryPhotoPaths.concat(uploadedPhotoPaths);
+      const nextSelectedPhotoPaths = objectGallerySelectedPhotoPaths.concat(uploadedPhotoPaths);
       const nextVideoPaths = objectGalleryVideoPaths.concat(uploaded.filter((item) => item.mediaType === "video").map((item) => item.path));
       setObjectGalleryPhotoPaths(nextPhotoPaths);
+      setObjectGallerySelectedPhotoPaths(nextSelectedPhotoPaths);
       setObjectGalleryVideoPaths(nextVideoPaths);
       await savePaymentSettings(buildPaymentSettingsPatch({
         objectGalleryPhotoPaths: nextPhotoPaths,
+        objectGallerySelectedPhotoPaths: nextSelectedPhotoPaths,
         objectGalleryVideoPaths: nextVideoPaths
       }));
       setObjectGalleryUploadState({ message: "", status: "idle" });
@@ -2337,20 +3441,81 @@ export function BookingPanel() {
   async function handleObjectGalleryDelete(path: string) {
     await deleteObjectGalleryMedia(path);
     const nextPhotoPaths = objectGalleryPhotoPaths.filter((item) => item !== path);
+    const nextSelectedPhotoPaths = objectGallerySelectedPhotoPaths.filter((item) => item !== path);
     const nextVideoPaths = objectGalleryVideoPaths.filter((item) => item !== path);
+    const nextPhotoDescriptions = removeRecordKey(objectGalleryPhotoDescriptions, path);
+    const nextIncludedCardPages = includedCardPages
+      .map((page) => ({
+        ...page,
+        mainPhotoPath: page.mainPhotoPath === path ? "" : page.mainPhotoPath,
+        thumbnailPaths: page.thumbnailPaths.filter((item) => item !== path)
+      }))
+      .filter((page) => page.mainPhotoPath || page.thumbnailPaths.length || page.description.trim());
+    setObjectGalleryPhotoDescriptions(nextPhotoDescriptions);
     setObjectGalleryPhotoPaths(nextPhotoPaths);
+    setObjectGallerySelectedPhotoPaths(nextSelectedPhotoPaths);
     setObjectGalleryVideoPaths(nextVideoPaths);
+    setIncludedCardPages(nextIncludedCardPages);
     await savePaymentSettings(buildPaymentSettingsPatch({
+      objectGalleryPhotoDescriptions: nextPhotoDescriptions,
       objectGalleryPhotoPaths: nextPhotoPaths,
-      objectGalleryVideoPaths: nextVideoPaths
+      objectGallerySelectedPhotoPaths: nextSelectedPhotoPaths,
+      objectGalleryVideoPaths: nextVideoPaths,
+      includedCardPages: nextIncludedCardPages
     }));
   }
 
   async function handleObjectGallerySave() {
     await savePaymentSettings(buildPaymentSettingsPatch({
+      objectGalleryPhotoDescriptions,
       objectGalleryPhotoPaths,
-      objectGalleryVideoPaths
+      objectGallerySelectedPhotoPaths,
+      objectGalleryVideoPaths,
+      includedCardPages
     }));
+  }
+
+  async function handleIncludedCardPagesChange(nextPages: IncludedCardPage[]) {
+    setIncludedCardPages(nextPages);
+    await savePaymentSettings(buildPaymentSettingsPatch({ includedCardPages: nextPages }));
+  }
+
+  async function handleObjectGalleryPhotoSelectedChange(path: string, selected: boolean) {
+    const nextSelectedPhotoPaths = selected
+      ? objectGallerySelectedPhotoPaths.includes(path) ? objectGallerySelectedPhotoPaths : objectGallerySelectedPhotoPaths.concat(path)
+      : objectGallerySelectedPhotoPaths.filter((item) => item !== path);
+    setObjectGallerySelectedPhotoPaths(nextSelectedPhotoPaths);
+    await savePaymentSettings(buildPaymentSettingsPatch({ objectGallerySelectedPhotoPaths: nextSelectedPhotoPaths }));
+  }
+
+  async function handleObjectGalleryPhotoDescriptionChange(path: string, description: string) {
+    const nextDescriptions = description.trim()
+      ? { ...objectGalleryPhotoDescriptions, [path]: description }
+      : removeRecordKey(objectGalleryPhotoDescriptions, path);
+    setObjectGalleryPhotoDescriptions(nextDescriptions);
+    await savePaymentSettings(buildPaymentSettingsPatch({ objectGalleryPhotoDescriptions: nextDescriptions }));
+  }
+
+  async function handleObjectGalleryPhotoDrop(event: DragEvent<HTMLElement>, targetPath: string) {
+    event.preventDefault();
+    if (!draggedObjectGalleryPhotoPath || draggedObjectGalleryPhotoPath === targetPath) {
+      setDraggedObjectGalleryPhotoPath("");
+      return;
+    }
+
+    const nextPhotoPaths = [...objectGalleryPhotoPaths];
+    const draggedIndex = nextPhotoPaths.indexOf(draggedObjectGalleryPhotoPath);
+    const targetIndex = nextPhotoPaths.indexOf(targetPath);
+    if (draggedIndex < 0 || targetIndex < 0) {
+      setDraggedObjectGalleryPhotoPath("");
+      return;
+    }
+
+    const [draggedPath] = nextPhotoPaths.splice(draggedIndex, 1);
+    nextPhotoPaths.splice(targetIndex, 0, draggedPath);
+    setObjectGalleryPhotoPaths(nextPhotoPaths);
+    setDraggedObjectGalleryPhotoPath("");
+    await savePaymentSettings(buildPaymentSettingsPatch({ objectGalleryPhotoPaths: nextPhotoPaths }));
   }
 
   async function saveMenuItems(nextItems: MenuItem[]) {
@@ -2417,6 +3582,46 @@ export function BookingPanel() {
     await saveMenuItems(nextItems);
   }
 
+  async function downloadMenuItemPhoto(item: MenuItem) {
+    if (!item.photoPath) return;
+
+    const response = await fetch(getMediaUrl(item.photoPath));
+    if (!response.ok) {
+      throw new Error(`Menu photo fetch failed: ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const baseName = createObjectCode(item.title || "menu-photo");
+    downloadBlobFile(blob, getDownloadMediaFileName(item.photoPath, blob.type, baseName));
+  }
+
+  async function downloadAllMenuPhotos() {
+    const itemsWithPhotos = menuItems.filter((item) => item.photoPath);
+    if (!itemsWithPhotos.length) return;
+
+    const files = await Promise.all(itemsWithPhotos.map(async (item, index) => {
+      const response = await fetch(getMediaUrl(item.photoPath));
+      if (!response.ok) {
+        throw new Error(`Menu photo fetch failed: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const baseName = `${String(index + 1).padStart(2, "0")}-${createObjectCode(item.title || "menu-photo")}`;
+      return {
+        blob,
+        name: getDownloadMediaFileName(item.photoPath, blob.type, baseName)
+      };
+    }));
+
+    if (files.length === 1) {
+      downloadBlobFile(files[0].blob, files[0].name);
+      return;
+    }
+
+    const zipBlob = await createZipBlob(files);
+    downloadBlobFile(zipBlob, `menu-photos-${formatDateInput(new Date())}.zip`);
+  }
+
   async function handleWeatherSettingsChange(nextSettings: { name: string; latitude: number; longitude: number }) {
     setWeatherLocationName(nextSettings.name);
     setWeatherLatitude(nextSettings.latitude);
@@ -2428,12 +3633,20 @@ export function BookingPanel() {
     }));
   }
 
-  async function handleInventorySettingsChange(nextSettings: { airBeds: number; rollaways: number }) {
+  async function handleInventorySettingsChange(nextSettings: { airBedPrice: number; airBeds: number; extraPlaceAdultPercent: number; extraPlaceChildPercent: number; rollawayPrice: number; rollaways: number }) {
     setInventoryAirBeds(nextSettings.airBeds);
     setInventoryRollaways(nextSettings.rollaways);
+    setInventoryAirBedPrice(nextSettings.airBedPrice);
+    setInventoryRollawayPrice(nextSettings.rollawayPrice);
+    setInventoryExtraPlaceAdultPercent(nextSettings.extraPlaceAdultPercent);
+    setInventoryExtraPlaceChildPercent(nextSettings.extraPlaceChildPercent);
     await savePaymentSettings(buildPaymentSettingsPatch({
       inventoryAirBeds: nextSettings.airBeds,
-      inventoryRollaways: nextSettings.rollaways
+      inventoryRollaways: nextSettings.rollaways,
+      inventoryAirBedPrice: nextSettings.airBedPrice,
+      inventoryRollawayPrice: nextSettings.rollawayPrice,
+      inventoryExtraPlaceAdultPercent: nextSettings.extraPlaceAdultPercent,
+      inventoryExtraPlaceChildPercent: nextSettings.extraPlaceChildPercent
     }));
   }
 
@@ -2522,6 +3735,12 @@ export function BookingPanel() {
     await savePaymentSettings(buildPaymentSettingsPatch({ servicePassword: nextPassword || "0000" }));
   }
 
+  async function handleAgreementHoldMinutesChange(value: number) {
+    const nextMinutes = Math.max(1, Math.round(value || DEFAULT_ROOM_HOLD_MINUTES));
+    setAgreementHoldMinutes(nextMinutes);
+    await savePaymentSettings(buildPaymentSettingsPatch({ agreementHoldMinutes: nextMinutes }));
+  }
+
   async function sendLinkMethodToClient(methodId: string) {
     const method = getSettingMethod(LINK_METHODS, linkMethods, methodId);
     const value = linkMethods[methodId]?.trim();
@@ -2608,7 +3827,7 @@ export function BookingPanel() {
     const sourceChat = activeChat;
     suppressActiveChatSyncRef.current = true;
     try {
-      const profile = await extractActiveChatPhoneOnly(sourceChat);
+      const profile = await extractActiveChatPhoneFast(sourceChat);
       const phone = profile.phone;
       if (!phone) {
         setContactExtracted(false);
@@ -2639,6 +3858,7 @@ export function BookingPanel() {
           agreementSent: false,
           guestFirstName: contactName,
           lastReservation: null,
+          manualSaleOpen: false,
           phone: normalizedPhone
         };
         await saveChatDraftForChat(chat, extractedDraftPatch);
@@ -2696,19 +3916,21 @@ export function BookingPanel() {
   }
 
   async function handleContactAction() {
+    const phoneForSave = getCompleteContactPhoneForSave();
+    const hasPhoneForSave = Boolean(phoneForSave);
     debugContactFlow("contact-action-start", {
       activeChatId: activeChat?.id ?? "",
       activeChatName: activeChat?.name ?? "",
       activeChatTitle: activeChat?.title ?? "",
       contactExtracted,
+      hasPhoneForSave,
       contactMatchesActiveChatName,
       isManualSaleMode,
       isNewBookingChatMode,
-      phone: buildPhoneWithPrefix(guestPhone, guestPhonePrefix),
+      phone: phoneForSave || buildPhoneWithPrefix(guestPhone, guestPhonePrefix),
       appeal: guestFirstName
     });
-    if (contactSavedInWhatsApp && contactMatchesActiveChatName) return;
-    if (!isManualSaleMode && !isNewBookingChatMode && !contactExtracted) {
+    if (!isManualSaleMode && !isNewBookingChatMode && (!contactExtracted || !hasPhoneForSave)) {
       await extractContactFromChat();
       return;
     }
@@ -2716,8 +3938,16 @@ export function BookingPanel() {
     await saveActiveContactInWhatsApp();
   }
 
+  async function forceExtractContactFromActiveChat() {
+    if (isManualSaleMode || isNewBookingChatMode) return;
+    setContactSaveState("idle");
+    setContactExtracted(false);
+    await extractContactFromChat();
+  }
+
   function getContactActionLabel() {
-    if (!isManualSaleMode && !isNewBookingChatMode && !contactExtracted) return "Извлечь";
+    const hasPhoneForSave = Boolean(getCompleteContactPhoneForSave());
+    if (!isManualSaleMode && !isNewBookingChatMode && (!contactExtracted || !hasPhoneForSave)) return "Извлечь";
     if (contactSaveState === "saving") return "Сохраняю...";
     if (contactSaveState === "saved") return "Сохранено";
     if (contactSaveState === "error") return "Ошибка";
@@ -2725,10 +3955,16 @@ export function BookingPanel() {
     return "Сохранить";
   }
 
+  function getCompleteContactPhoneForSave() {
+    const normalizedPhone = formatPhoneDigits(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+    return isCompleteContactPhone(normalizedPhone) ? normalizedPhone : "";
+  }
+
   async function saveActiveContactInWhatsApp() {
     setContactSaveState("saving");
+    suppressActiveChatSyncRef.current = true;
     const phoneForSave = buildPhoneWithPrefix(guestPhone, guestPhonePrefix);
-    const normalizedPhone = formatPhoneDigits(phoneForSave);
+    const normalizedPhone = getCompleteContactPhoneForSave();
     debugContactFlow("save-contact-start", {
       activeChatId: activeChat?.id ?? "",
       activeChatName: activeChat?.name ?? "",
@@ -2739,47 +3975,64 @@ export function BookingPanel() {
       appeal: guestFirstName
     });
     if (!normalizedPhone) {
+      if (!isManualSaleMode && !isNewBookingChatMode) {
+        suppressActiveChatSyncRef.current = false;
+        setContactSaveState("idle");
+        await extractContactFromChat();
+        return;
+      }
       guestPhoneInputRef.current?.focus();
       guestPhoneInputRef.current?.select();
       setContactSaveState("error");
+      suppressActiveChatSyncRef.current = false;
       window.setTimeout(() => setContactSaveState("idle"), 2400);
       return;
     }
 
-    const templateName = getGuestNameFallbackFromPhone(normalizedPhone);
-    const safeName = getSafeGuestName(guestFirstName, normalizedPhone);
-    const contactName = isManualSaleMode ? templateName || safeName || guestFirstName : templateName;
-    if (contactName && contactName !== guestFirstName) setGuestFirstName(contactName);
-    debugContactFlow("save-contact-name-resolved", { templateName, safeName, contactName });
+    try {
+      const templateName = getGuestNameFallbackFromPhone(normalizedPhone);
+      const safeName = getSafeGuestName(guestFirstName, normalizedPhone);
+      const contactName = resolveGuestNameForPhone(guestFirstName, normalizedPhone) || templateName || safeName || guestFirstName;
+      if (contactName && contactName !== guestFirstName) setGuestFirstName(contactName);
+      debugContactFlow("save-contact-name-resolved", { templateName, safeName, contactName });
 
-    const databaseSaved = await saveContactToDatabase(contactName, normalizedPhone);
-    debugContactFlow("save-contact-database-result", { contactName, normalizedPhone, databaseSaved });
+      const databaseSaved = await saveContactToDatabase(contactName, normalizedPhone);
+      debugContactFlow("save-contact-database-result", { contactName, normalizedPhone, databaseSaved });
 
-    if (isManualSaleMode) {
-      await saveManualSaleContact(contactName, normalizedPhone);
-    } else {
-      await saveBookingContact(contactName, normalizedPhone, databaseSaved, contactSavedInWhatsApp);
-    }
+      if (isManualSaleMode) {
+        await saveManualSaleContact(contactName, normalizedPhone);
+      } else {
+        await saveBookingContact(contactName, normalizedPhone, databaseSaved, contactSavedInWhatsApp);
+      }
 
-    if (!databaseSaved) {
+      if (!databaseSaved) {
+        setContactSaveState("error");
+        return;
+      }
+
+      window.setTimeout(() => setContactSaveState("idle"), 2400);
+    } catch (error) {
+      debugContactFlow("save-contact-error", { message: error instanceof Error ? error.message : String(error) });
       setContactSaveState("error");
-      return;
+      window.setTimeout(() => setContactSaveState("idle"), 2400);
+    } finally {
+      window.setTimeout(() => {
+        suppressActiveChatSyncRef.current = false;
+      }, 1200);
     }
-
-    window.setTimeout(() => setContactSaveState("idle"), 2400);
   }
 
   async function ensureGuestContactForReservation(reservation: Reservation) {
     const normalizedPhone = formatPhoneDigits(reservation.phone);
     if (!normalizedPhone) return;
-    const contactName = reservation.guestFirstName || getGuestNameFallbackFromPhone(normalizedPhone);
+    const contactName = resolveGuestNameForPhone(reservation.guestFirstName, normalizedPhone);
     if (!contactName) return;
     await saveContactToDatabase(contactName, normalizedPhone);
   }
 
   async function saveAgreementDraftForReservation(reservation: Reservation) {
     const reservationChat = createActiveChatFromProfile({
-      name: reservation.guestFirstName || getGuestNameFallbackFromPhone(reservation.phone) || reservation.phone,
+      name: resolveGuestNameForPhone(reservation.guestFirstName, reservation.phone) || reservation.phone,
       phone: reservation.phone
     });
     const chats = [activeChat, reservationChat].filter((chat): chat is ActiveChat => Boolean(chat));
@@ -2795,7 +4048,7 @@ export function BookingPanel() {
       checkOut: reservation.checkOut,
       checkInTime: reservation.checkInTime,
       checkOutTime: reservation.checkOutTime,
-      guestFirstName: reservation.guestFirstName,
+      guestFirstName: resolveReservationGuestName(reservation.guestFirstName, reservation.phone),
       lastReservation: reservation,
       manualSaleOpen: Boolean(reservation.isManualSale),
       manualSalePaymentMethod: reservation.paymentMethod ?? manualSalePaymentMethod,
@@ -2803,6 +4056,50 @@ export function BookingPanel() {
     };
     setCatalogStatus(undefined);
     setCatalogStatusAt("");
+    await Promise.all(chats.map((chat) => saveChatDraftForChat(chat, draftPatch)));
+  }
+
+  function shouldSyncActiveChatForReservation(reservation: Reservation) {
+    if (!activeChat) return false;
+    if (lastReservation?.id === reservation.id) return true;
+
+    const reservationPhone = normalizePhoneSearch(reservation.phone);
+    const activeChatPhone = normalizePhoneSearch(activeChat.phone || "");
+    if (reservationPhone && activeChatPhone && reservationPhone === activeChatPhone) return true;
+
+    const reservationName = createChatId(resolveReservationGuestName(reservation.guestFirstName, reservation.phone));
+    const activeChatName = createChatId(activeChat.name || "");
+    return Boolean(reservationName && activeChatName && reservationName === activeChatName);
+  }
+
+  async function syncReservationDraftForStatus(reservation: Reservation) {
+    if (reservation.isAddOnSale) return;
+    const normalizedPhone = formatPhoneDigits(reservation.phone);
+    const resolvedName = resolveReservationGuestName(reservation.guestFirstName, normalizedPhone);
+    const reservationChat = createActiveChatFromProfile({
+      name: resolvedName || normalizedPhone || reservation.guestFirstName,
+      phone: normalizedPhone
+    });
+    const chats = [shouldSyncActiveChatForReservation(reservation) ? activeChat : null, reservationChat]
+      .filter((chat, index, list): chat is ActiveChat =>
+        Boolean(chat) && list.findIndex((item) => item?.id === chat?.id) === index
+      );
+    if (!chats.length) return;
+
+    const draftPatch: Partial<ChatBookingDraft> = {
+      adminComment: reservation.adminComment ?? adminComment,
+      checkIn: reservation.checkIn,
+      checkOut: reservation.checkOut,
+      checkInTime: reservation.checkInTime,
+      checkOutTime: reservation.checkOutTime,
+      guestFirstName: resolvedName,
+      lastReservation: reservation,
+      manualSaleOpen: Boolean(reservation.isManualSale),
+      manualSalePaymentMethod: reservation.paymentMethod ?? manualSalePaymentMethod,
+      phone: normalizedPhone || reservation.phone,
+      prepaymentAlreadyPaid: Boolean(reservation.prepaymentReceivedAt)
+    };
+
     await Promise.all(chats.map((chat) => saveChatDraftForChat(chat, draftPatch)));
   }
 
@@ -2865,34 +4162,116 @@ export function BookingPanel() {
       shouldOverwrite,
       isNewBookingChatMode
     });
+    const alreadyNamedInChat = Boolean(
+      activeChat?.title &&
+      contactName &&
+      !isGuestFallbackName(contactName) &&
+      normalizeContactLookupText(activeChat.title) === normalizeContactLookupText(contactName)
+    );
+    debugContactFlow("booking-contact-existing-name-check", {
+      activeChatTitle: activeChat?.title ?? "",
+      contactName,
+      alreadyNamedInChat
+    });
     const whatsappSaved = databaseSaved
-      ? isNewBookingChatMode && !activeChat
-        ? await saveNewBookingChatContact(contactName, normalizedPhone)
-        : shouldOverwrite
-          ? await overwriteActiveWhatsAppContact(contactName, normalizedPhone)
-          : await saveActiveWhatsAppContact(contactName, normalizedPhone, { allowSidebar: true })
+      ? alreadyNamedInChat
+        ? true
+        : isNewBookingChatMode && !activeChat
+          ? await saveNewBookingChatContact(contactName, normalizedPhone)
+          : shouldOverwrite && isNewBookingChatMode
+            ? await ensureExistingWhatsAppContactOrOverwrite(contactName, normalizedPhone)
+            : await saveActiveWhatsAppContact(contactName, normalizedPhone, { allowSidebar: false })
       : false;
     debugContactFlow("booking-contact-whatsapp-result", { contactName, normalizedPhone, whatsappSaved });
     closeWhatsAppProfilePanels();
 
-    const chat = activeChat ?? createActiveChatFromProfile({ name: contactName || normalizedPhone, phone: normalizedPhone });
-    if (chat) {
-      setActiveChat(chat);
+    const phoneChat = createActiveChatFromProfile({ name: contactName || normalizedPhone, phone: normalizedPhone });
+    const titleChat = contactName ? {
+      id: createChatId(`title:${contactName}`),
+      phone: normalizedPhone,
+      title: contactName
+    } : null;
+    const chats = [activeChat, phoneChat, titleChat].filter((chat, index, list): chat is ActiveChat =>
+      Boolean(chat) && list.findIndex((item) => item?.id === chat?.id) === index
+    );
+    if (phoneChat) {
+      setActiveChat(phoneChat);
+    }
+    if (chats.length) {
       const draftPatch = {
-        agreementSent: false,
         guestFirstName: contactName,
-        lastReservation: null,
         manualSaleOpen: false,
         phone: normalizedPhone
       };
-      await saveChatDraftForChat(chat, draftPatch);
+      await Promise.all(chats.map((chat) => saveContactIdentityDraftForChat(chat, draftPatch)));
     }
     setBookingNewChatOpen(false);
     applyBookingContactFromPhone(normalizedPhone);
     setGuestFirstName(contactName);
+    await syncActiveReservationGuestName(contactName, normalizedPhone);
     setContactExtracted(true);
     setContactSavedInWhatsApp(Boolean(whatsappSaved));
     setContactSaveState(databaseSaved && whatsappSaved ? "saved" : "error");
+  }
+
+  async function syncActiveReservationGuestName(contactName: string, normalizedPhone: string) {
+    const resolvedName = resolveReservationGuestName(contactName, normalizedPhone);
+    if (!resolvedName || isGuestFallbackName(resolvedName)) return;
+
+    const updateGuestName = (reservation: Reservation | null) => {
+      if (!reservation || !phonesMatchForContactLookup(reservation.phone, normalizedPhone)) return reservation;
+      if (reservation.guestFirstName === resolvedName) return reservation;
+      return { ...reservation, guestFirstName: resolvedName };
+    };
+    const updatedLastReservation = updateGuestName(lastReservation);
+
+    if (updatedLastReservation && updatedLastReservation !== lastReservation) {
+      setLastReservation(updatedLastReservation);
+      setReservations((currentReservations) =>
+        currentReservations.map((reservation) => reservation.id === updatedLastReservation.id ? updatedLastReservation : reservation)
+      );
+      await saveReservation(updatedLastReservation);
+      if (activeChat) {
+        await saveCurrentChatDraft({
+          guestFirstName: resolvedName,
+          lastReservation: updatedLastReservation,
+          phone: normalizedPhone
+        });
+      }
+      return;
+    }
+
+    setReservations((currentReservations) =>
+      currentReservations.map((reservation) => {
+        const updatedReservation = updateGuestName(reservation);
+        if (updatedReservation && updatedReservation !== reservation) {
+          void saveReservation(updatedReservation);
+          return updatedReservation;
+        }
+        return reservation;
+      })
+    );
+  }
+
+  async function saveContactIdentityDraftForChat(chat: ActiveChat, patch: Pick<ChatBookingDraft, "guestFirstName" | "manualSaleOpen" | "phone">) {
+    if (isRestoringChatDraftRef.current) return;
+    const existingDraft = getCachedChatBookingDraft(chat.id) ?? await getChatBookingDraft(chat.id);
+    const baseDraft = existingDraft ?? buildChatDraft();
+    const nextDraft = reconcileDraftReservationDates({
+      ...baseDraft,
+      ...patch,
+      guestFirstName: resolveGuestNameForPhone(patch.guestFirstName, patch.phone),
+      phone: formatPhoneDigits(patch.phone) || patch.phone,
+      updatedAt: new Date().toISOString()
+    });
+    await saveCachedChatBookingDraft(chat.id, nextDraft);
+  }
+
+  async function ensureExistingWhatsAppContactOrOverwrite(contactName: string, normalizedPhone: string) {
+    const existingOpened = await openExistingWhatsAppContactForManualSale(contactName, normalizedPhone);
+    debugContactFlow("booking-contact-existing-before-overwrite", { contactName, normalizedPhone, existingOpened });
+    if (existingOpened) return true;
+    return overwriteActiveWhatsAppContact(contactName, normalizedPhone);
   }
 
   async function saveNewBookingChatContact(contactName: string, normalizedPhone: string) {
@@ -2905,7 +4284,8 @@ export function BookingPanel() {
   }
 
   function buildReservationDraft(status: Reservation["status"]): Reservation {
-    const reservationPhone = buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone;
+    const reservationPhone = formatPhoneDigits(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+    const reservationGuestName = resolveReservationGuestName(guestFirstName, reservationPhone);
     const isManualSale = isManualSaleMode;
     const hasSavedPrepayment = Boolean(lastReservation?.prepaymentReceivedAt);
     const reservationPrepayment = isManualSale
@@ -2939,6 +4319,13 @@ export function BookingPanel() {
       effectiveBookingTotals.subtotal,
       effectiveBookingTotals.discountAmount,
       effectiveBookingTotals.total,
+      extraInventoryChargeEnabled,
+      inventoryAirBedPrice,
+      inventoryRollawayPrice,
+      inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceChildPercent,
+      guestAdults,
+      guestChildren,
       lastReservation?.items ?? []
     );
 
@@ -2947,7 +4334,7 @@ export function BookingPanel() {
       roomIds: proposalRooms.map((room) => room.id),
       items: reservationItems,
       payments: lastReservation?.payments ?? [],
-      guestFirstName,
+      guestFirstName: reservationGuestName,
       phone: reservationPhone,
       checkIn,
       checkOut,
@@ -2963,6 +4350,13 @@ export function BookingPanel() {
       airMattressCount,
       rollawayCount,
       extraInventoryByRoomId,
+      extraInventoryChargeEnabled,
+      inventoryAirBedPrice,
+      inventoryRollawayPrice,
+      inventoryExtraPlacePrice,
+      inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceChildPercent,
+      extraInventoryManual,
       hourlyHours,
       discountPercent: reservationDiscountPercent,
       subtotal: effectiveBookingTotals.subtotal,
@@ -3052,6 +4446,8 @@ export function BookingPanel() {
       return;
     }
     if (!proposalRooms.length || !checkIn || !checkOut || !effectiveBookingTotals.total) return;
+    if (!ensureBookingDatesAreNotPast()) return;
+    if (!ensureSelectedRoomsAreNotHeldByAnotherGuest()) return;
     if (!ensurePaymentMethodSelected()) return;
     const now = new Date().toISOString();
     const salePhone = buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone;
@@ -3074,6 +4470,13 @@ export function BookingPanel() {
         effectiveBookingTotals.subtotal,
         effectiveBookingTotals.discountAmount,
         effectiveBookingTotals.total,
+        extraInventoryChargeEnabled,
+        inventoryAirBedPrice,
+        inventoryRollawayPrice,
+        inventoryExtraPlaceAdultPercent,
+        inventoryExtraPlaceChildPercent,
+        guestAdults,
+        guestChildren,
         []
       ).map((item) => ({
         ...item,
@@ -3104,6 +4507,13 @@ export function BookingPanel() {
       airMattressCount,
       rollawayCount,
       extraInventoryByRoomId,
+      extraInventoryChargeEnabled,
+      inventoryAirBedPrice,
+      inventoryRollawayPrice,
+      inventoryExtraPlacePrice,
+      inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceChildPercent,
+      extraInventoryManual,
       hourlyHours,
       discountPercent,
       subtotal: effectiveBookingTotals.subtotal,
@@ -3127,6 +4537,7 @@ export function BookingPanel() {
       setGuestFirstName(saleGuestName);
     }
     await updateReservation(reservation);
+    await clearRoomHoldsForReservation(reservation, true);
     setBookingComment(manualComment);
     setPrepaymentAlreadyPaid(true);
     setAgreementSent(true);
@@ -3136,11 +4547,20 @@ export function BookingPanel() {
     const reservation = currentReservationDraft;
     if (!reservation) return;
     if (hasSelectedHourlyConflict) return;
+    if (!ensureReservationDatesAreNotPast(reservation)) return;
+    if (!ensureSelectedRoomsAreNotHeldByAnotherGuest()) return;
     if (!ensurePaymentMethodSelected()) return;
-    await updateReservation({
+    const confirmedReservation = {
       ...reservation,
       status: "booked" as const
-    });
+    };
+    await updateReservation(confirmedReservation);
+    await clearRoomHoldsForReservation(confirmedReservation, true);
+    setSelectedRoomId(confirmedReservation.roomIds[0] || selectedRoomId);
+    setSelectedBookingRoomIds(confirmedReservation.roomIds);
+    setAgreementSent(true);
+    setAgreementEverSent(true);
+    await saveAgreementDraftForReservation(confirmedReservation);
   }
 
   async function cancelReservation(reservation: Reservation, reason?: string) {
@@ -3151,31 +4571,66 @@ export function BookingPanel() {
       status: "cancelled" as const
     };
     await updateReservation(cancelledReservation);
+    await saveAgreementDraftForReservation(cancelledReservation);
   }
 
   async function handleCancelReservationWithReason(reason: string) {
     if (!cancelReservationTarget) return;
+    if (reason === BOOKING_ERROR_CANCEL_REASON) {
+      await revertErroneousReservation(cancelReservationTarget);
+      setCancelReservationTarget(null);
+      return;
+    }
     await cancelReservation(cancelReservationTarget, reason);
     setCancelReservationTarget(null);
   }
 
+  async function deleteReservationCascade(reservationId: string) {
+    const reservationIdsToDelete = reservations
+      .filter((item) => item.id === reservationId || item.parentReservationId === reservationId)
+      .map((item) => item.id);
+    const uniqueReservationIds = Array.from(new Set(reservationIdsToDelete.length ? reservationIdsToDelete : [reservationId]));
+    await Promise.all(uniqueReservationIds.map((reservationId) => deleteReservation(reservationId)));
+    setReservations((currentReservations) => currentReservations.filter((item) => !uniqueReservationIds.includes(item.id)));
+    setLastReservation((currentReservation) => currentReservation && uniqueReservationIds.includes(currentReservation.id) ? null : currentReservation);
+    return uniqueReservationIds;
+  }
+
+  async function revertErroneousReservation(reservation: Reservation) {
+    await deleteReservationCascade(reservation.id);
+    setAgreementSent(false);
+    setPrepaymentAlreadyPaid(false);
+    setBookingDateWarning("");
+    await saveCurrentChatDraft({
+      agreementSent: false,
+      lastReservation: null,
+      prepaymentAlreadyPaid: false
+    });
+  }
+
   async function removeReservation(reservation: Reservation) {
-    await deleteReservation(reservation.id);
-    setReservations((currentReservations) => currentReservations.filter((item) => item.id !== reservation.id));
-    setLastReservation((currentReservation) => currentReservation?.id === reservation.id ? null : currentReservation);
+    await deleteReservationCascade(reservation.id);
     setDeleteReservationTarget(null);
   }
 
   async function updateReservation(reservation: Reservation) {
-    await saveReservation(reservation);
-    await ensureGuestContactForReservation(reservation);
-    setReservations((currentReservations) => currentReservations.filter((item) => item.id !== reservation.id).concat(reservation));
-    setLastReservation(reservation);
+    const normalizedReservation = normalizeReservationPhoneIdentity(reservation);
+    const existingReservation = reservations.find((item) => item.id === normalizedReservation.id);
+    const dateChanged = existingReservation ? !reservationDateFieldsEqual(existingReservation, normalizedReservation) : true;
+    if ((normalizedReservation.status === "pending" || normalizedReservation.status === "booked") && !normalizedReservation.isAddOnSale && dateChanged && isReservationDateInPast(normalizedReservation)) {
+      setBookingDateWarning(buildPastReservationWarning(normalizedReservation));
+      return;
+    }
+    await saveReservation(normalizedReservation);
+    await ensureGuestContactForReservation(normalizedReservation);
+    setReservations((currentReservations) => currentReservations.filter((item) => item.id !== normalizedReservation.id).concat(normalizedReservation));
+    setLastReservation(normalizedReservation);
+    await syncReservationDraftForStatus(normalizedReservation);
   }
 
   async function toggleBalancePaid(reservation: Reservation) {
     const items = getReservationItems(reservation, pricedRooms).filter((item) => reservation.roomIds.includes(item.roomId));
-    if (!reservation.balancePaidAt && items.length > 1) {
+    if (!reservation.balancePaidAt && reservationItemsHaveDifferentPeriods(items)) {
       setSelectedBalanceRoomId(items[0]?.roomId ?? "");
       setBalanceRoomSelectionTarget(reservation);
       return;
@@ -3185,12 +4640,13 @@ export function BookingPanel() {
 
   async function markReservationBalancePaid(reservation: Reservation, roomId?: string) {
     const hasBalancePaid = Boolean(reservation.balancePaidAt);
+    const now = new Date().toISOString();
     if (roomId) {
       const items = getReservationItems(reservation, pricedRooms);
       const nextItems = items.map((item) => {
         if (item.roomId !== roomId) return item;
         const paidAmount = item.total;
-        return { ...item, paidAmount, balancePaidAt: new Date().toISOString() };
+        return { ...item, paidAmount, balancePaidAt: now };
       });
       const item = nextItems.find((nextItem) => nextItem.roomId === roomId);
       const existingPayments = reservation.payments ?? [];
@@ -3212,17 +4668,23 @@ export function BookingPanel() {
         payments: nextPayments,
         status: "booked",
         paidAmount: nextPaidAmount,
-        balancePaidAt: allBalancesPaid ? new Date().toISOString() : reservation.balancePaidAt
+        balancePaidAt: allBalancesPaid ? now : reservation.balancePaidAt
       });
       return;
     }
 
+    const nextItems = getReservationItems(reservation, pricedRooms).map((item) => ({
+      ...item,
+      paidAmount: hasBalancePaid ? item.prepayment : item.total,
+      balancePaidAt: hasBalancePaid ? undefined : now
+    }));
     await updateReservation({
       ...reservation,
+      items: nextItems,
       status: "booked",
       paymentMethod: hasBalancePaid ? reservation.paymentMethod : manualSalePaymentMethod || reservation.paymentMethod,
       paidAmount: hasBalancePaid ? reservation.prepayment : reservation.total,
-      balancePaidAt: hasBalancePaid ? undefined : new Date().toISOString(),
+      balancePaidAt: hasBalancePaid ? undefined : now,
       payments: hasBalancePaid
         ? (reservation.payments ?? []).filter((payment) => payment.type !== "balance")
         : (reservation.payments ?? []).filter((payment) => payment.type !== "balance").concat({
@@ -3230,7 +4692,7 @@ export function BookingPanel() {
           type: "balance",
           amount: Math.max(0, reservation.total - reservation.prepayment),
           method: manualSalePaymentMethod || reservation.paymentMethod,
-          paidAt: new Date().toISOString()
+          paidAt: now
         })
     });
   }
@@ -3244,18 +4706,20 @@ export function BookingPanel() {
     }
 
     setPrepaymentAlreadyPaid(false);
-    await updateReservation({
+    const updatedReservation = {
       ...reservation,
       paidAmount: 0,
       prepaymentReceivedAt: undefined
-    });
+    };
+    await updateReservation(updatedReservation);
+    await saveAgreementDraftForReservation(updatedReservation);
   }
 
   async function confirmPrepaymentAmount(reservation: Reservation, amount: number) {
     const prepaymentAmount = clampNumber(Math.round(amount), 0, reservation.total);
     const now = new Date().toISOString();
     setPrepaymentAlreadyPaid(prepaymentAmount > 0);
-    await updateReservation({
+    const updatedReservation = {
       ...reservation,
       paymentMethod: manualSalePaymentMethod || reservation.paymentMethod,
       paidAmount: prepaymentAmount,
@@ -3270,7 +4734,9 @@ export function BookingPanel() {
           method: manualSalePaymentMethod || reservation.paymentMethod,
           paidAt: now
         }] : [])
-    });
+    };
+    await updateReservation(updatedReservation);
+    await saveAgreementDraftForReservation(updatedReservation);
     setPrepaymentAmountTarget(null);
   }
 
@@ -3307,6 +4773,11 @@ export function BookingPanel() {
   async function saveAddOnSale() {
     if (!lastReservation || !addOnSaleServiceRoom) return;
     if (addOnSaleConflicts.length) return;
+    if (isDateBeforeToday(addOnSaleDate)) {
+      setBookingDateWarning(`Нельзя добавить доп продажу в прошлом: ${formatKazakhDate(addOnSaleDate)}.`);
+      setAddOnSaleState("error");
+      return;
+    }
     if (addOnSalePaidNow && !addOnSalePaymentMethod) {
       setAddOnSaleState("error");
       return;
@@ -3371,6 +4842,11 @@ export function BookingPanel() {
 
   async function saveKitchenSale() {
     if (!lastReservation || !selectedKitchenMenuItem) return;
+    if (isDateBeforeToday(addOnSaleDate)) {
+      setBookingDateWarning(`Нельзя добавить кухню в прошлом: ${formatKazakhDate(addOnSaleDate)}.`);
+      setKitchenSaleState("error");
+      return;
+    }
     if (kitchenSalePaidNow && !kitchenSalePaymentMethod) {
       setKitchenSaleState("error");
       return;
@@ -3543,7 +5019,7 @@ export function BookingPanel() {
 
   async function toggleCheckedIn(reservation: Reservation) {
     const items = getReservationItems(reservation, pricedRooms).filter((item) => reservation.roomIds.includes(item.roomId));
-    if (!reservation.checkedInAt && items.length > 1) {
+    if (!reservation.checkedInAt && reservationItemsHaveDifferentPeriods(items)) {
       setSelectedCheckInRoomId(items[0]?.roomId ?? "");
       setCheckInRoomSelectionTarget(reservation);
       return;
@@ -3553,8 +5029,8 @@ export function BookingPanel() {
 
   async function markReservationCheckedIn(reservation: Reservation, roomId?: string) {
     const hasCheckedIn = Boolean(reservation.checkedInAt);
+    const now = new Date().toISOString();
     if (roomId) {
-      const now = new Date().toISOString();
       const nextItems = getReservationItems(reservation, pricedRooms).map((item) =>
         item.roomId === roomId ? { ...item, checkedInAt: now } : item
       );
@@ -3570,8 +5046,9 @@ export function BookingPanel() {
 
     await updateReservation({
       ...reservation,
+      items: getReservationItems(reservation, pricedRooms).map((item) => ({ ...item, checkedInAt: hasCheckedIn ? undefined : now })),
       status: "booked",
-      checkedInAt: hasCheckedIn ? undefined : new Date().toISOString(),
+      checkedInAt: hasCheckedIn ? undefined : now,
       noShowAt: undefined
     });
   }
@@ -3590,6 +5067,7 @@ export function BookingPanel() {
 
   async function clearGuestDatabaseFields() {
     await clearBookingStatistics();
+    draftCacheRef.current = {};
     setReservations([]);
     setLastReservation(null);
   }
@@ -3602,7 +5080,7 @@ export function BookingPanel() {
     }
 
     if (row.draftKey) {
-      await deleteChatBookingDraft(row.draftKey);
+      await deleteCachedChatBookingDraft(row.draftKey);
     }
   }
 
@@ -3610,6 +5088,7 @@ export function BookingPanel() {
     const reservation = currentReservationDraft;
     if (!reservation) return;
     if (hasSelectedHourlyConflict) return;
+    if (!ensureReservationDatesAreNotPast(reservation)) return;
 
     setSendState("sending");
     setLastReservation(reservation);
@@ -3617,6 +5096,7 @@ export function BookingPanel() {
     if (inserted) {
       setAgreementSent(true);
       setAgreementEverSent(true);
+      await holdRoomsForAgreement(reservation);
       await ensureGuestContactForReservation(reservation);
       await saveAgreementDraftForReservation(reservation);
     }
@@ -3628,9 +5108,19 @@ export function BookingPanel() {
     const reservation = currentReservationDraft;
     if (!reservation) return;
     if (hasSelectedHourlyConflict) return;
+    if (!ensureReservationDatesAreNotPast(reservation)) return;
+    if (!ensureSelectedRoomsAreNotHeldByAnotherGuest()) return;
 
     setSendState("sending");
     const inserted = await insertTextIntoActiveWhatsAppChat(buildReservationTotalMessage(reservation, rooms));
+    if (inserted) {
+      setLastReservation(reservation);
+      setAgreementSent(true);
+      setAgreementEverSent(true);
+      await holdRoomsForAgreement(reservation);
+      await ensureGuestContactForReservation(reservation);
+      await saveAgreementDraftForReservation(reservation);
+    }
     setSendState(inserted ? "sent" : "error");
     window.setTimeout(() => setSendState("idle"), 2600);
   }
@@ -3639,26 +5129,19 @@ export function BookingPanel() {
     const reservation = lastReservation ?? currentReservationDraft;
     if (!reservation) return;
     if (hasSelectedHourlyConflict) return;
+    if (!ensureReservationDatesAreNotPast(reservation)) return;
+    if (!ensureSelectedRoomsAreNotHeldByAnotherGuest()) return;
     if (!ensurePaymentMethodSelected()) return;
 
-    const now = new Date().toISOString();
-    const prepaymentAmount = clampNumber(
-      Math.round(reservation.prepayment || Math.round(reservation.total * 0.5)),
-      0,
-      reservation.total
-    );
-    const paidAmount = Math.max(reservation.paidAmount ?? 0, prepaymentAmount);
     const confirmedReservation: Reservation = {
       ...reservation,
       paymentMethod: manualSalePaymentMethod || reservation.paymentMethod,
-      prepayment: prepaymentAmount,
-      paidAmount,
-      prepaymentReceivedAt: prepaymentAmount > 0 ? reservation.prepaymentReceivedAt ?? now : undefined
+      status: "booked"
     };
 
     setSendState("sending");
     await updateReservation(confirmedReservation);
-    setPrepaymentAlreadyPaid(prepaymentAmount > 0);
+    setPrepaymentAlreadyPaid(Boolean(confirmedReservation.prepaymentReceivedAt));
     const inserted = await insertTextIntoActiveWhatsAppChat(buildReservationPaymentConfirmationMessage(confirmedReservation, rooms));
     setSendState(inserted ? "sent" : "error");
     window.setTimeout(() => setSendState("idle"), 2600);
@@ -3667,9 +5150,88 @@ export function BookingPanel() {
   async function copyReservationAgreementText() {
     const reservation = currentReservationDraft;
     if (!reservation) return;
+    if (!ensureReservationDatesAreNotPast(reservation)) return;
     const copied = await copyTextToClipboard(buildReservationMessage(reservation, rooms));
     setAgreementCopyState(copied ? "copied" : "error");
     window.setTimeout(() => setAgreementCopyState("idle"), 1800);
+  }
+
+  async function refreshReservationAgreementDraft() {
+    const reservation = currentReservationDraft;
+    if (!reservation) return;
+    setAgreementRefreshState("refreshing");
+
+    try {
+      const profile = await extractActiveChatPhoneOnly(activeChat);
+      const normalizedPhone = formatPhoneDigits(
+        profile.phone ||
+        reservation.phone ||
+        buildPhoneWithPrefix(guestPhone, guestPhonePrefix) ||
+        activeChat?.phone ||
+        ""
+      );
+      if (!normalizedPhone) {
+        setAgreementRefreshState("error");
+        window.setTimeout(() => setAgreementRefreshState("idle"), 2200);
+        return;
+      }
+
+      const phoneParts = splitPhoneForInput(normalizedPhone);
+      const resolvedName = resolveReservationGuestName(
+        profile.name || guestFirstName || reservation.guestFirstName,
+        normalizedPhone
+      );
+      const updatedReservation: Reservation = {
+        ...reservation,
+        guestFirstName: resolvedName,
+        phone: normalizedPhone
+      };
+      const phoneChat = createActiveChatFromProfile({
+        name: resolvedName || normalizedPhone,
+        phone: normalizedPhone
+      });
+      const chats = [activeChat, phoneChat].filter((chat, index, list): chat is ActiveChat =>
+        Boolean(chat) && list.findIndex((item) => item?.id === chat?.id) === index
+      );
+
+      setGuestPhonePrefix(phoneParts.prefix);
+      setGuestPhone(formatLocalPhoneInput(phoneParts.local));
+      setGuestFirstName(resolvedName);
+      setContactExtracted(true);
+      setLastReservation(updatedReservation);
+      setReservations((currentReservations) =>
+        currentReservations.map((item) => item.id === updatedReservation.id ? updatedReservation : item)
+      );
+
+      if (reservations.some((item) => item.id === updatedReservation.id)) {
+        await saveReservation(updatedReservation);
+      }
+      await saveContactToDatabase(resolvedName, normalizedPhone);
+      const draftPatch: Partial<ChatBookingDraft> = {
+        agreementEverSent,
+        agreementSent,
+        guestFirstName: resolvedName,
+        lastReservation: updatedReservation,
+        phone: normalizedPhone
+      };
+      await Promise.all(chats.map((chat) => saveChatDraftForChat(chat, draftPatch)));
+      const refreshedDraft = reconcileDraftReservationDates({
+        ...buildChatDraft(),
+        ...draftPatch,
+        updatedAt: new Date().toISOString()
+      });
+      if (activeChat) {
+        await saveCachedChatBookingDraft(activeChat.id, refreshedDraft);
+      }
+      if (phoneChat) {
+        await saveCachedChatBookingDraft(phoneChat.id, refreshedDraft);
+      }
+      setAgreementRefreshState("refreshed");
+      window.setTimeout(() => setAgreementRefreshState("idle"), 1800);
+    } catch {
+      setAgreementRefreshState("error");
+      window.setTimeout(() => setAgreementRefreshState("idle"), 2200);
+    }
   }
 
   if (!isOpen) {
@@ -3714,16 +5276,17 @@ export function BookingPanel() {
       </header>
 
       <section className="gpb-section gpb-top-date-section">
-        <div className="gpb-grid gpb-date-guest-grid">
+        <div ref={bookingDatesSnapshotRef} className="gpb-grid gpb-date-guest-grid">
           <label className="gpb-date-field">
-            Заезд
-            <input disabled={isBookingLocked} type="date" value={checkIn} onChange={(event) => handleCheckInChange(event.target.value)} />
+            <span className="gpb-date-field-title">Заезд {formatShortWeekday(checkIn)}</span>
+            <input disabled={isBookingLocked} min={getDefaultCheckInDate()} type="date" value={checkIn} onChange={(event) => handleCheckInChange(event.target.value)} />
           </label>
           <label className="gpb-date-field">
-            Выезд
-            <input disabled={isBookingLocked} type="date" value={checkOut} onChange={(event) => handleCheckOutChange(event.target.value)} />
+            <span className="gpb-date-field-title">Выезд {formatShortWeekday(checkOut)}</span>
+            <input disabled={isBookingLocked} min={getMinimumCheckOutDate(checkIn)} type="date" value={checkOut} onChange={(event) => handleCheckOutChange(event.target.value)} />
           </label>
         </div>
+        {bookingDateWarning ? <div className="gpb-booking-date-warning">{bookingDateWarning}</div> : null}
       </section>
 
       <section className="gpb-section gpb-booking-summary-section">
@@ -3815,6 +5378,18 @@ export function BookingPanel() {
               <button className="gpb-primary" type="button" onClick={handleContactAction} disabled={isContactRowLocked || contactSaveState === "saving"}>
                 {getContactActionLabel()}
               </button>
+              {!isManualSaleMode && !isNewBookingChatMode ? (
+                <button
+                  className="gpb-secondary-contact-action"
+                  type="button"
+                  onClick={() => void forceExtractContactFromActiveChat()}
+                  disabled={isContactRowLocked || contactSaveState === "saving" || !activeChat}
+                  title="Извлечь номер из активного чата заново"
+                  aria-label="Извлечь номер заново"
+                >
+                  <RefreshCw size={16} strokeWidth={2.4} />
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -3888,12 +5463,13 @@ export function BookingPanel() {
       </section>
 
       <section
+        ref={catalogSnapshotRef}
         className={`gpb-section gpb-panel-catalog gpb-workflow-section ${activeWorkflowBlock === "catalog" ? "is-active" : ""}`}
         onClick={() => setActiveWorkflowBlock("catalog")}
         onFocusCapture={() => setActiveWorkflowBlock("catalog")}
       >
         <div className="gpb-section-title">
-          {lastReservation?.status === "booked" ? <strong>Забронировано</strong> : null}
+          {isBookingConfirmed ? <strong>Забронировано</strong> : lastReservation && (isReservationCheckedOut(lastReservation) || isReservationPastStay(lastReservation)) ? <strong>Выехал</strong> : null}
           <CatalogAvailabilityChips summary={catalogAvailabilitySummary} />
         </div>
         <div className="gpb-flat-section-body">
@@ -3948,11 +5524,26 @@ export function BookingPanel() {
                               </button>
                             </span>
                           ) : null}
+                          {extraInventoryByRoomId[room.id].extraPlaces ? (
+                            <span className="gpb-card-extra-badge-row">
+                              <span>Доп.место +{extraInventoryByRoomId[room.id].extraPlaces}</span>
+                              <button
+                                aria-label="Удалить допместо"
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  removeExtraInventoryTypeFromCard(room.id, "extra-place");
+                                }}
+                              >
+                                <X size={11} />
+                              </button>
+                            </span>
+                          ) : null}
                         </span>
                       ) : null}
-                      {roomDateOverrides[room.id] ? (
+                      {getActiveRoomDateOverride(room.id, checkIn, checkOut, roomDateOverrides) ? (
                         <span className="gpb-card-date-badge" onClick={(event) => event.stopPropagation()}>
-                          {formatShortDayMonth(roomDateOverrides[room.id].checkIn)} - {formatShortDayMonth(roomDateOverrides[room.id].checkOut)}
+                          {formatShortDayMonth(getActiveRoomDateOverride(room.id, checkIn, checkOut, roomDateOverrides)?.checkIn ?? checkIn)} - {formatShortDayMonth(getActiveRoomDateOverride(room.id, checkIn, checkOut, roomDateOverrides)?.checkOut ?? checkOut)}
                           <button
                             aria-label="Сбросить даты номера"
                             type="button"
@@ -3967,6 +5558,13 @@ export function BookingPanel() {
                           >
                             <X size={11} />
                           </button>
+                        </span>
+                      ) : null}
+                      {getRoomHoldsForRoom(room.id).length ? (
+                        <span className={`gpb-room-hold-badge ${getRoomHoldForRoom(room.id) ? "is-own" : "is-other"}`}>
+                          <Timer size={12} />
+                          <span>{getRoomHoldsForRoom(room.id).length > 1 ? `${getRoomHoldsForRoom(room.id).length} соглас.` : "На соглас."}</span>
+                          {formatHoldCountdown(getRoomHoldsForRoom(room.id)[0]?.expiresAt ?? "", holdNowMs)}
                         </span>
                       ) : null}
                       <span className="gpb-panel-object-info">
@@ -4023,6 +5621,33 @@ export function BookingPanel() {
                         >
                           <Plus size={17} />
                         </button>
+                        <button
+                          className={`gpb-room-hold-button ${getRoomHoldsForRoom(room.id).length ? "is-hold-active" : ""}`}
+                          aria-label={getRoomHoldForRoom(room.id) ? "Снять удержание" : `Удержать на ${agreementHoldMinutes} мин`}
+                          disabled={isBookingLocked}
+                          title={getRoomHoldsForRoom(room.id).length ? getRoomHoldsForRoom(room.id).map((hold) => `${hold.guestName || hold.ownerTitle || "Гость"} - ${formatHoldCountdown(hold.expiresAt, holdNowMs)}`).join("\n") : "Нет активных согласований"}
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void toggleRoomHold(room);
+                          }}
+                        >
+                          <Timer size={16} />
+                          <span className="gpb-room-hold-tooltip" role="tooltip">
+                            {getRoomHoldsForRoom(room.id).length ? (
+                              getRoomHoldsForRoom(room.id).map((hold) => (
+                                <span key={hold.id}>
+                                  <b>{hold.guestName || hold.ownerTitle || "Гость"}</b>
+                                  <small>{formatHoldCountdown(hold.expiresAt, holdNowMs)}</small>
+                                </span>
+                              ))
+                            ) : (
+                              <span className="is-empty">
+                                <b>Не бронируется</b>
+                              </span>
+                            )}
+                          </span>
+                        </button>
                         {extraInventoryPickerRoomId === room.id ? (
                           <span className="gpb-card-extra-menu" onClick={(event) => event.stopPropagation()}>
                             <button type="button" onClick={() => addExtraInventoryFromCard(room.id, "air-bed")}>
@@ -4030,6 +5655,9 @@ export function BookingPanel() {
                             </button>
                             <button type="button" onClick={() => addExtraInventoryFromCard(room.id, "rollaway")}>
                               Раскладушка
+                            </button>
+                            <button type="button" onClick={() => addExtraInventoryFromCard(room.id, "extra-place")}>
+                              Доп.место
                             </button>
                           </span>
                         ) : null}
@@ -4053,13 +5681,21 @@ export function BookingPanel() {
                     <Banknote size={17} />
                     <span>Счет</span>
                   </button>
-                  <button className="gpb-secondary gpb-send-object-button" type="button" onClick={sendObjectGalleryPhotosToWhatsApp} disabled={!objectGalleryPhotoPaths.length || sendState === "sending"}>
+                  <button className="gpb-secondary gpb-send-object-button" type="button" onClick={sendObjectGalleryPhotosToWhatsApp} disabled={!selectedObjectGalleryPhotoPaths.length || sendState === "sending"}>
                     <Image size={17} />
                     <span>{sendState === "sending" ? "..." : "Объект"}</span>
                   </button>
                   <button className="gpb-secondary gpb-send-object-button" type="button" onClick={sendObjectGalleryVideosToWhatsApp} disabled={!objectGalleryVideoPaths.length || sendState === "sending"}>
                     <Video size={17} />
                     <span>{sendState === "sending" ? "..." : "Объект"}</span>
+                  </button>
+                  <button className="gpb-secondary gpb-send-object-button" type="button" onClick={() => void sendIncludedCardsToWhatsApp(includedCardPages)} disabled={!includedCardPages.some((page) => page.mainPhotoPath) || sendState === "sending"}>
+                    <Check size={17} />
+                    <span>{sendState === "sending" ? "..." : "Включено"}</span>
+                  </button>
+                  <button className="gpb-secondary gpb-send-object-button" type="button" onClick={() => void sendAvailableRoomsSnapshotToWhatsApp()} disabled={!catalogPanelRooms.length || sendState === "sending"}>
+                    <Image size={17} />
+                    <span>{sendState === "sending" ? "..." : "Витрина"}</span>
                   </button>
                   <button className="gpb-secondary gpb-send-object-button" type="button" onClick={sendMenuPdfToWhatsApp} disabled={!activeMenuItems.length || sendState === "sending"}>
                     <Utensils size={17} />
@@ -4073,7 +5709,7 @@ export function BookingPanel() {
             ) : (
               <div className="gpb-empty-state">На выбранные даты свободных объектов нет.</div>
             )}
-            {lastReservation?.status === "booked" ? null : <AvailabilityConflictList conflicts={roomAvailabilityConflicts} checkIn={checkIn} checkOut={checkOut} />}
+            {isBookingConfirmed ? null : <AvailabilityConflictList conflicts={roomAvailabilityConflicts} checkIn={checkIn} checkOut={checkOut} holdNowMs={holdNowMs} onSelectReservation={setCancelReservationTarget} />}
         </div>
       </section>
 
@@ -4125,7 +5761,7 @@ export function BookingPanel() {
                 </label>
                 {selectedHourlyConflicts.length ? (
                   <div className="gpb-sauna-time-warning">
-                    Сауна занята: {selectedHourlyConflicts.map(({ reservation }) => `${reservation.checkInTime}-${getReservationHourlyEndTime(reservation)}`).join(", ")}
+                    Сауна занята: {selectedHourlyConflicts.map(formatHourlyConflictTimes).filter(Boolean).join(", ")}
                   </div>
                 ) : null}
               </div>
@@ -4136,15 +5772,38 @@ export function BookingPanel() {
               <div className="gpb-booking-agreement-summary">
                 <div className="gpb-agreement-summary-head">
                   <strong>На согласование</strong>
-                  <button
-                    type="button"
-                    onClick={copyReservationAgreementText}
-                    disabled={!currentReservationDraft}
-                    className={agreementCopyState === "copied" ? "is-copied" : ""}
-                    title={agreementCopyState === "copied" ? "Скопировано" : "Копировать текст"}
-                  >
-                    <Copy size={15} />
-                  </button>
+                  <span className="gpb-agreement-summary-actions">
+                    <button
+                      type="button"
+                      onClick={refreshReservationAgreementDraft}
+                      disabled={!currentReservationDraft || agreementRefreshState === "refreshing"}
+                      className={[
+                        agreementRefreshState === "refreshing" ? "is-refreshing" : "",
+                        agreementRefreshState === "refreshed" ? "is-copied" : "",
+                        agreementRefreshState === "error" ? "is-error" : ""
+                      ].filter(Boolean).join(" ")}
+                      title={
+                        agreementRefreshState === "refreshed"
+                          ? "Обновлено"
+                          : agreementRefreshState === "error"
+                            ? "Не удалось обновить"
+                            : "Обновить данные гостя"
+                      }
+                      aria-label="Обновить данные гостя"
+                    >
+                      <RefreshCw size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={copyReservationAgreementText}
+                      disabled={!currentReservationDraft}
+                      className={agreementCopyState === "copied" ? "is-copied" : ""}
+                      title={agreementCopyState === "copied" ? "Скопировано" : "Копировать текст"}
+                      aria-label="Копировать текст"
+                    >
+                      <Copy size={15} />
+                    </button>
+                  </span>
                 </div>
                 {currentReservationDraft ? (
                   <textarea
@@ -4210,7 +5869,18 @@ export function BookingPanel() {
                         type="checkbox"
                         onChange={(event) => togglePackageDiscount(event.target.checked)}
                       />
-                      <span>Пакетная скидка</span>
+                      <span>Пакет</span>
+                    </label>
+                  ) : null}
+                  {packagePeriodDiscountPercent > 0 ? (
+                    <label className={`gpb-package-discount-toggle ${periodDiscountEnabled && isPeriodDiscountEligible ? "is-active" : ""}`}>
+                      <input
+                        checked={periodDiscountEnabled}
+                        disabled={isBookingLocked || !isPeriodDiscountEligible}
+                        type="checkbox"
+                        onChange={(event) => togglePeriodDiscount(event.target.checked)}
+                      />
+                      <span>Период</span>
                     </label>
                   ) : null}
                   <label className={`gpb-package-discount-toggle ${!breakfastIncluded ? "is-active" : ""}`}>
@@ -4225,7 +5895,21 @@ export function BookingPanel() {
                         setAgreementSent(false);
                       }}
                     />
-                    <span>Без завтрака</span>
+                    <span>Без завтр.</span>
+                  </label>
+                  <label className={`gpb-package-discount-toggle ${extraInventoryChargeEnabled ? "is-active" : ""}`}>
+                    <input
+                      checked={extraInventoryChargeEnabled}
+                      disabled={isBookingLocked}
+                      type="checkbox"
+                      onChange={(event) => {
+                        setExtraInventoryChargeEnabled(event.target.checked);
+                        setManualTotalAmount(0);
+                        setLastReservation(null);
+                        setAgreementSent(false);
+                      }}
+                    />
+                    <span>Инв.</span>
                   </label>
                 </div>
                 <div className="gpb-sale-payment-block">
@@ -4237,10 +5921,11 @@ export function BookingPanel() {
                         key={method.id}
                         type="button"
                         onClick={() => {
-                          setManualSalePaymentMethod(method.id);
+                          const nextMethod = manualSalePaymentMethod === method.id ? "" : method.id;
+                          setManualSalePaymentMethod(nextMethod);
                           setIsPaymentMethodRequiredOpen(false);
                           if (lastReservation) {
-                            void updateReservation({ ...lastReservation, paymentMethod: method.id });
+                            void updateReservation({ ...lastReservation, paymentMethod: nextMethod || undefined });
                           } else {
                             setAgreementSent(false);
                           }
@@ -4302,38 +5987,6 @@ export function BookingPanel() {
                   onConfirm={(amount) => void confirmPrepaymentAmount(prepaymentAmountTarget, amount)}
                 />
               ) : null}
-              {balanceRoomSelectionTarget ? (
-                <InlineReservationRoomActionOverlay
-                  actionLabel="Принять доплату"
-                  emptyLabel="Нет номеров"
-                  reservation={balanceRoomSelectionTarget}
-                  rooms={pricedRooms}
-                  selectedRoomId={selectedBalanceRoomId}
-                  title="Доплата по номеру"
-                  onClose={() => setBalanceRoomSelectionTarget(null)}
-                  onSelect={setSelectedBalanceRoomId}
-                  onConfirm={(roomId) => {
-                    void markReservationBalancePaid(balanceRoomSelectionTarget, roomId);
-                    setBalanceRoomSelectionTarget(null);
-                  }}
-                />
-              ) : null}
-              {checkInRoomSelectionTarget ? (
-                <InlineReservationRoomActionOverlay
-                  actionLabel="Отметить въезд"
-                  emptyLabel="Нет номеров"
-                  reservation={checkInRoomSelectionTarget}
-                  rooms={pricedRooms}
-                  selectedRoomId={selectedCheckInRoomId}
-                  title="Въезд по номеру"
-                  onClose={() => setCheckInRoomSelectionTarget(null)}
-                  onSelect={setSelectedCheckInRoomId}
-                  onConfirm={(roomId) => {
-                    void markReservationCheckedIn(checkInRoomSelectionTarget, roomId);
-                    setCheckInRoomSelectionTarget(null);
-                  }}
-                />
-              ) : null}
               {extendReservationTarget ? (
                 <InlineReservationExtendOverlay
                   reservation={extendReservationTarget}
@@ -4352,7 +6005,7 @@ export function BookingPanel() {
                 />
               ) : null}
             </div>
-            {lastReservation?.status === "booked" ? (
+            {isBookingConfirmed ? (
               <>
                 <div className="gpb-addon-sales-block">
                   <div className="gpb-addon-sales-head">
@@ -4364,7 +6017,22 @@ export function BookingPanel() {
                       <div className="gpb-addon-sales-grid">
                         <label>
                           Дата
-                          <input type="date" value={addOnSaleDate} onChange={(event) => setAddOnSaleDate(event.target.value)} />
+                          <input
+                            min={getDefaultCheckInDate()}
+                            type="date"
+                            value={addOnSaleDate}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              if (value && isDateBeforeToday(value)) {
+                                const today = getDefaultCheckInDate();
+                                setBookingDateWarning(`Нельзя поставить доп продажу в прошлом: ${formatKazakhDate(value)}. Дата изменена на ${formatKazakhDate(today)}.`);
+                                setAddOnSaleDate(today);
+                              } else {
+                                setBookingDateWarning("");
+                                setAddOnSaleDate(value);
+                              }
+                            }}
+                          />
                         </label>
                         <label>
                           С
@@ -4412,7 +6080,7 @@ export function BookingPanel() {
                       </div>
                       {addOnSaleConflicts.length ? (
                         <div className="gpb-addon-sales-warning">
-                          Занято: {addOnSaleConflicts.map(({ reservation }) => `${reservation.checkInTime}-${getReservationHourlyEndTime(reservation)}`).join(", ")}
+                          Занято: {addOnSaleConflicts.map(formatHourlyConflictTimes).filter(Boolean).join(", ")}
                         </div>
                       ) : null}
                     </>
@@ -4522,8 +6190,8 @@ export function BookingPanel() {
               <button className="gpb-secondary" type="button" onClick={sendReservationTotalToWhatsApp} disabled={isBookingConfirmed || !canSendAgreementText || sendState === "sending"}>
                 <span>Отправить Итого</span>
               </button>
-              {lastReservation?.status === "booked" ? (
-                <button className="gpb-secondary is-danger" type="button" onClick={() => setCancelReservationTarget(lastReservation)}>
+              {cancelableReservation ? (
+                <button className="gpb-secondary is-danger" type="button" onClick={() => setCancelReservationTarget(cancelableReservation)}>
                   <span>Снять бронь</span>
                 </button>
               ) : (
@@ -4592,6 +6260,74 @@ export function BookingPanel() {
                 </button>
               ))}
             </div>
+            <div className="gpb-client-media-section">
+              <div className="gpb-client-media-head">
+                <strong>Галерея объекта</strong>
+                <span>{objectGalleryPhotoPaths.length} фото · {objectGalleryVideoPaths.length} видео</span>
+              </div>
+              {objectGalleryMediaItems.length ? (
+                <div className="gpb-client-media-grid">
+                  {objectGalleryMediaItems.map((item) => (
+                    <div className={`gpb-client-media-card ${item.type === "video" ? "is-video" : ""}`} key={item.id}>
+                      <div className="gpb-client-media-preview">
+                        {item.type === "photo" ? (
+                          <MediaImage alt={item.title} path={item.path} />
+                        ) : (
+                          <MediaVideo path={item.path} />
+                        )}
+                      </div>
+                      <div className="gpb-client-media-meta">
+                        <span>{item.title}</span>
+                        {item.type === "photo" && item.description.trim() ? <small>{item.description.trim()}</small> : null}
+                        <button
+                          className="gpb-secondary"
+                          type="button"
+                          onClick={() => void sendObjectGalleryMediaToWhatsApp(item.path, item.type, item.title)}
+                          disabled={sendState === "sending"}
+                        >
+                          <Send size={14} />
+                          <span>{sendState === "sending" ? "..." : "Отправить"}</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="gpb-client-media-empty">Галерея объекта пуста.</div>
+              )}
+            </div>
+            <div className="gpb-client-media-section">
+              <div className="gpb-client-media-head">
+                <strong>Галерея меню</strong>
+                <span>{menuGalleryItems.length} фото</span>
+              </div>
+              {menuGalleryItems.length ? (
+                <div className="gpb-client-media-grid">
+                  {menuGalleryItems.map((item) => (
+                    <div className="gpb-client-media-card" key={item.id}>
+                      <div className="gpb-client-media-preview">
+                        <MediaImage alt={item.title || "Блюдо"} path={item.photoPath} />
+                      </div>
+                      <div className="gpb-client-media-meta">
+                        <span>{item.title}</span>
+                        <small>{item.price ? formatPrice(item.price) : "Без цены"}</small>
+                        <button
+                          className="gpb-secondary"
+                          type="button"
+                          onClick={() => void sendMenuItemPhotoToWhatsApp(item)}
+                          disabled={sendState === "sending"}
+                        >
+                          <Send size={14} />
+                          <span>{sendState === "sending" ? "..." : "Отправить"}</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="gpb-client-media-empty">В меню нет фото блюд.</div>
+              )}
+            </div>
           </div>
         </details>
       </section>
@@ -4629,13 +6365,18 @@ export function BookingPanel() {
 
       {roomDateEditTarget ? (
         <RoomDateOverrideModal
-          checkIn={roomDateOverrides[roomDateEditTarget.id]?.checkIn ?? checkIn}
-          checkOut={roomDateOverrides[roomDateEditTarget.id]?.checkOut ?? checkOut}
+          checkIn={getRoomDateRange(roomDateEditTarget.id, checkIn, checkOut, roomDateOverrides).checkIn}
+          checkOut={getRoomDateRange(roomDateEditTarget.id, checkIn, checkOut, roomDateOverrides).checkOut}
           fallbackCheckIn={checkIn}
           fallbackCheckOut={checkOut}
           room={roomDateEditTarget}
           onClose={() => setRoomDateEditTarget(null)}
           onSave={(nextCheckIn, nextCheckOut) => {
+            if (nextCheckIn < getDefaultCheckInDate() || nextCheckOut < getDefaultCheckInDate()) {
+              setBookingDateWarning(`Нельзя поставить даты номера в прошлом. Заезд должен быть не раньше ${formatKazakhDate(getDefaultCheckInDate())}.`);
+              return;
+            }
+            setBookingDateWarning("");
             setRoomDateOverrides((current) => {
               const next = { ...current };
               if (nextCheckIn === checkIn && nextCheckOut === checkOut) {
@@ -4654,8 +6395,9 @@ export function BookingPanel() {
       {isPricePdfOptionsOpen ? (
         <PricePdfOptionsModal
           draggedRoomId={draggedPricePdfRoomId}
-          galleryPhotoCount={objectGalleryPhotoPaths.length}
-          galleryPhotoPaths={objectGalleryPhotoPaths}
+          galleryPhotoCount={selectedObjectGalleryPhotoPaths.length}
+          galleryPhotoDescriptions={objectGalleryPhotoDescriptions}
+          galleryPhotoPaths={selectedObjectGalleryPhotoPaths}
           galleryVideoCount={objectGalleryVideoPaths.length}
           galleryVideoPaths={objectGalleryVideoPaths}
           groupPeriodTotals={pricePdfGroupPeriodTotals}
@@ -4674,7 +6416,8 @@ export function BookingPanel() {
           periodDiscountFrom={packagePeriodDiscountFrom}
           periodDiscountPercent={packagePeriodDiscountPercent}
           periodDiscountTo={packagePeriodDiscountTo}
-          rooms={packageIncludeAmenities ? visibleAvailableRooms : visibleAvailableRooms.filter((room) => room.category !== "amenity")}
+          roomStatuses={pricePdfRoomStatuses}
+          rooms={pricePdfCandidateRooms}
           selectedRoomIds={pricePdfRoomIds}
           submitLabel={pricePdfMode === "external" ? "Скачать PDF" : "Отправить прайс"}
           summary={pricePdfAvailabilitySummary}
@@ -4700,7 +6443,7 @@ export function BookingPanel() {
           checkIn={checkIn}
           checkOut={checkOut}
           description={socialPriceDescription}
-          rooms={packageIncludeAmenities ? visibleAvailableRooms : visibleAvailableRooms.filter((room) => room.category !== "amenity")}
+          rooms={pricePdfCandidateRooms}
           selectedRoomIds={socialPriceRoomIds}
           onClose={() => setIsSocialPriceImageOpen(false)}
           onDescriptionChange={setSocialPriceDescription}
@@ -4780,6 +6523,38 @@ export function BookingPanel() {
           onClose={() => setIsReservationsOpen(false)}
         />
       ) : null}
+      {balanceRoomSelectionTarget ? (
+        <InlineReservationRoomActionOverlay
+          actionLabel="Принять доплату"
+          emptyLabel="Нет номеров"
+          reservation={balanceRoomSelectionTarget}
+          rooms={pricedRooms}
+          selectedRoomId={selectedBalanceRoomId}
+          title="Доплата по номеру"
+          onClose={() => setBalanceRoomSelectionTarget(null)}
+          onSelect={setSelectedBalanceRoomId}
+          onConfirm={(roomId) => {
+            void markReservationBalancePaid(balanceRoomSelectionTarget, roomId);
+            setBalanceRoomSelectionTarget(null);
+          }}
+        />
+      ) : null}
+      {checkInRoomSelectionTarget ? (
+        <InlineReservationRoomActionOverlay
+          actionLabel="Отметить въезд"
+          emptyLabel="Нет номеров"
+          reservation={checkInRoomSelectionTarget}
+          rooms={pricedRooms}
+          selectedRoomId={selectedCheckInRoomId}
+          title="Въезд по номеру"
+          onClose={() => setCheckInRoomSelectionTarget(null)}
+          onSelect={setSelectedCheckInRoomId}
+          onConfirm={(roomId) => {
+            void markReservationCheckedIn(checkInRoomSelectionTarget, roomId);
+            setCheckInRoomSelectionTarget(null);
+          }}
+        />
+      ) : null}
       {isGuestDatabaseOpen ? (
         <GuestDatabaseModal
           breakfastPricePerPerson={breakfastPricePerPerson}
@@ -4814,7 +6589,10 @@ export function BookingPanel() {
           linkMethods={linkMethods}
           menuItems={menuItems}
           menuUploadItemId={menuUploadItemId}
+          includedCardPages={includedCardPages}
+          objectGalleryPhotoDescriptions={objectGalleryPhotoDescriptions}
           objectGalleryPhotoPaths={objectGalleryPhotoPaths}
+          objectGallerySelectedPhotoPaths={objectGallerySelectedPhotoPaths}
           objectGalleryUploadState={objectGalleryUploadState}
           objectGalleryVideoPaths={objectGalleryVideoPaths}
           paymentMethods={paymentMethods}
@@ -4823,6 +6601,11 @@ export function BookingPanel() {
           weatherLongitude={weatherLongitude}
           inventoryAirBeds={inventoryAirBeds}
           inventoryRollaways={inventoryRollaways}
+          inventoryAirBedPrice={inventoryAirBedPrice}
+          inventoryRollawayPrice={inventoryRollawayPrice}
+          inventoryExtraPlacePrice={inventoryExtraPlacePrice}
+          inventoryExtraPlaceAdultPercent={inventoryExtraPlaceAdultPercent}
+          inventoryExtraPlaceChildPercent={inventoryExtraPlaceChildPercent}
           inventoryCustomFields={inventoryCustomFields}
           packageDiscountPercent={packageDiscountPercent}
           packagePeriodDiscountPercent={packagePeriodDiscountPercent}
@@ -4834,6 +6617,7 @@ export function BookingPanel() {
           packageIncludeAmenities={packageIncludeAmenities}
           packageMinRooms={packageMinRooms}
           servicePassword={servicePassword}
+          agreementHoldMinutes={agreementHoldMinutes}
           onClose={() => setIsSettingsOpen(false)}
           onCompanyRequisiteChange={handleCompanyRequisiteChange}
           onCompanyRequisiteDelete={handleCompanyRequisiteDelete}
@@ -4845,10 +6629,16 @@ export function BookingPanel() {
           onMenuItemChange={handleMenuItemChange}
           onMenuItemCreate={handleMenuItemCreate}
           onMenuItemDelete={handleMenuItemDelete}
+          onMenuItemPhotoDownload={(item) => void downloadMenuItemPhoto(item)}
           onMenuItemPhotoUpload={handleMenuItemPhotoUpload}
+          onMenuPhotosDownload={() => void downloadAllMenuPhotos()}
           onMenuItemsBulkPriceChange={handleMenuItemsBulkPriceChange}
           onMenuItemsSave={handleMenuItemsSave}
           onObjectGalleryDelete={handleObjectGalleryDelete}
+          onObjectGalleryPhotoDescriptionChange={handleObjectGalleryPhotoDescriptionChange}
+          onObjectGalleryPhotoDragStart={setDraggedObjectGalleryPhotoPath}
+          onObjectGalleryPhotoDrop={handleObjectGalleryPhotoDrop}
+          onObjectGalleryPhotoSelectedChange={handleObjectGalleryPhotoSelectedChange}
           onObjectGallerySave={handleObjectGallerySave}
           onObjectGalleryUpload={handleObjectGalleryUpload}
           onPaymentMethodChange={handlePaymentMethodChange}
@@ -4856,12 +6646,14 @@ export function BookingPanel() {
           onPaymentSettingsSave={handlePaymentSettingsSave}
           onWeatherSettingsChange={handleWeatherSettingsChange}
           onInventorySettingsChange={handleInventorySettingsChange}
+          onIncludedCardPagesChange={(pages) => void handleIncludedCardPagesChange(pages)}
           onInventoryCustomFieldChange={handleInventoryCustomFieldChange}
           onInventoryCustomFieldDelete={handleInventoryCustomFieldDelete}
           onPackageSettingsChange={handlePackageSettingsChange}
           onPackageCustomFieldChange={handlePackageCustomFieldChange}
           onPackageCustomFieldDelete={handlePackageCustomFieldDelete}
           onServicePasswordChange={handleServicePasswordChange}
+          onAgreementHoldMinutesChange={handleAgreementHoldMinutesChange}
         />
       ) : null}
       {cancelReservationTarget ? (
@@ -5175,8 +6967,14 @@ function CancelReservationModal({
           <button type="button" onClick={() => onSelectReason("Клиент отменил, предоплата не возвращается")}>
             Клиент отменил, предоплата не возвращается
           </button>
+          <button type="button" onClick={() => onSelectReason("Клиент отменил, деньги возвращаются")}>
+            Клиент отменил, деньги возвращаются
+          </button>
           <button type="button" onClick={() => onSelectReason("Отель отменил, предоплата возвращается")}>
             Отель отменил, предоплата возвращается
+          </button>
+          <button type="button" onClick={() => onSelectReason(BOOKING_ERROR_CANCEL_REASON)}>
+            Ошибка бронирования
           </button>
         </div>
       </div>
@@ -5292,6 +7090,171 @@ function InvoiceModal({
   );
 }
 
+function IncludedCardBuilderPanel({
+  descriptions,
+  pages,
+  photoPaths,
+  selectedPhotoPaths,
+  onChange
+}: {
+  descriptions: Record<string, string>;
+  pages: IncludedCardPage[];
+  photoPaths: string[];
+  selectedPhotoPaths: string[];
+  onChange: (pages: IncludedCardPage[]) => void;
+}) {
+  const sourcePaths = photoPaths.length ? photoPaths : selectedPhotoPaths;
+  const initialPaths = selectedPhotoPaths.length ? selectedPhotoPaths : sourcePaths;
+  const createPage = (index: number, template: IncludedCardTemplate = "hero-thumbs-description"): IncludedCardPage => ({
+    id: `included-page-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+    template,
+    mainPhotoPath: initialPaths[0] ?? "",
+    thumbnailRows: 1,
+    thumbnailPaths: initialPaths.filter((path) => path !== initialPaths[0]).slice(0, 4),
+    description: buildIncludedCardDefaultDescription(initialPaths, descriptions)
+  });
+  const normalizedPages = pages.length ? pages : [createPage(1)];
+  const [activePageId, setActivePageId] = useState(() => normalizedPages[0]?.id ?? "");
+  const activePage = normalizedPages.find((page) => page.id === activePageId) ?? normalizedPages[0];
+
+  useEffect(() => {
+    if (!pages.length && sourcePaths.length) onChange(normalizedPages);
+  }, [pages.length, sourcePaths.join("|")]);
+
+  function commit(nextPages: IncludedCardPage[]) {
+    onChange(nextPages);
+  }
+
+  function updatePage(pageId: string, patch: Partial<IncludedCardPage>) {
+    commit(normalizedPages.map((page) => page.id === pageId ? { ...page, ...patch } : page));
+  }
+
+  function addPage(template: IncludedCardTemplate) {
+    const nextPage = createPage(normalizedPages.length + 1, template);
+    commit(normalizedPages.concat(nextPage));
+    setActivePageId(nextPage.id);
+  }
+
+  function removePage(pageId: string) {
+    if (normalizedPages.length <= 1) return;
+    const nextPages = normalizedPages.filter((page) => page.id !== pageId);
+    commit(nextPages);
+    if (activePageId === pageId) setActivePageId(nextPages[0]?.id ?? "");
+  }
+
+  function getDropPath(event: DragEvent<HTMLElement>) {
+    const path = event.dataTransfer.getData("text/plain");
+    return sourcePaths.includes(path) ? path : "";
+  }
+
+  function dropMain(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    if (!activePage) return;
+    const path = getDropPath(event);
+    if (!path) return;
+    updatePage(activePage.id, {
+      mainPhotoPath: path,
+      thumbnailPaths: activePage.thumbnailPaths.filter((item) => item !== path)
+    });
+  }
+
+  function dropThumb(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    if (!activePage) return;
+    const path = getDropPath(event);
+    if (!path || path === activePage.mainPhotoPath) return;
+    const thumbnailLimit = getIncludedCardThumbnailLimit(activePage);
+    const nextThumbs = activePage.thumbnailPaths.includes(path)
+      ? activePage.thumbnailPaths
+      : activePage.thumbnailPaths.concat(path).slice(0, thumbnailLimit);
+    updatePage(activePage.id, { thumbnailPaths: nextThumbs });
+  }
+
+  function addThumbnailRow() {
+    if (!activePage) return;
+    updatePage(activePage.id, { thumbnailRows: INCLUDED_CARD_MAX_THUMB_ROWS });
+  }
+
+  return (
+    <aside className="gpb-included-settings-builder">
+      <div className="gpb-included-settings-header">
+        <strong>Конструктор “Включено”</strong>
+        <span>Перетащите фото в главное поле или миниатюры.</span>
+      </div>
+      <div className="gpb-included-settings-pages">
+        {normalizedPages.map((page, index) => (
+          <button className={page.id === activePage?.id ? "is-active" : ""} key={page.id} type="button" onClick={() => setActivePageId(page.id)}>
+            {index + 1}
+          </button>
+        ))}
+        <button type="button" onClick={() => addPage("hero-thumbs-description")}>+</button>
+      </div>
+      {activePage ? (
+        <>
+          <label className="gpb-included-settings-field">
+            Шаблон
+            <select value={activePage.template} onChange={(event) => updatePage(activePage.id, { template: event.target.value as IncludedCardTemplate })}>
+              <option value="hero-thumbs-description">Главное фото + миниатюры + описание</option>
+              <option value="photo-description">Просто фото + описание</option>
+            </select>
+          </label>
+          <div className="gpb-included-drop-preview">
+            <div className="gpb-included-drop-main" onDragOver={(event) => event.preventDefault()} onDrop={dropMain}>
+              {activePage.mainPhotoPath ? <MediaImage path={activePage.mainPhotoPath} alt="Главное фото" /> : <span>Перетащите главное фото</span>}
+            </div>
+            {activePage.template === "hero-thumbs-description" ? (
+              <>
+                <div className="gpb-included-thumbs-header">
+                  <span>Миниатюры</span>
+                  {getIncludedCardThumbnailRows(activePage) < INCLUDED_CARD_MAX_THUMB_ROWS ? (
+                    <button type="button" onClick={addThumbnailRow} title="Добавить второй ряд миниатюр">+</button>
+                  ) : null}
+                </div>
+                <div className="gpb-included-drop-thumbs" onDragOver={(event) => event.preventDefault()} onDrop={dropThumb}>
+                  {Array.from({ length: getIncludedCardThumbnailLimit(activePage) }).map((_, index) => {
+                    const path = activePage.thumbnailPaths[index];
+                    return path ? (
+                      <button key={path} type="button" onClick={() => updatePage(activePage.id, { thumbnailPaths: activePage.thumbnailPaths.filter((item) => item !== path) })}>
+                        <MediaImage path={path} alt="Миниатюра" />
+                      </button>
+                    ) : (
+                      <div className="gpb-included-thumb-slot" key={`empty-${index}`}>Миниатюра</div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : null}
+            <textarea value={activePage.description} onChange={(event) => updatePage(activePage.id, { description: event.target.value })} placeholder="Описание карточки" />
+          </div>
+          <div className="gpb-included-settings-actions">
+            <button type="button" onClick={() => addPage("photo-description")}>+ Фото + описание</button>
+            <button type="button" onClick={() => removePage(activePage.id)} disabled={normalizedPages.length <= 1}>Удалить</button>
+          </div>
+        </>
+      ) : null}
+    </aside>
+  );
+}
+
+function IncludedCardPreview({ page, descriptions }: { page: IncludedCardPage; descriptions: Record<string, string> }) {
+  const description = page.description.trim() || buildIncludedCardDefaultDescription([page.mainPhotoPath].concat(page.thumbnailPaths), descriptions);
+  return (
+    <div className={`gpb-included-preview is-${page.template}`}>
+      {page.mainPhotoPath ? <MediaImage path={page.mainPhotoPath} alt="Главное фото" /> : <div className="gpb-media-placeholder">Фото</div>}
+      {page.template === "hero-thumbs-description" && page.thumbnailPaths.length ? (
+        <div className="gpb-included-preview-thumbs">
+          {page.thumbnailPaths.slice(0, getIncludedCardThumbnailLimit(page)).map((path) => <MediaImage key={path} path={path} alt="Миниатюра" />)}
+        </div>
+      ) : null}
+      {description ? (
+        <div className="gpb-included-preview-description">
+          {description.split("\n").filter(Boolean).slice(0, 8).map((line, index) => <span key={`${line}-${index}`}>{line}</span>)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function RoomDateOverrideModal({
   checkIn,
   checkOut,
@@ -5311,7 +7274,11 @@ function RoomDateOverrideModal({
 }) {
   const [nextCheckIn, setNextCheckIn] = useState(checkIn);
   const [nextCheckOut, setNextCheckOut] = useState(checkOut);
-  const isInvalid = !nextCheckIn || !nextCheckOut || nextCheckOut <= nextCheckIn;
+  const [dateWarning, setDateWarning] = useState("");
+  const minCheckIn = getDefaultCheckInDate();
+  const minCheckOut = getMinimumCheckOutDate(nextCheckIn);
+  const isPastDate = nextCheckIn < minCheckIn || nextCheckOut < minCheckIn;
+  const isInvalid = !nextCheckIn || !nextCheckOut || nextCheckOut <= nextCheckIn || isPastDate;
 
   return (
     <div className="gpb-create-backdrop">
@@ -5322,6 +7289,10 @@ function RoomDateOverrideModal({
         aria-label="Даты номера"
         onSubmit={(event) => {
           event.preventDefault();
+          if (isPastDate) {
+            setDateWarning(`Нельзя поставить номер в прошлом. Минимальная дата заезда: ${formatKazakhDate(minCheckIn)}.`);
+            return;
+          }
           if (!isInvalid) onSave(nextCheckIn, nextCheckOut);
         }}
       >
@@ -5337,13 +7308,49 @@ function RoomDateOverrideModal({
         <div className="gpb-create-form gpb-room-date-form">
           <label>
             Заезд
-            <input type="date" value={nextCheckIn} onChange={(event) => setNextCheckIn(event.target.value)} />
+            <input
+              min={minCheckIn}
+              type="date"
+              value={nextCheckIn}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value && isDateBeforeToday(value)) {
+                  setDateWarning(`Нельзя поставить заезд в прошлом: ${formatKazakhDate(value)}.`);
+                  setNextCheckIn(minCheckIn);
+                  setNextCheckOut(getMinimumCheckOutDate(minCheckIn));
+                } else {
+                  setDateWarning("");
+                  setNextCheckIn(value);
+                  if (nextCheckOut && nextCheckOut <= value) {
+                    setNextCheckOut(getMinimumCheckOutDate(value));
+                  }
+                }
+              }}
+            />
           </label>
           <label>
             Выезд
-            <input type="date" value={nextCheckOut} onChange={(event) => setNextCheckOut(event.target.value)} />
+            <input
+              min={minCheckOut}
+              type="date"
+              value={nextCheckOut}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value && isDateBeforeToday(value)) {
+                  setDateWarning(`Нельзя поставить выезд в прошлом: ${formatKazakhDate(value)}.`);
+                  setNextCheckOut(minCheckOut);
+                } else if (value && nextCheckIn && value <= nextCheckIn) {
+                  setDateWarning("Дата выезда должна быть позже даты заезда.");
+                  setNextCheckOut(getMinimumCheckOutDate(nextCheckIn));
+                } else {
+                  setDateWarning("");
+                  setNextCheckOut(value);
+                }
+              }}
+            />
           </label>
         </div>
+        {dateWarning ? <div className="gpb-booking-date-warning">{dateWarning}</div> : null}
         <footer className="gpb-create-footer">
           <button className="gpb-secondary" type="button" onClick={() => onSave(fallbackCheckIn, fallbackCheckOut)}>
             Сбросить
@@ -5514,7 +7521,7 @@ function GuestDatabaseModal({
   }, []);
 
   const rows = useMemo(
-    () => contacts.map((contact) => buildGuestDatabaseRow(
+    () => getUniqueGuestContactsByPhone(contacts).map((contact) => buildGuestDatabaseRow(
       contact,
       reservations,
       Object.entries(drafts).map(([key, draft]) => ({ draft, key })),
@@ -5631,7 +7638,10 @@ function GuestDatabaseModal({
     const savedContact = await saveGuestContact(nextContact);
     setContacts((current) =>
       current
-        .filter((contact) => normalizePhoneSearch(contact.phone) !== normalizePhoneSearch(originalPhone))
+        .filter((contact) => {
+          const phone = normalizePhoneSearch(contact.phone);
+          return phone !== normalizePhoneSearch(originalPhone) && phone !== normalizePhoneSearch(savedContact.phone);
+        })
         .concat(savedContact)
         .sort((left, right) => right.inquiryDate.localeCompare(left.inquiryDate))
     );
@@ -5838,6 +7848,7 @@ function GuestDatabaseModal({
                     <>
                       <select className="gpb-guests-inline-input" value={guestEditForm.status} onChange={(event) => setGuestEditForm((current) => ({ ...current, status: event.target.value }))}>
                         <option value="">Нет</option>
+                        <option value="Чат начат">Чат начат</option>
                         <option value="Прайс отправлен">Прайс отправлен</option>
                         <option value="Номер отправлен">Номер отправлен</option>
                         <option value="На согласовании">На согласовании</option>
@@ -5982,25 +7993,16 @@ function buildGuestDatabaseRow(
   breakfastPricePerPerson = 0
 ) {
   const contactPhone = normalizePhoneSearch(contact.phone);
-  const contactAppeal = normalizeContactLookupText(contact.appeal);
   const matchingReservations = reservations
     .filter((reservation) => {
       const reservationPhone = normalizePhoneSearch(reservation.phone);
-      const reservationName = normalizeContactLookupText(reservation.guestFirstName);
-      return Boolean(
-        (contactPhone && reservationPhone && contactPhone === reservationPhone) ||
-        (contactAppeal && reservationName && contactAppeal === reservationName)
-      );
+      return Boolean(contactPhone && reservationPhone && contactPhone === reservationPhone);
     })
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   const matchingDrafts = drafts
     .filter(({ draft }) => {
       const draftPhone = normalizePhoneSearch(draft.phone);
-      const draftName = normalizeContactLookupText(draft.guestFirstName);
-      return Boolean(
-        (contactPhone && draftPhone && contactPhone === draftPhone) ||
-        (contactAppeal && draftName && contactAppeal === draftName)
-      );
+      return Boolean(contactPhone && draftPhone && contactPhone === draftPhone);
     })
     .sort((left, right) => right.draft.updatedAt.localeCompare(left.draft.updatedAt));
   const latestReservation = matchingReservations.find((reservation) => !reservation.isAddOnSale) ?? matchingReservations[0] ?? null;
@@ -6120,11 +8122,12 @@ function getDraftGuestDatabaseStatus(draft: ChatBookingDraft | null, agreementSe
   if (agreementSent) return "На согласовании";
   if (draft?.catalogStatus === "price-sent") return "Прайс отправлен";
   if (draft?.catalogStatus === "room-sent") return "Номер отправлен";
+  if (draft?.chatStartedAt) return "Чат начат";
   return "";
 }
 
 function getGuestDatabaseStatusTone(status: string) {
-  if (status === "Прайс отправлен" || status === "Номер отправлен") return "info";
+  if (status === "Прайс отправлен" || status === "Номер отправлен" || status === "Чат начат") return "info";
   if (status === "На согласовании") return "pending";
   if (status === "Предоплата получена" || status === "Забронировано" || status === "Въехал") return "success";
   if (status === "Продлен") return "extended";
@@ -6342,19 +8345,14 @@ function buildGuestDatabaseEditedAddOnReservation(reservation: Reservation, tota
 
 function getMatchingGuestDatabaseAddOnReservations(row: GuestDatabaseRow, form: GuestDatabaseEditForm, reservations: Reservation[]) {
   const rowPhone = normalizePhoneSearch(row.phone);
-  const rowAppeal = normalizeContactLookupText(row.appeal);
   const formPhone = normalizePhoneSearch(form.phone);
-  const formAppeal = normalizeContactLookupText(form.appeal);
 
   return reservations.filter((reservation) => {
     if (!reservation.isAddOnSale) return false;
     const reservationPhone = normalizePhoneSearch(reservation.phone);
-    const reservationName = normalizeContactLookupText(reservation.guestFirstName);
     return Boolean(
       (rowPhone && reservationPhone && rowPhone === reservationPhone) ||
-      (formPhone && reservationPhone && formPhone === reservationPhone) ||
-      (rowAppeal && reservationName && rowAppeal === reservationName) ||
-      (formAppeal && reservationName && formAppeal === reservationName)
+      (formPhone && reservationPhone && formPhone === reservationPhone)
     );
   });
 }
@@ -6388,14 +8386,11 @@ function updateMatchingGuestDatabaseDraftState(
 
 function getMatchingGuestDatabaseDraftEntries(row: GuestDatabaseRow, drafts: Record<string, ChatBookingDraft>) {
   const rowPhone = normalizePhoneSearch(row.phone);
-  const rowAppeal = normalizeContactLookupText(row.appeal);
   return Object.entries(drafts).filter(([key, draft]) => {
     const draftPhone = normalizePhoneSearch(draft.phone);
-    const draftName = normalizeContactLookupText(draft.guestFirstName);
     return Boolean(
       key === row.draftKey ||
-      (rowPhone && draftPhone && rowPhone === draftPhone) ||
-      (rowAppeal && draftName && rowAppeal === draftName)
+      (rowPhone && draftPhone && rowPhone === draftPhone)
     );
   });
 }
@@ -6415,6 +8410,7 @@ function buildEditedGuestDatabaseDraft(
 
   return {
     ...draft,
+    chatStartedAt: draft.chatStartedAt || (statusLabel === "Чат начат" ? new Date().toISOString() : undefined),
     agreementEverSent: draft.agreementEverSent || statusLabel === "На согласовании",
     agreementSent: draft.agreementSent || statusLabel === "На согласовании",
     catalogStatus: statusLabel === "Прайс отправлен" ? "price-sent" : statusLabel === "Номер отправлен" ? "room-sent" : draft.catalogStatus,
@@ -6500,6 +8496,19 @@ const GUEST_DATABASE_COLUMNS = [
 
 type GuestDatabaseColumn = typeof GUEST_DATABASE_COLUMNS[number];
 type GuestDatabaseRow = ReturnType<typeof buildGuestDatabaseRow>;
+
+function getUniqueGuestContactsByPhone(contacts: GuestContact[]) {
+  const byPhone = new Map<string, GuestContact>();
+  contacts.forEach((contact) => {
+    const phone = normalizePhoneSearch(contact.phone);
+    if (!phone) return;
+    const current = byPhone.get(phone);
+    if (!current || contact.inquiryDate.localeCompare(current.inquiryDate) >= 0) {
+      byPhone.set(phone, contact);
+    }
+  });
+  return Array.from(byPhone.values());
+}
 
 function hasGuestDatabaseColumnFilter(columnKey: string, filters: Record<string, string>, sort: { key: string; direction: "asc" | "desc" } | null) {
   return Boolean(filters[columnKey] || filters[`${columnKey}:from`] || filters[`${columnKey}:to`] || sort?.key === columnKey);
@@ -7054,11 +9063,15 @@ function ExpensePieChart({
 function AvailabilityConflictList({
   checkIn,
   checkOut,
-  conflicts
+  conflicts,
+  holdNowMs,
+  onSelectReservation
 }: {
   checkIn: string;
   checkOut: string;
   conflicts: AvailabilityConflict[];
+  holdNowMs: number;
+  onSelectReservation: (reservation: Reservation) => void;
 }) {
   if (!conflicts.length) {
     return null;
@@ -7066,17 +9079,26 @@ function AvailabilityConflictList({
 
   return (
     <div className="gpb-availability-conflicts">
-      <strong>Заняты в период {formatReservationRangeText(checkIn, checkOut)}</strong>
+      <strong>Заняты / на согласовании в период {formatReservationRangeText(checkIn, checkOut)}</strong>
       <div>
-        {conflicts.map(({ busyFrom, busyTo, reservation, room }) => (
-          <div className="gpb-availability-conflict-row" key={`${room.id}-${reservation.id}`}>
-            <b>{formatBookingPickerObjectLabel(room)} - Занято</b>
+        {conflicts.map(({ busyFrom, busyTo, hold, reservation, room }) => (
+          <div className={`gpb-availability-conflict-row ${hold ? "is-hold" : ""}`} key={`${room.id}-${reservation?.id ?? hold?.id}`}>
+            <b>{formatBookingPickerObjectLabel(room)} - {hold ? "На согласовании" : "Занято"}</b>
             <span>
-              {isHourlyBookingObject(room)
-                ? `${formatShortDateText(reservation.checkIn)} · ${busyFrom}-${busyTo}`
-                : formatReservationRangeText(reservation.checkIn, reservation.checkOut)}
+              {hold
+                ? `${formatReservationRangeText(hold.checkIn, hold.checkOut)} · ${formatHoldCountdown(hold.expiresAt, holdNowMs)} · до ${formatHoldTime(hold.expiresAt)}`
+                : reservation && isHourlyBookingObject(room)
+                  ? `${formatShortDateText(reservation.checkIn)} · ${busyFrom}-${busyTo}`
+                  : reservation
+                  ? formatReservationRangeText(reservation.checkIn, reservation.checkOut)
+                  : ""}
             </span>
-            {reservation.guestFirstName ? <small>{reservation.guestFirstName}</small> : null}
+            {hold?.guestName || reservation?.guestFirstName ? <small>{hold?.guestName || reservation?.guestFirstName}</small> : null}
+            {reservation ? (
+              <button type="button" onClick={() => onSelectReservation(reservation)}>
+                Снять
+              </button>
+            ) : null}
           </div>
         ))}
       </div>
@@ -7149,6 +9171,7 @@ function PricePdfOptionsModal({
   draggedRoomId,
   discountPercent,
   galleryPhotoCount,
+  galleryPhotoDescriptions,
   galleryPhotoPaths,
   galleryVideoCount,
   galleryVideoPaths,
@@ -7162,6 +9185,7 @@ function PricePdfOptionsModal({
   periodDiscountFrom,
   periodDiscountPercent,
   periodDiscountTo,
+  roomStatuses,
   rooms,
   selectedRoomIds,
   submitLabel,
@@ -7189,6 +9213,7 @@ function PricePdfOptionsModal({
   draggedRoomId: string;
   discountPercent: number;
   galleryPhotoCount: number;
+  galleryPhotoDescriptions: Record<string, string>;
   galleryPhotoPaths: string[];
   galleryVideoCount: number;
   galleryVideoPaths: string[];
@@ -7202,6 +9227,7 @@ function PricePdfOptionsModal({
   periodDiscountFrom: string;
   periodDiscountPercent: number;
   periodDiscountTo: string;
+  roomStatuses: Record<string, PricePdfRoomStatus>;
   rooms: Room[];
   selectedRoomIds: string[];
   submitLabel: string;
@@ -7250,6 +9276,7 @@ function PricePdfOptionsModal({
     options.join("|"),
     selectedRoomIds.join("|"),
     galleryPhotoPaths.join("|"),
+    galleryPhotoPaths.map((path) => galleryPhotoDescriptions[path] ?? "").join("|"),
     galleryVideoPaths.join("|"),
     String(groupPeriodTotals),
     periodDiscountFrom,
@@ -7331,6 +9358,7 @@ function PricePdfOptionsModal({
           checkOutTime: defaultCheckOutTime,
           discountPercent,
           giftText,
+          galleryPhotoDescriptions,
           galleryPhotoPaths,
           galleryVideoPaths,
           groupPeriodTotals,
@@ -7495,10 +9523,11 @@ function PricePdfOptionsModal({
             <div className="gpb-price-pdf-room-list">
               {displayRooms.map((room) => {
                 const isSelected = selectedRoomIds.includes(room.id);
+                const roomStatus = roomStatuses[room.id] ?? { kind: "available", label: "Свободен" };
                 return (
                 <label
                   key={room.id}
-                  className={`gpb-price-pdf-room-option ${draggedRoomId === room.id ? "is-dragging" : ""} ${isSelected ? "is-selected" : ""}`}
+                  className={`gpb-price-pdf-room-option ${draggedRoomId === room.id ? "is-dragging" : ""} ${isSelected ? "is-selected" : ""} is-${roomStatus.kind}`}
                   draggable={isSelected}
                   onDragEnd={onDragEnd}
                   onDragOver={(event) => {
@@ -7521,6 +9550,7 @@ function PricePdfOptionsModal({
                   <span>
                     <b>{formatBookingPickerObjectLabel(room)}</b>
                     <small>{getPanelObjectMetaLine(room)}</small>
+                    <em>{roomStatus.label}</em>
                   </span>
                 </label>
               );
@@ -7963,7 +9993,10 @@ function SettingsModal({
   linkMethods,
   menuItems,
   menuUploadItemId,
+  includedCardPages,
+  objectGalleryPhotoDescriptions,
   objectGalleryPhotoPaths,
+  objectGallerySelectedPhotoPaths,
   objectGalleryUploadState,
   objectGalleryVideoPaths,
   paymentMethods,
@@ -7972,6 +10005,11 @@ function SettingsModal({
   weatherLongitude,
   inventoryAirBeds,
   inventoryRollaways,
+  inventoryAirBedPrice,
+  inventoryRollawayPrice,
+  inventoryExtraPlacePrice,
+  inventoryExtraPlaceAdultPercent,
+  inventoryExtraPlaceChildPercent,
   inventoryCustomFields,
   packageDiscountPercent,
   packagePeriodDiscountPercent,
@@ -7983,6 +10021,7 @@ function SettingsModal({
   packageIncludeAmenities,
   packageMinRooms,
   servicePassword,
+  agreementHoldMinutes,
   onClose,
   onCompanyRequisiteChange,
   onCompanyRequisiteDelete,
@@ -7994,10 +10033,16 @@ function SettingsModal({
   onMenuItemChange,
   onMenuItemCreate,
   onMenuItemDelete,
+  onMenuItemPhotoDownload,
   onMenuItemPhotoUpload,
+  onMenuPhotosDownload,
   onMenuItemsBulkPriceChange,
   onMenuItemsSave,
   onObjectGalleryDelete,
+  onObjectGalleryPhotoDescriptionChange,
+  onObjectGalleryPhotoDragStart,
+  onObjectGalleryPhotoDrop,
+  onObjectGalleryPhotoSelectedChange,
   onObjectGallerySave,
   onObjectGalleryUpload,
   onPaymentMethodChange,
@@ -8005,19 +10050,24 @@ function SettingsModal({
   onPaymentSettingsSave,
   onWeatherSettingsChange,
   onInventorySettingsChange,
+  onIncludedCardPagesChange,
   onInventoryCustomFieldChange,
   onInventoryCustomFieldDelete,
   onPackageSettingsChange,
   onPackageCustomFieldChange,
   onPackageCustomFieldDelete,
-  onServicePasswordChange
+  onServicePasswordChange,
+  onAgreementHoldMinutesChange
 }: {
   companyRequisites: Record<string, string>;
   defaultCheckInTime: string;
   linkMethods: Record<string, string>;
   menuItems: MenuItem[];
   menuUploadItemId: string;
+  includedCardPages: IncludedCardPage[];
+  objectGalleryPhotoDescriptions: Record<string, string>;
   objectGalleryPhotoPaths: string[];
+  objectGallerySelectedPhotoPaths: string[];
   objectGalleryUploadState: { message: string; status: "idle" | "uploading" | "error" };
   objectGalleryVideoPaths: string[];
   paymentMethods: Record<string, string>;
@@ -8026,6 +10076,11 @@ function SettingsModal({
   weatherLongitude: number;
   inventoryAirBeds: number;
   inventoryRollaways: number;
+  inventoryAirBedPrice: number;
+  inventoryRollawayPrice: number;
+  inventoryExtraPlacePrice: number;
+  inventoryExtraPlaceAdultPercent: number;
+  inventoryExtraPlaceChildPercent: number;
   inventoryCustomFields: Record<string, string>;
   packageDiscountPercent: number;
   packagePeriodDiscountPercent: number;
@@ -8037,6 +10092,7 @@ function SettingsModal({
   packageIncludeAmenities: boolean;
   packageMinRooms: number;
   servicePassword: string;
+  agreementHoldMinutes: number;
   onClose: () => void;
   onCompanyRequisiteChange: (fieldId: string, value: string) => void;
   onCompanyRequisiteDelete: (fieldId: string) => void;
@@ -8048,17 +10104,24 @@ function SettingsModal({
   onMenuItemChange: (itemId: string, patch: Partial<MenuItem>) => void;
   onMenuItemCreate: () => void;
   onMenuItemDelete: (itemId: string) => void;
+  onMenuItemPhotoDownload: (item: MenuItem) => void;
   onMenuItemPhotoUpload: (itemId: string, fileList: FileList | null) => void;
+  onMenuPhotosDownload: () => void;
   onMenuItemsBulkPriceChange: (percent: number) => void;
   onMenuItemsSave: () => void;
   onObjectGalleryDelete: (path: string) => void;
+  onObjectGalleryPhotoDescriptionChange: (path: string, description: string) => void;
+  onObjectGalleryPhotoDragStart: (path: string) => void;
+  onObjectGalleryPhotoDrop: (event: DragEvent<HTMLElement>, targetPath: string) => void;
+  onObjectGalleryPhotoSelectedChange: (path: string, selected: boolean) => void;
   onObjectGallerySave: () => void;
   onObjectGalleryUpload: (fileList: FileList | null) => void;
   onPaymentMethodChange: (methodId: string, value: string) => void;
   onPaymentMethodDelete: (methodId: string) => void;
   onPaymentSettingsSave: () => void;
   onWeatherSettingsChange: (settings: { name: string; latitude: number; longitude: number }) => void;
-  onInventorySettingsChange: (settings: { airBeds: number; rollaways: number }) => void;
+  onInventorySettingsChange: (settings: { airBedPrice: number; airBeds: number; extraPlaceAdultPercent: number; extraPlaceChildPercent: number; rollawayPrice: number; rollaways: number }) => void;
+  onIncludedCardPagesChange: (pages: IncludedCardPage[]) => void;
   onInventoryCustomFieldChange: (fieldId: string, value: string) => void;
   onInventoryCustomFieldDelete: (fieldId: string) => void;
   onPackageSettingsChange: (settings: {
@@ -8074,12 +10137,17 @@ function SettingsModal({
   onPackageCustomFieldChange: (fieldId: string, value: string) => void;
   onPackageCustomFieldDelete: (fieldId: string) => void;
   onServicePasswordChange: (value: string) => void;
+  onAgreementHoldMinutesChange: (value: number) => void;
 }) {
   const [localWeatherName, setLocalWeatherName] = useState(weatherLocationName);
   const [localWeatherLatitude, setLocalWeatherLatitude] = useState(String(weatherLatitude));
   const [localWeatherLongitude, setLocalWeatherLongitude] = useState(String(weatherLongitude));
   const [localAirBeds, setLocalAirBeds] = useState(String(inventoryAirBeds));
   const [localRollaways, setLocalRollaways] = useState(String(inventoryRollaways));
+  const [localAirBedPrice, setLocalAirBedPrice] = useState(String(inventoryAirBedPrice));
+  const [localRollawayPrice, setLocalRollawayPrice] = useState(String(inventoryRollawayPrice));
+  const [localExtraPlaceAdultPercent, setLocalExtraPlaceAdultPercent] = useState(String(inventoryExtraPlaceAdultPercent));
+  const [localExtraPlaceChildPercent, setLocalExtraPlaceChildPercent] = useState(String(inventoryExtraPlaceChildPercent));
   const [localPackageDiscount, setLocalPackageDiscount] = useState(String(packageDiscountPercent));
   const [localPackagePeriodDiscount, setLocalPackagePeriodDiscount] = useState(String(packagePeriodDiscountPercent));
   const [localPackagePeriodFrom, setLocalPackagePeriodFrom] = useState(packagePeriodDiscountFrom);
@@ -8188,7 +10256,11 @@ function SettingsModal({
   function saveInventorySettings() {
     onInventorySettingsChange({
       airBeds: toNumber(localAirBeds, inventoryAirBeds),
-      rollaways: toNumber(localRollaways, inventoryRollaways)
+      rollaways: toNumber(localRollaways, inventoryRollaways),
+      airBedPrice: parsePriceInput(localAirBedPrice),
+      rollawayPrice: parsePriceInput(localRollawayPrice),
+      extraPlaceAdultPercent: clampNumber(toNumber(localExtraPlaceAdultPercent, inventoryExtraPlaceAdultPercent), 0, 300),
+      extraPlaceChildPercent: clampNumber(toNumber(localExtraPlaceChildPercent, inventoryExtraPlaceChildPercent), 0, 300)
     });
   }
 
@@ -8312,6 +10384,7 @@ function SettingsModal({
                 <Banknote size={20} />
                 <h2>Способы оплаты</h2>
               </div>
+              <p className="gpb-settings-note">Ссылки и реквизиты, которые отправляются клиенту для оплаты бронирования.</p>
               <div className="gpb-payment-method-list gpb-settings-input-grid">
                 {paymentMethodList.map((method) => (
                   <label className={`gpb-payment-method-row ${!PAYMENT_METHODS.some((item) => item.id === method.id) ? "has-actions" : ""}`} key={method.id}>
@@ -8331,7 +10404,6 @@ function SettingsModal({
               </div>
               <div className="gpb-settings-panel-actions">
                 <button className="gpb-settings-add-button" type="button" onClick={addPaymentMethodField}>
-                  <Plus size={16} />
                   Добавить
                 </button>
                 <button className="gpb-primary" type="button" onClick={onPaymentSettingsSave}>Сохранить</button>
@@ -8363,7 +10435,6 @@ function SettingsModal({
               </div>
               <div className="gpb-settings-panel-actions">
                 <button className="gpb-settings-add-button" type="button" onClick={addCompanyRequisiteField}>
-                  <Plus size={16} />
                   Добавить
                 </button>
                 <button className="gpb-primary" type="button" onClick={onCompanyRequisitesSave}>Сохранить</button>
@@ -8375,6 +10446,7 @@ function SettingsModal({
                 <Send size={20} />
                 <h2>Ссылки для клиентов</h2>
               </div>
+              <p className="gpb-settings-note">Ссылки на карту, Instagram, 2ГИС и другие материалы, которые можно быстро отправить гостю.</p>
               <div className="gpb-payment-method-list gpb-settings-input-grid">
                 {linkMethodList.map((method) => (
                   <label className={`gpb-payment-method-row ${!LINK_METHODS.some((item) => item.id === method.id) ? "has-actions" : ""}`} key={method.id}>
@@ -8394,14 +10466,13 @@ function SettingsModal({
               </div>
               <div className="gpb-settings-panel-actions">
                 <button className="gpb-settings-add-button" type="button" onClick={addLinkMethodField}>
-                  <Plus size={16} />
                   Добавить
                 </button>
                 <button className="gpb-primary" type="button" onClick={onLinkSettingsSave}>Сохранить</button>
               </div>
             </section>
 
-            <section className={`gpb-settings-panel ${activeSettingsSection === "gallery" ? "" : "is-hidden"}`}>
+            <section className={`gpb-settings-panel gpb-gallery-settings-panel ${activeSettingsSection === "gallery" ? "" : "is-hidden"}`}>
               <div className="gpb-editor-title">
                 <Image size={20} />
                 <h2>Галерея объекта</h2>
@@ -8430,31 +10501,73 @@ function SettingsModal({
                 }}
               />
               {objectGalleryPhotoPaths.length || objectGalleryVideoPaths.length || objectGalleryUploadState.status === "uploading" ? (
-                <div className="gpb-object-gallery-settings-grid">
-                  {objectGalleryUploadState.status === "uploading" ? (
-                    <div className="gpb-object-gallery-settings-item gpb-object-gallery-upload-card">
-                      <div className="gpb-upload-spinner" aria-hidden="true" />
-                      <strong>Обработка</strong>
-                      <span>{objectGalleryUploadState.message}</span>
-                    </div>
-                  ) : null}
-                  {objectGalleryPhotoPaths.map((path, index) => (
-                    <div className="gpb-object-gallery-settings-item" key={path}>
-                      <MediaImage alt={`Фото объекта ${index + 1}`} path={path} />
-                      <button type="button" onClick={() => onObjectGalleryDelete(path)} title="Удалить фото">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
-                  {objectGalleryVideoPaths.map((path, index) => (
-                    <div className="gpb-object-gallery-settings-item is-video" key={path}>
-                      <MediaVideo path={path} />
-                      <span>Видео {index + 1}</span>
-                      <button type="button" onClick={() => onObjectGalleryDelete(path)} title="Удалить видео">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
+                <div className="gpb-gallery-builder-layout">
+                  <div className="gpb-object-gallery-settings-grid">
+                    {objectGalleryUploadState.status === "uploading" ? (
+                      <div className="gpb-object-gallery-settings-item gpb-object-gallery-upload-card">
+                        <div className="gpb-upload-spinner" aria-hidden="true" />
+                        <strong>Обработка</strong>
+                        <span>{objectGalleryUploadState.message}</span>
+                      </div>
+                    ) : null}
+                    {objectGalleryPhotoPaths.map((path, index) => (
+                      <div
+                        className="gpb-object-gallery-settings-item"
+                        draggable
+                        key={path}
+                        onDragStart={(event) => {
+                          event.dataTransfer.setData("text/plain", path);
+                          onObjectGalleryPhotoDragStart(path);
+                        }}
+                        onDragEnd={() => onObjectGalleryPhotoDragStart("")}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => onObjectGalleryPhotoDrop(event, path)}
+                      >
+                        <div className="gpb-object-gallery-settings-preview">
+                          <MediaImage alt={`Фото объекта ${index + 1}`} path={path} />
+                          <span>{index === 0 ? "Фото 1 главное" : `Фото ${index + 1}`}</span>
+                        </div>
+                        <label
+                          className="gpb-object-gallery-send-toggle"
+                          onDragStart={(event) => event.stopPropagation()}
+                          onMouseDown={(event) => event.stopPropagation()}
+                        >
+                          <input
+                            checked={objectGallerySelectedPhotoPaths.includes(path)}
+                            type="checkbox"
+                            onChange={(event) => onObjectGalleryPhotoSelectedChange(path, event.target.checked)}
+                          />
+                          <span>В отправку и PDF</span>
+                        </label>
+                        <textarea
+                          placeholder={`Описание для фото ${index + 1}`}
+                          value={objectGalleryPhotoDescriptions[path] ?? ""}
+                          onChange={(event) => onObjectGalleryPhotoDescriptionChange(path, event.target.value)}
+                          onDragStart={(event) => event.stopPropagation()}
+                          onMouseDown={(event) => event.stopPropagation()}
+                        />
+                        <button type="button" onClick={() => onObjectGalleryDelete(path)} title="Удалить фото">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                    {objectGalleryVideoPaths.map((path, index) => (
+                      <div className="gpb-object-gallery-settings-item is-video" key={path}>
+                        <MediaVideo path={path} />
+                        <span>Видео {index + 1}</span>
+                        <button type="button" onClick={() => onObjectGalleryDelete(path)} title="Удалить видео">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <IncludedCardBuilderPanel
+                    descriptions={objectGalleryPhotoDescriptions}
+                    pages={includedCardPages}
+                    photoPaths={objectGalleryPhotoPaths}
+                    selectedPhotoPaths={objectGallerySelectedPhotoPaths}
+                    onChange={onIncludedCardPagesChange}
+                  />
                 </div>
               ) : (
                 <p className="gpb-settings-note">Галерея пока пустая.</p>
@@ -8464,11 +10577,9 @@ function SettingsModal({
               ) : null}
               <div className="gpb-settings-panel-actions gpb-settings-gallery-actions">
                 <button className="gpb-settings-add-button" type="button" onClick={() => objectGalleryPhotoInputRef.current?.click()} disabled={objectGalleryUploadState.status === "uploading"}>
-                  <Image size={16} />
                   Добавить фото
                 </button>
                 <button className="gpb-settings-add-button" type="button" onClick={() => objectGalleryVideoInputRef.current?.click()} disabled={objectGalleryUploadState.status === "uploading"}>
-                  <Video size={16} />
                   Добавить видео
                 </button>
                 <button className="gpb-primary" type="button" onClick={onObjectGallerySave} disabled={objectGalleryUploadState.status === "uploading"}>Сохранить</button>
@@ -8526,9 +10637,8 @@ function SettingsModal({
                         <textarea value={item.composition} onChange={(event) => onMenuItemChange(item.id, { composition: event.target.value })} />
                       </label>
                       <div className="gpb-menu-settings-actions">
-                        <label className="gpb-settings-add-button">
+                        <label className="gpb-settings-add-button" title="Загрузить фото" aria-label="Загрузить фото">
                           <Image size={15} />
-                          Фото
                           <input
                             accept="image/*,.heic,.heif"
                             hidden
@@ -8539,9 +10649,11 @@ function SettingsModal({
                             }}
                           />
                         </label>
-                        <button className="gpb-secondary" type="button" onClick={() => onMenuItemDelete(item.id)}>
+                        <button className="gpb-secondary" type="button" onClick={() => onMenuItemPhotoDownload(item)} disabled={!item.photoPath} title="Скачать фото" aria-label="Скачать фото">
+                          <Download size={15} />
+                        </button>
+                        <button className="gpb-secondary" type="button" onClick={() => onMenuItemDelete(item.id)} title="Удалить блюдо" aria-label="Удалить блюдо">
                           <Trash2 size={15} />
-                          Удалить
                         </button>
                       </div>
                     </div>
@@ -8552,8 +10664,10 @@ function SettingsModal({
               )}
               <div className="gpb-settings-panel-actions gpb-menu-panel-actions">
                 <button className="gpb-settings-add-button" type="button" onClick={onMenuItemCreate}>
-                  <Plus size={16} />
                   Добавить блюдо
+                </button>
+                <button className="gpb-settings-add-button" type="button" onClick={onMenuPhotosDownload} disabled={!menuItems.some((item) => item.photoPath)}>
+                  Скачать все фото
                 </button>
                 <button className="gpb-primary" type="button" onClick={onMenuItemsSave}>Сохранить</button>
               </div>
@@ -8567,6 +10681,7 @@ function SettingsModal({
                   <Hotel size={20} />
                   <h2>Пакетное предложение</h2>
                 </div>
+                <p className="gpb-settings-note">Скидки, подарки и условия, которые попадают в прайс и предложение клиенту.</p>
                 <div className="gpb-default-time-settings gpb-package-settings-grid">
                   <label>
                     Скидка при аренде всех номеров, %
@@ -8620,7 +10735,6 @@ function SettingsModal({
                 />
                 <div className="gpb-settings-panel-actions">
                   <button className="gpb-settings-add-button" type="button" onClick={addPackageField}>
-                    <Plus size={16} />
                     Добавить
                   </button>
                   <button className="gpb-primary" type="button" onClick={savePackageSettings}>Сохранить</button>
@@ -8632,6 +10746,7 @@ function SettingsModal({
                   <CloudSun size={20} />
                   <h2>Погода</h2>
                 </div>
+                <p className="gpb-settings-note">Регион для прогноза погоды и координаты объекта.</p>
                 <div className="gpb-weather-settings-grid">
                   <label>
                     Регион
@@ -8660,14 +10775,31 @@ function SettingsModal({
                   <BedDouble size={20} />
                   <h2>Доп. инвентарь</h2>
                 </div>
+                <p className="gpb-settings-note">Общий склад переносных матрасов и раскладушек, доступных для комплектации брони.</p>
                 <div className="gpb-default-time-settings">
                   <label>
                     Надувные матрасы
                     <input min="0" type="number" value={localAirBeds} onChange={(event) => setLocalAirBeds(event.target.value)} />
                   </label>
                   <label>
+                    Цена матраса, тг / сутки
+                    <input inputMode="numeric" value={formatExpenseAmountInput(localAirBedPrice)} onChange={(event) => setLocalAirBedPrice(String(parsePriceInput(event.target.value)))} />
+                  </label>
+                  <label>
                     Раскладушки
                     <input min="0" type="number" value={localRollaways} onChange={(event) => setLocalRollaways(event.target.value)} />
+                  </label>
+                  <label>
+                    Цена раскладушки, тг / сутки
+                    <input inputMode="numeric" value={formatExpenseAmountInput(localRollawayPrice)} onChange={(event) => setLocalRollawayPrice(String(parsePriceInput(event.target.value)))} />
+                  </label>
+                  <label>
+                    Доп.место взрослый, %
+                    <input min="0" type="number" value={localExtraPlaceAdultPercent} onChange={(event) => setLocalExtraPlaceAdultPercent(event.target.value)} />
+                  </label>
+                  <label>
+                    Доп.место детский, %
+                    <input min="0" type="number" value={localExtraPlaceChildPercent} onChange={(event) => setLocalExtraPlaceChildPercent(event.target.value)} />
                   </label>
                 </div>
                 <EditableSettingsFields
@@ -8677,7 +10809,6 @@ function SettingsModal({
                 />
                 <div className="gpb-settings-panel-actions">
                   <button className="gpb-settings-add-button" type="button" onClick={addInventoryField}>
-                    <Plus size={16} />
                     Создать новое поле
                   </button>
                   <button className="gpb-primary" type="button" onClick={saveInventorySettings}>Сохранить инвентарь</button>
@@ -8689,6 +10820,7 @@ function SettingsModal({
                   <CalendarDays size={20} />
                   <h2>Время по умолчанию</h2>
                 </div>
+                <p className="gpb-settings-note">Стандартное время заезда и выезда для новых бронирований.</p>
                 <div className="gpb-default-time-settings">
                   <label>
                     Время заезда
@@ -8732,6 +10864,7 @@ function SettingsModal({
                   <Settings size={20} />
                   <h2>Сервис</h2>
                 </div>
+                <p className="gpb-settings-note">Служебные параметры: пароль очистки и таймер удержания номера на согласовании.</p>
                 <label className="gpb-wide-label">
                   Пароль очистки
                   <input
@@ -8741,7 +10874,15 @@ function SettingsModal({
                     placeholder="0000"
                   />
                 </label>
-                <p className="gpb-settings-note">Используется для очистки полей в базе гостей.</p>
+                <label className="gpb-wide-label">
+                  Таймер согласования, мин
+                  <input
+                    min="1"
+                    type="number"
+                    value={agreementHoldMinutes}
+                    onChange={(event) => onAgreementHoldMinutesChange(toNumber(event.target.value, DEFAULT_ROOM_HOLD_MINUTES))}
+                  />
+                </label>
               </section>
             </div>
           </div>
@@ -8909,12 +11050,20 @@ function ReservationsModal({
   const [deleteTarget, setDeleteTarget] = useState<Reservation | null>(null);
   const [editingReservation, setEditingReservation] = useState<Reservation | null>(null);
   const [timelineLayers, setTimelineLayers] = useState({
+    alternateRows: true,
     checkIn: true,
-    cleaning: true,
+    cleaning: false,
     lodging: true,
     repair: true
   });
-  const allTimelineLayersEnabled = Object.values(timelineLayers).every(Boolean);
+  const [timelineAlternateRowColor, setTimelineAlternateRowColor] = useState(getStoredTimelineAlternateRowColor);
+  const [timelineSelectedDayColor, setTimelineSelectedDayColor] = useState(getStoredTimelineSelectedDayColor);
+  const [timelineLodgingColor, setTimelineLodgingColor] = useState(() => getStoredTimelineColor(TIMELINE_LODGING_COLOR_KEY, DEFAULT_TIMELINE_LODGING_COLOR));
+  const [timelineCheckInColor, setTimelineCheckInColor] = useState(() => getStoredTimelineColor(TIMELINE_CHECKIN_COLOR_KEY, DEFAULT_TIMELINE_CHECKIN_COLOR));
+  const [timelineCheckOutColor, setTimelineCheckOutColor] = useState(() => getStoredTimelineColor(TIMELINE_CHECKOUT_COLOR_KEY, DEFAULT_TIMELINE_CHECKOUT_COLOR));
+  const [timelineCleaningColor, setTimelineCleaningColor] = useState(() => getStoredTimelineColor(TIMELINE_CLEANING_COLOR_KEY, DEFAULT_TIMELINE_CLEANING_COLOR));
+  const [timelineRepairColor, setTimelineRepairColor] = useState(() => getStoredTimelineColor(TIMELINE_REPAIR_COLOR_KEY, DEFAULT_TIMELINE_REPAIR_COLOR));
+  const allTimelineLayersEnabled = timelineLayers.checkIn && timelineLayers.cleaning && timelineLayers.lodging && timelineLayers.repair;
   const timelineDays = useMemo(() => getMonthTimelineDays(monthDate), [monthDate]);
   const timelineRooms = useMemo(() => rooms
     .filter((room) => room.bookable && !room.hideInBookingPanel)
@@ -8971,6 +11120,28 @@ function ReservationsModal({
     setDeleteTarget(null);
   }
 
+  function handleTimelineAlternateRowColorChange(color: string) {
+    setTimelineAlternateRowColor(color);
+    try {
+      window.localStorage.setItem(TIMELINE_ALTERNATE_ROW_COLOR_KEY, color);
+    } catch {
+      // Color preference is optional; keep the picker responsive even when storage is unavailable.
+    }
+  }
+
+  function handleTimelineSelectedDayColorChange(color: string) {
+    setTimelineSelectedDayColor(color);
+    saveTimelineColor(TIMELINE_SELECTED_DAY_COLOR_KEY, color);
+  }
+
+  function saveTimelineColor(key: string, color: string) {
+    try {
+      window.localStorage.setItem(key, color);
+    } catch {
+      // Color preference is optional; keep the picker responsive even when storage is unavailable.
+    }
+  }
+
   return (
     <div className="gpb-modal-backdrop">
       <div className="gpb-catalog-modal gpb-reservations-modal" role="dialog" aria-modal="true" aria-label="Брони">
@@ -9023,28 +11194,107 @@ function ReservationsModal({
                 type="button"
                 onClick={() => {
                   const nextValue = !allTimelineLayersEnabled;
-                  setTimelineLayers({ checkIn: nextValue, cleaning: nextValue, lodging: nextValue, repair: nextValue });
+                  setTimelineLayers((current) => ({ ...current, checkIn: nextValue, cleaning: nextValue, lodging: nextValue, repair: nextValue }));
                 }}
               >
-                <Check size={14} />
                 <span>Все</span>
               </button>
               {[
-                ["lodging", "Проживание", "#8e98a3"],
-                ["checkIn", "Заезд", "#138a63"],
-                ["cleaning", "Уборка", "#7c3aed"],
-                ["repair", "Ремонт", "#d12b2b"]
-              ].map(([key, label, color]) => (
-                <label key={key}>
+                {
+                  color: timelineLodgingColor,
+                  key: "lodging",
+                  label: "Проживание",
+                  onColor: (color: string) => {
+                    setTimelineLodgingColor(color);
+                    saveTimelineColor(TIMELINE_LODGING_COLOR_KEY, color);
+                  }
+                },
+                {
+                  color: timelineCheckInColor,
+                  key: "checkIn",
+                  label: "Заезд",
+                  onColor: (color: string) => {
+                    setTimelineCheckInColor(color);
+                    saveTimelineColor(TIMELINE_CHECKIN_COLOR_KEY, color);
+                  }
+                },
+                {
+                  color: timelineCheckOutColor,
+                  key: "checkIn",
+                  label: "Выезд",
+                  onColor: (color: string) => {
+                    setTimelineCheckOutColor(color);
+                    saveTimelineColor(TIMELINE_CHECKOUT_COLOR_KEY, color);
+                  }
+                },
+                {
+                  color: timelineCleaningColor,
+                  key: "cleaning",
+                  label: "Уборка",
+                  onColor: (color: string) => {
+                    setTimelineCleaningColor(color);
+                    saveTimelineColor(TIMELINE_CLEANING_COLOR_KEY, color);
+                  }
+                },
+                {
+                  color: timelineRepairColor,
+                  key: "repair",
+                  label: "Ремонт",
+                  onColor: (color: string) => {
+                    setTimelineRepairColor(color);
+                    saveTimelineColor(TIMELINE_REPAIR_COLOR_KEY, color);
+                  }
+                }
+              ].map(({ color, key, label, onColor }) => (
+                <label className="gpb-layer-toggle" key={label}>
                   <input
+                    className="gpb-layer-toggle-input"
                     checked={timelineLayers[key as keyof typeof timelineLayers]}
                     type="checkbox"
                     onChange={(event) => setTimelineLayers((current) => ({ ...current, [key]: event.target.checked }))}
                   />
-                  <i style={{ backgroundColor: color }} />
                   <span>{label}</span>
+                  <input
+                    aria-label={`Цвет: ${label}`}
+                    className="gpb-layer-color-input"
+                    title={`Цвет: ${label}`}
+                    type="color"
+                    value={color}
+                    onChange={(event) => onColor(event.target.value)}
+                    onClick={(event) => event.stopPropagation()}
+                  />
                 </label>
               ))}
+              <label className="gpb-layer-toggle">
+                <input
+                  className="gpb-layer-toggle-input"
+                  checked={timelineLayers.alternateRows}
+                  type="checkbox"
+                  onChange={(event) => setTimelineLayers((current) => ({ ...current, alternateRows: event.target.checked }))}
+                />
+                <span>Чередование</span>
+                <input
+                  aria-label="Цвет чередования строк"
+                  className="gpb-layer-color-input"
+                  title="Цвет чередования строк"
+                  type="color"
+                  value={timelineAlternateRowColor}
+                  onChange={(event) => handleTimelineAlternateRowColorChange(event.target.value)}
+                  onClick={(event) => event.stopPropagation()}
+                />
+              </label>
+              <label className="gpb-layer-toggle is-static">
+                <span>Дата</span>
+                <input
+                  aria-label="Цвет выбранной даты"
+                  className="gpb-layer-color-input"
+                  title="Цвет выбранной даты"
+                  type="color"
+                  value={timelineSelectedDayColor}
+                  onChange={(event) => handleTimelineSelectedDayColorChange(event.target.value)}
+                  onClick={(event) => event.stopPropagation()}
+                />
+              </label>
             </div>
           </section>
 
@@ -9053,6 +11303,13 @@ function ReservationsModal({
               reservations={filteredCalendarReservations}
               rooms={timelineRooms}
               selectedDate={selectedDate}
+              timelineAlternateRowColor={timelineAlternateRowColor}
+              timelineCheckInColor={timelineCheckInColor}
+              timelineCheckOutColor={timelineCheckOutColor}
+              timelineCleaningColor={timelineCleaningColor}
+              timelineLodgingColor={timelineLodgingColor}
+              timelineRepairColor={timelineRepairColor}
+              timelineSelectedDayColor={timelineSelectedDayColor}
               timelineLayers={timelineLayers}
               timelineDays={timelineDays}
               onSelectDate={setSelectedDate}
@@ -9108,6 +11365,13 @@ function ReservationTimelineBoard({
   reservations,
   rooms,
   selectedDate,
+  timelineAlternateRowColor,
+  timelineCheckInColor,
+  timelineCheckOutColor,
+  timelineCleaningColor,
+  timelineLodgingColor,
+  timelineRepairColor,
+  timelineSelectedDayColor,
   timelineLayers,
   timelineDays,
   onSelectDate
@@ -9115,12 +11379,72 @@ function ReservationTimelineBoard({
   reservations: Reservation[];
   rooms: Room[];
   selectedDate: string;
-  timelineLayers: { checkIn: boolean; cleaning: boolean; lodging: boolean; repair: boolean };
+  timelineAlternateRowColor: string;
+  timelineCheckInColor: string;
+  timelineCheckOutColor: string;
+  timelineCleaningColor: string;
+  timelineLodgingColor: string;
+  timelineRepairColor: string;
+  timelineSelectedDayColor: string;
+  timelineLayers: { alternateRows: boolean; checkIn: boolean; cleaning: boolean; lodging: boolean; repair: boolean };
   timelineDays: Array<{ date: string; dayNumber: number; weekday: string; isWeekend: boolean }>;
   onSelectDate: (date: string) => void;
 }) {
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const monthBands = useMemo(() => buildTimelineMonthBands(timelineDays), [timelineDays]);
+  const alternateRowTextColor = getReadableTimelineTextColor(timelineAlternateRowColor);
+  const alternateRowMutedTextColor = alternateRowTextColor === "#ffffff" ? "rgb(255 255 255 / 78%)" : "#64707d";
+  const selectedDayTextColor = getReadableTimelineTextColor(timelineSelectedDayColor, "#ffffff");
+  const selectedDayMutedTextColor = selectedDayTextColor === "#ffffff" ? "rgb(255 255 255 / 82%)" : "#25313d";
+  const today = getDefaultCheckInDate();
+
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+
+    const targetDate = timelineDays.some((day) => day.date === today) ? today : selectedDate;
+    window.requestAnimationFrame(() => {
+      const dayButton = board.querySelector<HTMLElement>(`[data-gpb-timeline-date="${targetDate}"]`);
+      if (!dayButton) return;
+      const roomHeader = board.querySelector<HTMLElement>(".gpb-timeline-room-header");
+      const roomColumnWidth = roomHeader?.offsetWidth ?? 170;
+      const nextScrollLeft = dayButton.offsetLeft - roomColumnWidth;
+      board.scrollLeft = Math.max(0, nextScrollLeft);
+    });
+  }, [timelineDays, today]);
+
   return (
-    <div className="gpb-reservation-timeline-board" style={{ "--gpb-timeline-days": timelineDays.length } as React.CSSProperties}>
+    <div
+      ref={boardRef}
+      className="gpb-reservation-timeline-board"
+      style={{
+        "--gpb-timeline-alternate-row-color": timelineAlternateRowColor,
+        "--gpb-timeline-alternate-row-muted-text-color": alternateRowMutedTextColor,
+        "--gpb-timeline-alternate-row-text-color": alternateRowTextColor,
+        "--gpb-timeline-checkin-color": timelineCheckInColor,
+        "--gpb-timeline-checkout-color": timelineCheckOutColor,
+        "--gpb-timeline-cleaning-color": timelineCleaningColor,
+        "--gpb-timeline-days": timelineDays.length,
+        "--gpb-timeline-lodging-color": timelineLodgingColor,
+        "--gpb-timeline-repair-color": timelineRepairColor,
+        "--gpb-timeline-room-count": Math.max(1, rooms.length),
+        "--gpb-timeline-selected-day-color": timelineSelectedDayColor,
+        "--gpb-timeline-selected-day-muted-text-color": selectedDayMutedTextColor,
+        "--gpb-timeline-selected-day-text-color": selectedDayTextColor
+      } as React.CSSProperties}
+    >
+      <div className="gpb-reservation-timeline-months">
+        <div className="gpb-timeline-month-spacer">Месяц</div>
+        {monthBands.map((month) => (
+          <div
+            className="gpb-timeline-month-cell"
+            key={month.key}
+            style={{ gridColumn: `${month.startIndex + 2} / ${month.endIndex + 3}` }}
+          >
+            {month.label}
+          </div>
+        ))}
+      </div>
       <div className="gpb-reservation-timeline-header">
         <div className="gpb-timeline-room-header">Номер</div>
         {timelineDays.map((day) => (
@@ -9128,8 +11452,10 @@ function ReservationTimelineBoard({
             className={[
               "gpb-timeline-day-header",
               day.isWeekend ? "is-weekend" : "",
+              day.date === today ? "is-today" : "",
               day.date === selectedDate ? "is-selected" : ""
             ].filter(Boolean).join(" ")}
+            data-gpb-timeline-date={day.date}
             key={day.date}
             type="button"
             onClick={() => onSelectDate(day.date)}
@@ -9139,13 +11465,17 @@ function ReservationTimelineBoard({
           </button>
         ))}
       </div>
-      <div className="gpb-reservation-timeline-rows">
-        {rooms.map((room) => (
+      <div
+        className="gpb-reservation-timeline-rows"
+        style={{ gridTemplateRows: `repeat(${Math.max(1, rooms.length)}, minmax(0, 1fr))` }}
+      >
+        {rooms.map((room, index) => (
           <ReservationTimelineRoomRow
             key={room.id}
             reservations={reservations}
             room={room}
             selectedDate={selectedDate}
+            rowIndex={index}
             timelineLayers={timelineLayers}
             timelineDays={timelineDays}
             onSelectDate={onSelectDate}
@@ -9158,6 +11488,7 @@ function ReservationTimelineBoard({
 
 function ReservationTimelineRoomRow({
   reservations,
+  rowIndex,
   room,
   selectedDate,
   timelineLayers,
@@ -9165,9 +11496,10 @@ function ReservationTimelineRoomRow({
   onSelectDate
 }: {
   reservations: Reservation[];
+  rowIndex: number;
   room: Room;
   selectedDate: string;
-  timelineLayers: { checkIn: boolean; cleaning: boolean; lodging: boolean; repair: boolean };
+  timelineLayers: { alternateRows: boolean; checkIn: boolean; cleaning: boolean; lodging: boolean; repair: boolean };
   timelineDays: Array<{ date: string; dayNumber: number; weekday: string; isWeekend: boolean }>;
   onSelectDate: (date: string) => void;
 }) {
@@ -9176,7 +11508,13 @@ function ReservationTimelineRoomRow({
   const rowLaneCount = Math.max(1, ...segments.map((segment) => segment.lane + 1), room.status === "repair" ? 1 : 0);
 
   return (
-    <div className="gpb-reservation-timeline-row" style={{ "--gpb-timeline-lanes": rowLaneCount } as React.CSSProperties}>
+    <div
+      className={[
+        "gpb-reservation-timeline-row",
+        timelineLayers.alternateRows && rowIndex % 2 === 1 ? "is-alternate" : ""
+      ].filter(Boolean).join(" ")}
+      style={{ "--gpb-timeline-lanes": rowLaneCount } as React.CSSProperties}
+    >
       <div className="gpb-timeline-room-cell">
         <strong>{room.number || room.title}</strong>
         <span>{room.title}</span>
@@ -9204,28 +11542,58 @@ function ReservationTimelineRoomRow({
         </div>
       ) : null}
       {timelineLayers.lodging ? segments.map((segment) => (
-        <div
+        <svg
           className="gpb-timeline-reservation-bar"
           key={`${segment.reservation.id}-${segment.roomId}`}
-          style={{ gridColumn: `${segment.startIndex + 2} / ${segment.endIndex + 3}`, "--gpb-timeline-lane": segment.lane } as React.CSSProperties}
-          title={`${segment.reservation.guestFirstName || "Гость"} · ${formatReservationDateRange(segment.reservation)} · ${room.number || room.title}`}
+          preserveAspectRatio="none"
+          style={{
+            "--gpb-timeline-lane": segment.lane,
+            "--gpb-timeline-segment-offset": `${segment.segmentOffset}px`,
+            "--gpb-timeline-span": segment.endPosition - segment.startPosition,
+            "--gpb-timeline-start": segment.startPosition
+          } as React.CSSProperties}
+          viewBox="0 0 100 42"
         >
-          <span>{segment.reservation.guestFirstName || "Гость"}</span>
-        </div>
+          <title>{`${segment.reservation.guestFirstName || "Гость"} · ${formatReservationDateRange(segment.reservation)} · ${segment.checkInTime}-${segment.checkOutTime} · ${room.number || room.title}`}</title>
+          <line
+            x1="0"
+            x2="100"
+            y1="21"
+            y2="21"
+          />
+        </svg>
       )) : null}
-      {timelineLayers.checkIn ? segments.map((segment) => (
+      {timelineLayers.checkIn ? segments.flatMap((segment) => [
         <div
-          className="gpb-timeline-checkin-marker"
+          className="gpb-timeline-point is-checkin"
           key={`${segment.reservation.id}-${segment.roomId}-checkin`}
-          style={{ gridColumn: segment.startIndex + 2, "--gpb-timeline-lane": segment.lane } as React.CSSProperties}
-          title={`Заезд: ${segment.reservation.guestFirstName || "Гость"}`}
+          style={{
+            "--gpb-timeline-lane": segment.lane,
+            "--gpb-timeline-point-offset": `${segment.segmentOffset}px`,
+            "--gpb-timeline-start": segment.startPosition
+          } as React.CSSProperties}
+          title={`Заезд: ${segment.reservation.guestFirstName || "Гость"} · ${segment.checkInTime}`}
+        />,
+        <div
+          className="gpb-timeline-point is-checkout"
+          key={`${segment.reservation.id}-${segment.roomId}-checkout`}
+          style={{
+            "--gpb-timeline-lane": segment.lane,
+            "--gpb-timeline-point-offset": `${segment.segmentOffset}px`,
+            "--gpb-timeline-start": segment.endPosition
+          } as React.CSSProperties}
+          title={`Выезд: ${segment.reservation.guestFirstName || "Гость"} · ${segment.checkOutTime}`}
         />
-      )) : null}
+      ]) : null}
       {timelineLayers.cleaning ? cleaningSegments.map((segment) => (
         <div
           className="gpb-timeline-status-bar is-cleaning"
           key={`${segment.reservation.id}-${segment.roomId}-cleaning`}
-          style={{ gridColumn: `${segment.dayIndex + 2} / ${segment.dayIndex + 3}`, "--gpb-timeline-lane": segment.lane } as React.CSSProperties}
+          style={{
+            "--gpb-timeline-lane": segment.lane,
+            "--gpb-timeline-span": segment.span,
+            "--gpb-timeline-start": segment.startPosition
+          } as React.CSSProperties}
           title={`Уборка после ${segment.reservation.guestFirstName || "гостя"}`}
         >
           Уборка
@@ -11777,6 +14145,14 @@ function formatTimeInput(date: Date) {
   return `${hours}:${minutes}`;
 }
 
+function formatShortWeekday(date: string) {
+  if (!date) return "";
+  return new Intl.DateTimeFormat("ru-RU", { weekday: "short" })
+    .format(parseDateInput(date))
+    .replace(".", "")
+    .replace(/^./, (letter) => letter.toUpperCase());
+}
+
 function addHoursToTimeInput(time: string, hours: number) {
   const [rawHours, rawMinutes] = time.split(":").map(Number);
   const startHours = Number.isFinite(rawHours) ? rawHours : 0;
@@ -11809,19 +14185,51 @@ function getCalendarDays(monthValue: string) {
 
 function getMonthTimelineDays(monthValue: string) {
   const [year, month] = monthValue.split("-").map(Number);
-  const lastDay = new Date(year, month, 0);
   const weekdayFormatter = new Intl.DateTimeFormat("ru-RU", { weekday: "short" });
+  const days: Array<{ date: string; dayNumber: number; weekday: string; isWeekend: boolean }> = [];
 
-  return Array.from({ length: lastDay.getDate() }, (_, index) => {
-    const date = new Date(year, month - 1, index + 1);
-    const weekday = date.getDay();
-    return {
-      date: formatDateInput(date),
-      dayNumber: index + 1,
-      weekday: weekdayFormatter.format(date).replace(".", ""),
-      isWeekend: weekday === 0 || weekday === 6
-    };
+  for (let monthOffset = -1; monthOffset <= 1; monthOffset += 1) {
+    const currentMonthDate = new Date(year, month - 1 + monthOffset, 1);
+    const lastDay = new Date(currentMonthDate.getFullYear(), currentMonthDate.getMonth() + 1, 0);
+
+    for (let dayNumber = 1; dayNumber <= lastDay.getDate(); dayNumber += 1) {
+      const date = new Date(currentMonthDate.getFullYear(), currentMonthDate.getMonth(), dayNumber);
+      const weekday = date.getDay();
+      days.push({
+        date: formatDateInput(date),
+        dayNumber,
+        weekday: weekdayFormatter.format(date).replace(".", ""),
+        isWeekend: weekday === 0 || weekday === 6
+      });
+    }
+  }
+
+  return days;
+}
+
+function buildTimelineMonthBands(timelineDays: Array<{ date: string }>) {
+  const monthFormatter = new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric" });
+  const bands: Array<{ endIndex: number; key: string; label: string; startIndex: number }> = [];
+
+  timelineDays.forEach((day, index) => {
+    const key = day.date.slice(0, 7);
+    const currentBand = bands[bands.length - 1];
+    if (currentBand?.key === key) {
+      currentBand.endIndex = index;
+      return;
+    }
+
+    const [year, month] = key.split("-").map(Number);
+    const label = monthFormatter.format(new Date(year, month - 1, 1));
+    bands.push({
+      endIndex: index,
+      key,
+      label: label.charAt(0).toUpperCase() + label.slice(1),
+      startIndex: index
+    });
   });
+
+  return bands;
 }
 
 async function getWeatherForecastForDate(date: string, latitude: number, longitude: number): Promise<WeatherForecast | null> {
@@ -11934,7 +14342,7 @@ function isRoomReserved(room: Room, checkIn: string, checkOut: string, checkInTi
   }
 
   return reservations.some((reservation) =>
-    reservation.status === "booked" &&
+    isReservationActiveOccupancy(reservation) &&
     getReservationItems(reservation).some((item) =>
       item.roomId === room.id &&
       dateRangesOverlap(checkIn, checkOut, item.checkIn, item.checkOut)
@@ -11954,13 +14362,22 @@ function getCatalogPanelCounter(rooms: Room[]) {
   return rooms.filter((room) => isStayBookingObject(room) && isRoomIncludedInBookingSummary(room)).length;
 }
 
-function buildRoomAvailabilityConflicts(rooms: Room[], reservations: Reservation[], checkIn: string, checkOut: string): AvailabilityConflict[] {
-  return rooms
+function buildRoomAvailabilityConflicts(
+  rooms: Room[],
+  reservations: Reservation[],
+  checkIn: string,
+  checkOut: string,
+  checkInTime: string,
+  checkOutTime: string,
+  holds: RoomHold[] = [],
+  ownerId = ""
+): AvailabilityConflict[] {
+  const reservationConflicts: AvailabilityConflict[] = rooms
     .filter((room) => room.bookable && (isStayBookingObject(room) || isHourlyBookingObject(room)))
     .flatMap((room) =>
       reservations
         .filter((reservation) => {
-          if (reservation.status !== "booked") return false;
+          if (!isReservationActiveOccupancy(reservation)) return false;
           if (isHourlyBookingObject(room)) {
             return reservation.roomIds.includes(room.id) && reservation.checkIn === checkIn;
           }
@@ -11975,11 +14392,63 @@ function buildRoomAvailabilityConflicts(rooms: Room[], reservations: Reservation
           reservation,
           room
         }))
-    )
+    );
+  const holdConflicts: AvailabilityConflict[] = rooms
+    .filter((room) => room.bookable && (isStayBookingObject(room) || isHourlyBookingObject(room)))
+    .flatMap((room) =>
+      holds
+        .filter((hold) =>
+          hold.roomId === room.id &&
+          roomHoldOverlapsRange(hold, { checkIn, checkOut }, checkInTime, checkOutTime)
+        )
+        .map((hold) => ({
+          hold,
+          releaseDate: hold.checkOut,
+          room
+        }))
+    );
+
+  return reservationConflicts.concat(holdConflicts)
     .sort((left, right) =>
       left.releaseDate.localeCompare(right.releaseDate) ||
       formatBookingPickerObjectLabel(left.room).localeCompare(formatBookingPickerObjectLabel(right.room), "ru")
     );
+}
+
+function buildPricePdfRoomStatuses(
+  rooms: Room[],
+  reservations: Reservation[],
+  holds: RoomHold[],
+  checkIn: string,
+  checkOut: string,
+  checkInTime: string,
+  checkOutTime: string,
+  ownerId = ""
+): Record<string, PricePdfRoomStatus> {
+  return Object.fromEntries(rooms.map((room) => {
+    if (room.status === "repair") {
+      return [room.id, { kind: "repair", label: "На ремонте" } satisfies PricePdfRoomStatus];
+    }
+
+    const conflicts = buildRoomAvailabilityConflicts([room], reservations, checkIn, checkOut, checkInTime, checkOutTime, holds, ownerId);
+    const holdConflict = conflicts.find((conflict) => conflict.hold);
+    if (holdConflict?.hold) {
+      const label = isHourlyBookingObject(room)
+        ? `На соглас. ${holdConflict.hold.checkInTime}-${holdConflict.hold.checkOutTime}`
+        : `На согласовании до ${formatKazakhDate(holdConflict.hold.checkOut)}`;
+      return [room.id, { kind: "hold", label } satisfies PricePdfRoomStatus];
+    }
+
+    const reservationConflict = conflicts.find((conflict) => conflict.reservation);
+    if (reservationConflict?.reservation) {
+      const label = isHourlyBookingObject(room)
+        ? `Занят ${reservationConflict.reservation.checkInTime}-${getReservationHourlyEndTime(reservationConflict.reservation)}`
+        : `Занят до ${formatKazakhDate(reservationConflict.reservation.checkOut)}`;
+      return [room.id, { kind: "booked", label } satisfies PricePdfRoomStatus];
+    }
+
+    return [room.id, { kind: "available", label: "Свободен" } satisfies PricePdfRoomStatus];
+  }));
 }
 
 function buildHourlyBusySlotsByRoomId(rooms: Room[], reservations: Reservation[], date: string) {
@@ -11987,7 +14456,7 @@ function buildHourlyBusySlotsByRoomId(rooms: Room[], reservations: Reservation[]
     .filter(isHourlyBookingObject)
     .reduce<Record<string, Array<{ from: string; to: string; reservation: Reservation }>>>((slotsByRoomId, room) => {
       const slots = reservations
-        .filter((reservation) => reservation.status === "booked" && reservation.roomIds.includes(room.id) && reservation.checkIn === date)
+        .filter((reservation) => isReservationActiveOccupancy(reservation) && reservation.roomIds.includes(room.id) && reservation.checkIn === date)
         .map((reservation) => ({
           from: reservation.checkInTime,
           reservation,
@@ -11999,10 +14468,18 @@ function buildHourlyBusySlotsByRoomId(rooms: Room[], reservations: Reservation[]
     }, {});
 }
 
-function getHourlyRoomTimeConflicts(room: Room, reservations: Reservation[], date: string, startTime: string, endTime: string): AvailabilityConflict[] {
-  return reservations
+function getHourlyRoomTimeConflicts(
+  room: Room,
+  reservations: Reservation[],
+  date: string,
+  startTime: string,
+  endTime: string,
+  holds: RoomHold[] = [],
+  ownerId = ""
+): AvailabilityConflict[] {
+  const reservationConflicts: AvailabilityConflict[] = reservations
     .filter((reservation) =>
-      reservation.status === "booked" &&
+      isReservationActiveOccupancy(reservation) &&
       reservation.roomIds.includes(room.id) &&
       reservation.checkIn === date &&
       timeRangesOverlap(startTime, endTime, reservation.checkInTime, getReservationHourlyEndTime(reservation))
@@ -12014,6 +14491,21 @@ function getHourlyRoomTimeConflicts(room: Room, reservations: Reservation[], dat
       reservation,
       room
     }));
+  const holdConflicts: AvailabilityConflict[] = holds
+    .filter((hold) =>
+      hold.ownerId !== ownerId &&
+      hold.roomId === room.id &&
+      roomHoldOverlapsRange(hold, { checkIn: date, checkOut: date }, startTime, endTime)
+    )
+    .map((hold) => ({
+      busyFrom: hold.checkInTime,
+      busyTo: hold.checkOutTime,
+      hold,
+      releaseDate: hold.checkOut,
+      room
+    }));
+
+  return reservationConflicts.concat(holdConflicts);
 }
 
 function getCatalogPanelObjectStatus(
@@ -12025,12 +14517,12 @@ function getCatalogPanelObjectStatus(
   currentReservation: Reservation | null
 ) {
   if (selectedRoomIds.includes(room.id)) return "Выбран";
-  if (currentReservation?.status === "booked" && currentReservation.roomIds.includes(room.id)) return "Забронирован";
+  if (currentReservation && isReservationActiveOccupancy(currentReservation) && currentReservation.roomIds.includes(room.id)) return "Забронирован";
   if (room.status === "repair") return "На ремонте";
   if (isRoomCleaningNow(room, reservations)) return "Уборка до 15:00";
 
   const conflict = reservations.find((reservation) =>
-    reservation.status === "booked" &&
+    isReservationActiveOccupancy(reservation) &&
     reservation.roomIds.includes(room.id) &&
     (isHourlyBookingObject(room)
       ? reservation.checkIn === checkIn
@@ -12050,7 +14542,7 @@ function isRoomCleaningNow(room: Room, reservations: Reservation[]) {
   const today = formatDateInput(now);
 
   return reservations.some((reservation) =>
-    reservation.status === "booked" &&
+    isReservationActiveOccupancy(reservation) &&
     reservation.roomIds.includes(room.id) &&
     reservation.checkOut === today
   );
@@ -12188,7 +14680,7 @@ function getContactNameCandidates(root?: HTMLElement | null) {
 
 function isLikelyContactName(value: string) {
   if (!value) return false;
-  if (getGuestNameFallbackFromPhone(value) === value) return true;
+  if (isGuestFallbackName(value)) return true;
   if (/ic-|data-icon|wds-|status-|refreshed/i.test(value)) return false;
   if (value.length > 80) return false;
   if (extractPhoneFromText(value)) return false;
@@ -12197,13 +14689,27 @@ function isLikelyContactName(value: string) {
   if (/номер\s+\d+/i.test(value)) return false;
   if (/^\d{1,2}:\d{2}$/.test(value)) return false;
   if (/chat-filled|status-refreshed|wa-wordmark|new-chat|непрочитанное|избранное|группы/i.test(value)) return false;
-  return !/^(сведения профиля|данные контакта|информация и номер телефона|сведения о компании|данные компании|contact info|profile details|business info|бизнес[\s\u2010-\u2015-]?аккаунт|business[\s\u2010-\u2015-]?account|online|онлайн|печатает|typing|last seen|был\(-а\).*|был\(а\).*|был.*|сегодня|вчера.*)$/i.test(value);
+  return !/^(сведения профиля|данные контакта|информация и номер телефона|сведения о компании|данные компании|contact info|profile details|business info|бизнес[\s\u2010-\u2015-]?аккаунт|business[\s\u2010-\u2015-]?account|online|онлайн|в сети|поиск|печатает|typing|last seen|был\(-а\).*|был\(а\).*|был.*|сегодня|вчера.*)$/i.test(value);
 }
 
 function getSafeGuestName(name: string, phone: string) {
   const normalizedName = normalizeExtractedText(name);
   if (isLikelyContactName(normalizedName) && !isTechnicalGuestName(normalizedName)) return normalizedName;
   return getGuestNameFallbackFromPhone(phone);
+}
+
+function resolveGuestNameForPhone(name: string, phone: string) {
+  const normalizedName = normalizeExtractedText(name);
+  if (
+    normalizedName &&
+    !isGuestFallbackNameWithExtraText(normalizedName) &&
+    !isFullPhoneGuestFallbackName(normalizedName) &&
+    !isTechnicalGuestName(normalizedName)
+  ) {
+    return normalizedName;
+  }
+
+  return getGuestNameFallbackFromPhone(phone) || normalizedName;
 }
 
 function isInvalidGuestNameText(value: string) {
@@ -12217,6 +14723,18 @@ function isInvalidGuestNameText(value: string) {
 
 function isTechnicalGuestName(value: string) {
   return /ic-close|data-icon|chat-filled|status-refreshed|wds-|wa-wordmark|new-chat|сведения профиля|данные контакта|бизнес[\s\u2010-\u2015-]?аккаунт|business[\s\u2010-\u2015-]?account/i.test(value);
+}
+
+function isGuestFallbackName(value: string) {
+  return /^Гость\s+\d{4}$/i.test(normalizeExtractedText(value));
+}
+
+function isGuestFallbackNameWithExtraText(value: string) {
+  return /^Гость\s+\d{4}\s+\S+/i.test(normalizeExtractedText(value));
+}
+
+function isFullPhoneGuestFallbackName(value: string) {
+  return /^Гость\s+\+?\d[\d\s()-]{9,}$/i.test(normalizeExtractedText(value));
 }
 
 function getGuestNameFallbackFromPhone(phone: string) {
@@ -12268,6 +14786,26 @@ async function extractActiveChatPhoneOnly(activeChat: ActiveChat | null) {
   };
 }
 
+async function extractActiveChatPhoneFast(activeChat: ActiveChat | null) {
+  const phoneFromStore = await extractPhoneFromWhatsAppStore();
+  const phoneFromSelected = extractPhoneFromSelectedChat();
+  const phoneFromDom = extractPhoneFromActiveChat();
+  const phone = phoneFromSelected || phoneFromStore || phoneFromDom || activeChat?.phone || "";
+  debugContactFlow("extract-phone-fast-result", {
+    activeChatId: activeChat?.id ?? "",
+    activeChatTitle: activeChat?.title ?? "",
+    activeChatPhone: activeChat?.phone ?? "",
+    phoneFromSelected,
+    phoneFromStore,
+    phoneFromDom,
+    phone
+  });
+  return {
+    name: phone ? getGuestNameFallbackFromPhone(phone) : "",
+    phone
+  };
+}
+
 async function extractPhoneFromCurrentChatProfile(activeChat: ActiveChat | null = null) {
   const phoneFromStore = await extractPhoneFromWhatsAppStore();
   const phoneFromDom = extractPhoneFromActiveChat();
@@ -12279,7 +14817,7 @@ async function extractPhoneFromCurrentChatProfile(activeChat: ActiveChat | null 
     });
   }
 
-  closeWhatsAppProfilePanels();
+  await closeWhatsAppProfilePanelsAsync();
   await waitForDelay(450);
   openActiveChatProfile();
 
@@ -12329,16 +14867,11 @@ function extractPhoneFromActiveChat() {
 }
 
 function extractPhoneFromText(text: string) {
-  const match = text.match(/(?:\+?\d[\s().-]*){10,16}/);
-  if (!match) {
-    return "";
-  }
-
-  const digits = match[0].replace(/[^\d+]/g, "");
-  if (/^8\d{10}$/.test(digits)) return digits.replace(/^8/, "+7");
-  if (/^7\d{10}$/.test(digits)) return `+${digits}`;
-  if (/^\d{10}$/.test(digits)) return `+7${digits}`;
-  return digits.startsWith("+") ? digits : `+${digits}`;
+  const matches = text.match(/(?:\+?\d[\s().-]*){10,16}/g) ?? [];
+  const normalizedPhones = matches
+    .map((match) => formatPhoneDigits(match))
+    .filter(Boolean);
+  return normalizedPhones.find((phone) => /^(\+7\d{10})$/.test(phone)) ?? normalizedPhones[0] ?? "";
 }
 
 async function extractPhoneFromWhatsAppStore() {
@@ -12397,7 +14930,20 @@ function formatPhoneDigits(value: string) {
   if (/^8\d{10}$/.test(digits)) return digits.replace(/^8/, "+7");
   if (/^7\d{10}$/.test(digits)) return `+${digits}`;
   if (/^\d{10}$/.test(digits)) return `+7${digits}`;
+  if (digits.length > 11) {
+    const kazakhstanPhone = digits.match(/7\d{10}/g)?.at(-1);
+    if (kazakhstanPhone) return `+${kazakhstanPhone}`;
+    const localPhone = digits.slice(-10);
+    if (/^\d{10}$/.test(localPhone)) return `+7${localPhone}`;
+  }
   return `+${digits}`;
+}
+
+function isCompleteContactPhone(value: string) {
+  const digits = formatPhoneDigits(value).replace(/\D/g, "");
+  if (!digits) return false;
+  if (/^7\d{10}$/.test(digits)) return true;
+  return digits.length >= 10;
 }
 
 function buildPhoneWithPrefix(value: string, prefix: string) {
@@ -12407,7 +14953,7 @@ function buildPhoneWithPrefix(value: string, prefix: string) {
   const prefixDigits = prefix.replace(/\D/g, "");
   const valueDigits = trimmedValue.replace(/\D/g, "");
   if (!valueDigits) return "";
-  if (valueDigits.length >= 11) return formatPhoneDigits(valueDigits);
+  if (valueDigits.length > 10) return formatPhoneDigits(trimmedValue);
   return `+${prefixDigits}${valueDigits}`;
 }
 
@@ -12420,7 +14966,7 @@ function splitPhoneForInput(phone: string) {
     .sort((left, right) => right.code.replace(/\D/g, "").length - left.code.replace(/\D/g, "").length)
     .find((option) => digits.startsWith(option.code.replace(/\D/g, "")));
 
-  if (!matchedPrefix) return { prefix: "+7", local: digits };
+  if (!matchedPrefix) return { prefix: "+7", local: digits.slice(-10) };
 
   const prefixDigits = matchedPrefix.code.replace(/\D/g, "");
   return {
@@ -12455,16 +15001,73 @@ function openActiveChatProfile() {
 }
 
 function findVisibleProfilePanel() {
-  const likelyPanels = Array.from(document.querySelectorAll<HTMLElement>('[data-testid*="drawer"], [data-testid*="panel"], [role="dialog"], aside'))
+  const explicitPanels = Array.from(document.querySelectorAll<HTMLElement>('[data-testid*="drawer"], [data-testid*="panel"], [role="dialog"], aside, section[role="region"]'))
     .filter((element) => !isGpbElement(element));
+  const rightSidePanels = Array.from(document.querySelectorAll<HTMLElement>("aside, section, div[role='region'], div"))
+    .filter((element) => {
+      if (isGpbElement(element) || !isVisibleElement(element)) return false;
+      const rect = element.getBoundingClientRect();
+      return rect.width >= 240 &&
+        rect.width <= 760 &&
+        rect.height >= Math.min(360, window.innerHeight * 0.55) &&
+        rect.right > window.innerWidth * 0.72 &&
+        rect.left > window.innerWidth * 0.35;
+    })
+    .sort((left, right) => {
+      const leftRect = left.getBoundingClientRect();
+      const rightRect = right.getBoundingClientRect();
+      return (leftRect.width * leftRect.height) - (rightRect.width * rightRect.height);
+    });
+  const likelyPanels = [...explicitPanels, ...rightSidePanels].filter((element, index, list) => list.indexOf(element) === index);
   const matchedPanel = likelyPanels.find((element) => {
     if (!isVisibleElement(element)) return false;
-    return /сведения профиля|сведения о компании|данные компании|бизнес аккаунт|contact info|profile|business info|business account/i.test(element.innerText || element.getAttribute("aria-label") || "");
+    return isLikelyWhatsAppProfilePanel(element);
   });
 
-  if (matchedPanel) return matchedPanel;
+  return matchedPanel ?? null;
+}
 
-  return likelyPanels.reverse().find((element) => isVisibleElement(element) && element.innerText.length > 20) ?? null;
+function findVisibleContactDetailsPanel() {
+  const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-testid*="drawer"], [data-testid*="panel"], [role="dialog"], aside, section[role="region"], div'))
+    .filter((element) => {
+      if (!isVisibleElement(element) || isGpbElement(element)) return false;
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 240 || rect.width > 760 || rect.height < Math.min(360, window.innerHeight * 0.55)) return false;
+      if (rect.right < window.innerWidth * 0.62) return false;
+      const text = normalizeExtractedText([
+        element.innerText,
+        element.getAttribute("aria-label"),
+        element.getAttribute("data-testid")
+      ].filter(Boolean).join(" "));
+      return /данные\s+контакта|contact\s+details|сведения\s+контакта/i.test(text) &&
+        !/поиск\s+или\s+новый\s+чат|новый\s+контакт/i.test(text);
+    })
+    .sort((left, right) => {
+      const leftRect = left.getBoundingClientRect();
+      const rightRect = right.getBoundingClientRect();
+      return (leftRect.width * leftRect.height) - (rightRect.width * rightRect.height);
+    });
+
+  return panels[0] ?? null;
+}
+
+function isLikelyWhatsAppProfilePanel(element: HTMLElement) {
+  const text = normalizeExtractedText([
+    element.innerText,
+    element.getAttribute("aria-label"),
+    element.getAttribute("data-testid")
+  ].filter(Boolean).join(" "));
+  if (!text) return false;
+  if (/whatsapp business\s+в\s+whatsapp web|wds-smb-ill-start-a-chat|начать чат|start a chat|поиск или новый чат|новый контакт/i.test(text)) {
+    return false;
+  }
+  if (/сведения профиля|сведения о компании|данные компании|информация и номер телефона|контактная информация|contact info|profile|business info/i.test(text)) {
+    return true;
+  }
+
+  const hasPhone = Boolean(extractPhoneFromText(text));
+  const hasProfileAction = /добавить|контакт|номер|телефон|шифрован|зашифрован|общие группы|add|contact|phone|encryption|groups/i.test(text);
+  return hasPhone && hasProfileAction;
 }
 
 function getVisibleProfileText() {
@@ -12546,34 +15149,38 @@ function getBroadPhoneSearchText() {
 
 function clickProfileContactDetails() {
   const profilePanel = findVisibleProfilePanel();
-  if (!profilePanel) return;
+  if (!profilePanel) return false;
 
   const exactTextNode = Array.from(profilePanel.querySelectorAll<HTMLElement>("span, div, button, [role='button'], [tabindex]"))
     .filter(isVisibleElement)
     .sort((left, right) => (left.innerText || left.textContent || "").length - (right.innerText || right.textContent || "").length)
-    .find((element) => /информация\s+и\s+номер\s+телефона/i.test(element.innerText || element.textContent || ""));
+    .find((element) =>
+      /информация\s+и\s+номер\s+телефона|данные\s+контакта|посмотреть\s+данные\s+контакта/i.test(element.innerText || element.textContent || element.getAttribute("title") || "")
+    );
 
   if (exactTextNode) {
     clickNearestProfileButton(exactTextNode);
-    return;
+    return true;
   }
 
   const clickable = Array.from(profilePanel.querySelectorAll<HTMLElement>("[role='button'], button, [tabindex]")).find((element) => {
     if (!isVisibleElement(element)) return false;
-    return /информация\s+и\s+номер\s+телефона|телефон|номер|контакт|contact|phone|сведения|информация|about|о себе|компани/i.test(element.innerText || element.getAttribute("aria-label") || element.getAttribute("title") || "");
+    return /информация\s+и\s+номер\s+телефона|данные\s+контакта|посмотреть\s+данные\s+контакта|телефон|номер|контакт|contact|phone|сведения|информация|about|о себе|компани/i.test(element.innerText || element.getAttribute("aria-label") || element.getAttribute("title") || "");
   });
 
   if (clickable) {
     clickable.click();
-    return;
+    return true;
   }
 
   const textNode = Array.from(profilePanel.querySelectorAll<HTMLElement>("span, div")).find((element) =>
-    isVisibleElement(element) && /информация\s+и\s+номер\s+телефона/i.test(element.innerText || element.textContent || "")
+    isVisibleElement(element) && /информация\s+и\s+номер\s+телефона|данные\s+контакта|посмотреть\s+данные\s+контакта/i.test(element.innerText || element.textContent || element.getAttribute("title") || "")
   );
   if (textNode) {
     clickNearestProfileButton(textNode);
+    return true;
   }
+  return false;
 }
 
 async function saveActiveWhatsAppContact(contactName = "", contactPhone = "", options: { allowSidebar?: boolean } = {}) {
@@ -12601,62 +15208,121 @@ async function saveActiveWhatsAppContact(contactName = "", contactPhone = "", op
 async function saveActiveWhatsAppContactFromProfile(contactName = "", contactPhone = "") {
   try {
     debugContactFlow("profile-save-start", { contactName, contactPhone });
-    closeWhatsAppProfilePanels();
-    await waitForDelay(250);
-    openActiveChatProfile();
-    const profilePanel = await waitForElement(findVisibleProfilePanel, 2500);
+    let profilePanel = findVisibleProfilePanel();
+    const existingProfileHasExpectedPhone = profilePanel ? profilePanelHasPhone(profilePanel, contactPhone) : false;
+    debugContactFlow("profile-save-existing-panel", {
+      found: Boolean(profilePanel),
+      hasExpectedPhone: existingProfileHasExpectedPhone,
+      text: getDebugText(profilePanel)
+    });
+
+    if (profilePanel && contactPhone && !existingProfileHasExpectedPhone) {
+      await closeWhatsAppProfilePanelsAsync();
+      profilePanel = null;
+    }
+
+    if (!profilePanel) {
+      await waitForDelay(250);
+      openActiveChatProfile();
+      profilePanel = await waitForElement(findVisibleProfilePanel, 2500);
+    }
     debugContactFlow("profile-save-panel", { found: Boolean(profilePanel), text: getDebugText(profilePanel) });
     if (!profilePanel) return false;
 
-    let addButton = findProfileAddContactButton(profilePanel);
-    debugContactFlow("profile-save-add-button", { found: Boolean(addButton), text: getDebugText(addButton) });
-    if (!addButton) {
-      const alreadySaved = profilePanelHasPhone(profilePanel, contactPhone);
-      const alreadyNamed = profilePanelMatchesContactName(profilePanel, contactName);
-      debugContactFlow("profile-save-already-saved-check", { alreadySaved, alreadyNamed, contactPhone, contactName });
-      if (alreadySaved && alreadyNamed) {
-        closeWhatsAppProfilePanels();
-        return true;
-      }
+    const alreadySaved = profilePanelHasPhone(profilePanel, contactPhone);
+    const alreadyNamed = profilePanelMatchesContactName(profilePanel, contactName);
+    debugContactFlow("profile-save-already-saved-check", { alreadySaved, alreadyNamed, contactPhone, contactName });
+    if (alreadySaved && alreadyNamed) {
+      await closeWhatsAppProfilePanelsAsync();
+      return true;
+    }
 
-      clickProfileContactDetails();
-      await waitForDelay(700);
-      const detailsPanel = findVisibleProfilePanel();
-      addButton = detailsPanel ? findProfileAddContactButton(detailsPanel) : null;
+    let addButton = findProfilePersonAddButton(profilePanel) ?? findProfilePersonAddButton(document.body);
+    debugContactFlow("profile-save-add-button", { found: Boolean(addButton), text: getDebugText(addButton), rect: getDebugRect(addButton) });
+    if (!addButton) {
+      const detailsClicked = clickProfileContactDetails();
+      const detailsPanel = detailsClicked
+        ? await waitForElement(() => findVisibleContactDetailsPanel() ?? findVisibleProfilePanel(), 2600)
+        : findVisibleProfilePanel();
+      addButton = detailsPanel ? findProfilePersonAddButton(detailsPanel) ?? findProfilePersonAddButton(document.body) : null;
       const savedAfterDetails = detailsPanel ? profilePanelHasPhone(detailsPanel, contactPhone) : false;
       const namedAfterDetails = detailsPanel ? profilePanelMatchesContactName(detailsPanel, contactName) : false;
       debugContactFlow("profile-save-details-check", {
         found: Boolean(detailsPanel),
+        detailsClicked,
         addFound: Boolean(addButton),
         addText: getDebugText(addButton),
+        addRect: getDebugRect(addButton),
         alreadySaved: savedAfterDetails,
         alreadyNamed: namedAfterDetails,
         text: getDebugText(detailsPanel)
       });
       if (!addButton) {
         if (savedAfterDetails && namedAfterDetails) {
-          closeWhatsAppProfilePanels();
+          await closeWhatsAppProfilePanelsAsync();
           return true;
         }
-        const edited = await editOpenWhatsAppContactFromProfilePanel(contactName, contactPhone, detailsPanel ?? profilePanel, "profile-save-edit-fallback");
-        if (!edited) closeWhatsAppProfilePanels();
-        return edited;
+        debugContactFlow("profile-save-skip-edit-fallback", {
+          reason: "no explicit contact edit button",
+          contactName,
+          contactPhone,
+          text: getDebugText(detailsPanel ?? profilePanel)
+        });
+        await closeWhatsAppProfilePanelsAsync();
+        return false;
       }
     }
-    clickWhatsAppElement(addButton);
-
-    return saveOpenWhatsAppContactForm(contactName, contactPhone, "profile-save");
+    const contactForm = await openProfileContactFormFromAddButton(addButton);
+    debugContactFlow("profile-save-form-after-add-menu", { found: Boolean(contactForm), text: getDebugText(contactForm) });
+    return saveOpenWhatsAppContactForm(contactName, contactPhone, "profile-save", { fillPhone: true });
   } catch (error) {
     debugContactFlow("profile-save-error", { message: error instanceof Error ? error.message : String(error) });
-    closeWhatsAppProfilePanels();
+    await closeWhatsAppProfilePanelsAsync();
     return false;
   }
+}
+
+async function openProfileContactFormFromAddButton(addButton: HTMLElement) {
+  const clickPoints = [
+    { xRatio: 0.5, yRatio: 0.5, label: "center" },
+    { xRatio: 0.62, yRatio: 0.34, label: "icon" },
+    { xRatio: 0.76, yRatio: 0.5, label: "right" },
+    { xRatio: 0.24, yRatio: 0.5, label: "left" }
+  ];
+
+  for (const point of clickPoints) {
+    debugContactFlow("profile-save-click-add-button", {
+      clickPoint: point.label,
+      text: getDebugText(addButton),
+      rect: getDebugRect(addButton)
+    });
+    clickWhatsAppElementAt(addButton, point.xRatio, point.yRatio);
+    await waitForDelay(450);
+
+    const directForm = findEditableContactFormPanel();
+    if (directForm) return directForm;
+
+    const menuCreateContactButton = findProfileCreateContactMenuButton();
+    debugContactFlow("profile-save-create-menu-button", {
+      clickPoint: point.label,
+      found: Boolean(menuCreateContactButton),
+      text: getDebugText(menuCreateContactButton),
+      rect: getDebugRect(menuCreateContactButton)
+    });
+    if (menuCreateContactButton) {
+      clickWhatsAppRow(menuCreateContactButton);
+      const formFromMenu = await waitForElement(findEditableContactFormPanel, 1800);
+      if (formFromMenu) return formFromMenu;
+    }
+  }
+
+  return waitForElement(findEditableContactFormPanel, 1200);
 }
 
 async function overwriteActiveWhatsAppContact(contactName = "", contactPhone = "") {
   try {
     debugContactFlow("overwrite-whatsapp-start", { contactName, contactPhone });
-    closeWhatsAppProfilePanels();
+    await closeWhatsAppProfilePanelsAsync();
     await waitForDelay(350);
     openActiveChatProfile();
 
@@ -12674,7 +15340,7 @@ async function overwriteActiveWhatsAppContact(contactName = "", contactPhone = "
     return editOpenWhatsAppContactFromProfilePanel(contactName, contactPhone, profilePanel, "overwrite");
   } catch (error) {
     debugContactFlow("overwrite-error", { message: error instanceof Error ? error.message : String(error) });
-    closeWhatsAppProfilePanels();
+    await closeWhatsAppProfilePanelsAsync();
     return false;
   }
 }
@@ -12691,12 +15357,12 @@ async function editOpenWhatsAppContactFromProfilePanel(contactName: string, cont
   return saveOpenWhatsAppContactForm(contactName, contactPhone, debugPrefix);
 }
 
-async function saveOpenWhatsAppContactForm(contactName: string, contactPhone: string, debugPrefix: string) {
+async function saveOpenWhatsAppContactForm(contactName: string, contactPhone: string, debugPrefix: string, options: { fillPhone?: boolean } = {}) {
   const contactForm = await waitForElement(findEditableContactFormPanel, 5000);
   debugContactFlow(`${debugPrefix}-contact-form`, { found: Boolean(contactForm), text: getDebugText(contactForm) });
   if (!contactForm) return false;
 
-  const filled = await fillWhatsAppContactForm(contactName, contactPhone, contactForm, { fillPhone: false });
+  const filled = await fillWhatsAppContactForm(contactName, contactPhone, contactForm, { fillPhone: options.fillPhone ?? false });
   debugContactFlow(`${debugPrefix}-fill-result`, { filled });
   if (!filled) return false;
 
@@ -12706,7 +15372,7 @@ async function saveOpenWhatsAppContactForm(contactName: string, contactPhone: st
   clickWhatsAppElement(saveButton);
 
   await waitForDelay(1200);
-  closeWhatsAppProfilePanels();
+  await closeWhatsAppProfilePanelsAsync();
   await waitForDelay(250);
   debugContactFlow(`${debugPrefix}-finished`, { contactName, contactPhone });
   return true;
@@ -12772,8 +15438,13 @@ function findFloatingContactSaveButton(candidates: HTMLElement[], contactForm: H
 async function createWhatsAppContactFromSidebar(contactName = "", contactPhone = "") {
   try {
     debugContactFlow("sidebar-create-start", { contactName, contactPhone });
-    closeWhatsAppProfilePanels();
+    await closeWhatsAppProfilePanelsAsync();
     await waitForDelay(300);
+    const existingOpened = await openWhatsAppChatByPhone(contactPhone, contactName);
+    const alreadySavedContact = existingOpened && activeWhatsAppChatLooksSavedAsContact(contactName, contactPhone);
+    debugContactFlow("sidebar-create-existing-before-form", { contactName, contactPhone, existingOpened, alreadySavedContact });
+    if (alreadySavedContact) return true;
+
     let contactForm = findEditableContactFormPanel();
 
     if (!contactForm) {
@@ -12821,7 +15492,7 @@ async function createWhatsAppContactFromSidebar(contactName = "", contactPhone =
     if (!refilled) return false;
     if (contactFormHasExistingContactMessage(contactForm)) {
       debugContactFlow("sidebar-existing-contact-message", { text: getDebugText(contactForm) });
-      closeWhatsAppProfilePanels();
+      await closeWhatsAppProfilePanelsAsync();
       await waitForDelay(500);
       return openWhatsAppChatByPhone(contactPhone, contactName);
     }
@@ -12832,7 +15503,7 @@ async function createWhatsAppContactFromSidebar(contactName = "", contactPhone =
     debugContactFlow("sidebar-save-button", { found: Boolean(saveButton), text: getDebugText(saveButton) });
     if (!saveButton && contactFormHasExistingContactMessage(contactForm)) {
       debugContactFlow("sidebar-existing-contact-message-before-save", { text: getDebugText(contactForm) });
-      closeWhatsAppProfilePanels();
+      await closeWhatsAppProfilePanelsAsync();
       await waitForDelay(500);
       return openWhatsAppChatByPhone(contactPhone, contactName);
     }
@@ -12840,18 +15511,17 @@ async function createWhatsAppContactFromSidebar(contactName = "", contactPhone =
     clickWhatsAppElement(saveButton);
 
     await waitForDelay(1600);
-    closeWhatsAppProfilePanels();
+    await closeWhatsAppProfilePanelsAsync();
     await waitForDelay(500);
     const openedAfterSave = await openWhatsAppChatByPhone(contactPhone, contactName);
     debugContactFlow("sidebar-post-save-open-chat", { openedAfterSave });
-    if (!openedAfterSave) {
-      closeWhatsAppSidebarSearchOverlay();
-    }
+    closeWhatsAppSidebarSearchOverlay();
+    await closeWhatsAppProfilePanelsAsync();
     debugContactFlow("sidebar-create-finished", { contactName, contactPhone });
     return true;
   } catch (error) {
     debugContactFlow("sidebar-create-error", { message: error instanceof Error ? error.message : String(error) });
-    closeWhatsAppProfilePanels();
+    await closeWhatsAppProfilePanelsAsync();
     return false;
   }
 }
@@ -12972,6 +15642,21 @@ function clickWhatsAppElement(element: HTMLElement) {
   const rect = element.getBoundingClientRect();
   const clientX = rect.left + rect.width / 2;
   const clientY = rect.top + rect.height / 2;
+  dispatchWhatsAppClick(element, clientX, clientY);
+}
+
+function clickWhatsAppElementAt(element: HTMLElement, xRatio: number, yRatio: number) {
+  element.scrollIntoView({ block: "center", inline: "center" });
+  const rect = element.getBoundingClientRect();
+  const clientX = rect.left + rect.width * xRatio;
+  const clientY = rect.top + rect.height * yRatio;
+  const pointedElement = document.elementFromPoint(clientX, clientY);
+  const target = pointedElement instanceof HTMLElement && !isGpbElement(pointedElement) ? pointedElement : element;
+  dispatchWhatsAppClick(target, clientX, clientY);
+  if (target !== element) dispatchWhatsAppClick(element, clientX, clientY);
+}
+
+function dispatchWhatsAppClick(element: HTMLElement, clientX: number, clientY: number) {
   const eventInit = { bubbles: true, cancelable: true, clientX, clientY, view: window };
 
   element.dispatchEvent(new PointerEvent("pointerdown", eventInit));
@@ -13304,17 +15989,57 @@ function findProfileActionButton(root: HTMLElement, pattern: RegExp) {
   return matched.closest<HTMLElement>("[role='button'], button, [tabindex]") ?? matched;
 }
 
+function findProfilePersonAddButton(root: HTMLElement) {
+  const rootRect = root.getBoundingClientRect();
+  const candidates = Array.from(root.querySelectorAll<HTMLElement>("[role='button'], button, [tabindex], span[data-icon], span, div"))
+    .filter((element) => {
+      if (!isVisibleElement(element) || isGpbElement(element)) return false;
+      const rect = element.getBoundingClientRect();
+      if (rect.top < rootRect.top + 96) return false;
+      if (rect.left < rootRect.left - 24 || rect.right > rootRect.right + 80) return false;
+      const text = getElementActionText(element);
+      if (/добавить\s+в\s+список|add\s+to\s+list|list-people|поиск|search|избран|favorite|добавьте\s+примечания|add\s+notes/i.test(text)) return false;
+      return /ic-person-add|person-add|add-user|contact-add/i.test(text) && /\b(добавить|add)\b/i.test(text);
+    })
+    .map((element) => element.closest<HTMLElement>("button, [role='button'], [tabindex]") ?? element)
+    .filter((element, index, list) => list.indexOf(element) === index)
+    .sort((left, right) => {
+      const leftRect = left.getBoundingClientRect();
+      const rightRect = right.getBoundingClientRect();
+      const leftText = getElementActionText(left);
+      const rightText = getElementActionText(right);
+      const leftScore = (left.matches("button, [role='button']") ? 0 : 10) + Math.abs(leftRect.width - 76) + Math.abs(leftRect.height - 68) + leftText.length / 20;
+      const rightScore = (right.matches("button, [role='button']") ? 0 : 10) + Math.abs(rightRect.width - 76) + Math.abs(rightRect.height - 68) + rightText.length / 20;
+      return leftScore - rightScore;
+    });
+
+  return candidates[0] ?? null;
+}
+
 function findProfileAddContactButton(root: HTMLElement) {
   const candidates = Array.from(root.querySelectorAll<HTMLElement>("[role='button'], button, [tabindex], span, div"))
     .filter((element) => isVisibleElement(element) && !isGpbElement(element))
     .sort((left, right) => getElementActionText(left).length - getElementActionText(right).length);
+  const rootText = normalizeExtractedText(getDebugText(root));
+  const isContactDetails = /данные\s+контакта|contact\s+details/i.test(rootText);
+
+  const addToListButton = candidates.find((element) => {
+    const rect = element.getBoundingClientRect();
+    const rootRect = root.getBoundingClientRect();
+    const text = getElementActionText(element);
+    const isHeaderAction = rect.top <= rootRect.top + 96 && rect.left >= rootRect.left && rect.right <= rootRect.right + 24;
+    const isClickable = element.matches("[role='button'], button, [tabindex]") || Boolean(element.closest("[role='button'], button, [tabindex]"));
+    return isHeaderAction && isClickable && /добавить\s+в\s+список|add\s+to\s+list/i.test(text);
+  });
+  if (addToListButton) return addToListButton.closest<HTMLElement>("[role='button'], button, [tabindex]") ?? addToListButton;
 
   const exactTextMatch = candidates.find((element) => {
     const text = getElementActionText(element).trim();
     if (!/^(добавить|add)$/i.test(text)) return false;
+    if (/добавить\s+в\s+список|add\s+to\s+list/i.test(getElementActionText(element))) return false;
     const rect = element.getBoundingClientRect();
     const rootRect = root.getBoundingClientRect();
-    return rect.left >= rootRect.left && rect.right <= rootRect.right && rect.top > rootRect.top + 80;
+    return rect.left >= rootRect.left && rect.right <= rootRect.right && (isContactDetails || rect.top > rootRect.top + 80);
   });
   if (exactTextMatch) return exactTextMatch;
 
@@ -13325,15 +16050,16 @@ function findProfileAddContactButton(root: HTMLElement) {
       element.getAttribute("title"),
       element.textContent
     ].filter(Boolean).join(" ");
+    if (/добавить\s+в\s+список|add\s+to\s+list|list-people/i.test(text)) return false;
     if (!/person-add|add-user|contact-add|добавить/i.test(text)) return false;
     const actionText = getElementActionText(element);
-    return !/поиск|search|избран|favorite/i.test(actionText) && actionText.length <= 80;
+    return !/поиск|search|избран|favorite|добавить\s+в\s+список|add\s+to\s+list/i.test(actionText) && actionText.length <= (isContactDetails ? 120 : 80);
   });
   if (iconMatch) return iconMatch.closest<HTMLElement>("[role='button'], button, [tabindex]") ?? iconMatch;
 
   const matched = candidates.find((element) => {
     const text = getElementActionText(element);
-    if (/избран|favorite|star/i.test(text)) return false;
+    if (/избран|favorite|star|добавить\s+в\s+список|add\s+to\s+list|list-people|добавьте\s+примечания|add\s+notes/i.test(text)) return false;
     if (text.length > 50) return false;
     return /^(добавить|add)$/i.test(text.trim()) ||
       /\bдобавить\b/i.test(text) ||
@@ -13346,6 +16072,34 @@ function findProfileAddContactButton(root: HTMLElement) {
   const clickableText = getElementActionText(clickable);
   if (/\bдобавить\b/i.test(clickableText) && /\bпоиск\b/i.test(clickableText)) return matched;
   return clickableText.length <= 80 ? clickable : matched;
+}
+
+function findProfileCreateContactMenuButton() {
+  const profilePanel = findVisibleProfilePanel();
+  const profileRect = profilePanel?.getBoundingClientRect();
+  const sidebarRect = document.querySelector<HTMLElement>("#side")?.getBoundingClientRect();
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>("[role='menuitem'], [role='button'], button, [tabindex], span, div"))
+    .filter((element) => {
+      if (!isVisibleElement(element) || isGpbElement(element)) return false;
+      const rect = element.getBoundingClientRect();
+      const text = getElementActionText(element);
+      const isSidebar = sidebarRect && rect.left >= sidebarRect.left - 8 && rect.right <= sidebarRect.right + 16;
+      const isNearProfile = profileRect
+        ? rect.left >= profileRect.left - 32 && rect.right <= profileRect.right + 260 && rect.top >= profileRect.top
+        : rect.left > window.innerWidth * 0.35;
+      return !isSidebar && isNearProfile && /^(новый\s+контакт|создать\s+контакт|добавить\s+контакт|new\s+contact|create\s+contact|add\s+contact)$/i.test(text.trim());
+    })
+    .sort((left, right) => {
+      const leftClickable = left.matches("[role='menuitem'], [role='button'], button, [tabindex]") ? 0 : 1;
+      const rightClickable = right.matches("[role='menuitem'], [role='button'], button, [tabindex]") ? 0 : 1;
+      return leftClickable - rightClickable || getElementActionText(left).length - getElementActionText(right).length;
+    });
+
+  const matched = candidates[0] ?? null;
+  if (!matched) return null;
+  return matched.closest<HTMLElement>("[role='menuitem'], [role='button'], button, [tabindex]") ??
+    findClickableAncestor(matched, document.body) ??
+    matched;
 }
 
 function profilePanelHasPhone(profilePanel: HTMLElement, phone: string) {
@@ -13371,6 +16125,13 @@ function findProfileEditIcon(root: HTMLElement) {
   const candidates = Array.from(root.querySelectorAll<HTMLElement>("[role='button'], button, [tabindex], span[data-icon], [aria-label], [title], svg"))
     .filter((element) => isVisibleElement(element) && !isGpbElement(element));
 
+  const exactEditButton = candidates.find((element) => {
+    const aria = normalizeExtractedText(element.getAttribute("aria-label") ?? "");
+    const title = normalizeExtractedText(element.getAttribute("title") ?? "");
+    return isProfileHeaderAction(element, root) && /^(редактировать|edit)$/i.test(aria || title);
+  });
+  if (exactEditButton) return exactEditButton.closest<HTMLElement>("[role='button'], button, [tabindex]") ?? exactEditButton;
+
   const byIcon = candidates.find((element) =>
     isProfileHeaderAction(element, root) && /edit|pencil|compose|карандаш|редакт/i.test([
       element.getAttribute("data-icon"),
@@ -13385,9 +16146,47 @@ function findProfileEditIcon(root: HTMLElement) {
     .filter((element) => {
       const rect = element.getBoundingClientRect();
       const rootRect = root.getBoundingClientRect();
+      const text = [
+        element.getAttribute("data-icon"),
+        element.getAttribute("aria-label"),
+        element.getAttribute("title"),
+        element.textContent,
+        getElementActionText(element)
+      ].filter(Boolean).join(" ");
+      if (/arrow|drop|menu|chevron|list|список/i.test(text)) return false;
       return isProfileHeaderAction(element, root) && rect.left > rootRect.right - 130 && rect.width <= 70 && rect.height <= 70;
     })
     .sort((left, right) => right.getBoundingClientRect().right - left.getBoundingClientRect().right)[0] ?? null;
+}
+
+function activeWhatsAppChatLooksSavedAsContact(contactName: string, contactPhone: string) {
+  const header = document.querySelector<HTMLElement>("#main header");
+  const headerText = normalizeExtractedText(getDebugText(header));
+  const activeTitle = normalizeExtractedText(getActiveChatDisplayName());
+  const expectedName = normalizeExtractedText(contactName);
+  const phoneDigits = normalizePhoneSearch(contactPhone);
+  const titleDigits = normalizePhoneSearch(activeTitle);
+  const headerDigits = normalizePhoneSearch(headerText);
+  const titleIsPhone = Boolean(phoneDigits && (titleDigits === phoneDigits || titleDigits.endsWith(phoneDigits.slice(-10))));
+  const headerIsPhone = Boolean(phoneDigits && (headerDigits === phoneDigits || headerDigits.endsWith(phoneDigits.slice(-10))));
+  const hasUnsavedAction = /добавить\s+в\s+список|add\s+to\s+list/i.test(headerText);
+  const matchesExpectedName = Boolean(
+    expectedName &&
+    !isGuestFallbackName(expectedName) &&
+    normalizeContactLookupText(activeTitle) === normalizeContactLookupText(expectedName)
+  );
+
+  debugContactFlow("active-chat-contact-saved-check", {
+    activeTitle,
+    headerText,
+    expectedName,
+    titleIsPhone,
+    headerIsPhone,
+    hasUnsavedAction,
+    matchesExpectedName
+  });
+
+  return matchesExpectedName && !titleIsPhone && !headerIsPhone && !hasUnsavedAction;
 }
 
 function isProfileHeaderAction(element: HTMLElement, root: HTMLElement) {
@@ -13523,8 +16322,17 @@ async function fillWhatsAppContactForm(contactName: string, contactPhone: string
   });
   const pageFilled = await fillWhatsAppContactFormInPage(name, formPhone, shouldFillPhone);
   debugContactFlow("contact-form-bridge-final", { pageFilled });
-  if (pageFilled) return true;
   if (!shouldFillPhone) {
+    if (pageFilled) {
+      const fields = getContactFormFieldsForPanel(root);
+      const nameField = findContactNameField(root, fields);
+      const clearedLastNames = nameField ? await clearContactLastNameFields(root, fields, nameField) : [];
+      debugContactFlow("contact-form-name-only-verified", {
+        nameValue: nameField ? getContactFieldValue(nameField) : "",
+        lastNameValues: clearedLastNames
+      });
+      return Boolean(nameField && getContactFieldValue(nameField).trim() === name);
+    }
     debugContactFlow("contact-form-skip-fallback", { reason: "profile form name-only mode" });
     return false;
   }
@@ -13973,14 +16781,37 @@ function findCloseChatMenuItem() {
 }
 
 function closeWhatsAppProfilePanels() {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const closeButton = findWhatsAppProfileCloseButton() ?? findWhatsAppCloseButton();
+  void closeWhatsAppProfilePanelsAsync();
+}
+
+async function closeWhatsAppProfilePanelsAsync() {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const panel = findVisibleProfilePanel();
+    if (!panel) {
+      debugContactFlow("profile-close-finished", { attempt, remaining: false });
+      return true;
+    }
+    const closeButton = findWhatsAppProfileCloseButton();
+    const backButton = closeButton ? null : findWhatsAppProfileBackButton();
+    debugContactFlow("profile-close-attempt", {
+      attempt,
+      foundButton: Boolean(closeButton),
+      foundBackButton: Boolean(backButton),
+      text: getDebugText(closeButton ?? backButton),
+      panelText: getDebugText(panel)
+    });
     if (closeButton) {
       clickWhatsAppElement(closeButton);
+    } else if (backButton) {
+      clickWhatsAppElement(backButton);
     } else {
-      pressEscape();
+      return false;
     }
+    await waitForDelay(backButton ? 700 : 350);
   }
+  const remaining = Boolean(findVisibleProfilePanel());
+  debugContactFlow("profile-close-finished", { attempt: 5, remaining });
+  return !remaining;
 }
 
 function pressEscape() {
@@ -14020,19 +16851,37 @@ function findWhatsAppProfileCloseButton() {
       element.getAttribute("title"),
       element.textContent
     ].filter(Boolean).join(" ");
+    const isCompactButton = rect.width <= 90 && rect.height <= 90;
     const isTopLeft = rect.left <= panelRect.left + 86 && rect.top <= panelRect.top + 92;
-    return isTopLeft && /x|close|закрыть|ic-close/i.test(text);
+    return isCompactButton && isTopLeft && /x|close|закрыть|ic-close/i.test(text);
   });
   if (closeByText) return closeByText.closest<HTMLElement>("[role='button'], button, [tabindex]") ?? closeByText;
 
-  return candidates
-    .filter((element) => {
-      const rect = element.getBoundingClientRect();
-      const isTopLeft = rect.left <= panelRect.left + 86 && rect.top <= panelRect.top + 92;
-      const isRoundButtonSize = rect.width >= 28 && rect.width <= 72 && rect.height >= 28 && rect.height <= 72;
-      return isTopLeft && isRoundButtonSize;
-    })
-    .sort((left, right) => left.getBoundingClientRect().left - right.getBoundingClientRect().left)[0] ?? null;
+  return null;
+}
+
+function findWhatsAppProfileBackButton() {
+  const profilePanel = findVisibleProfilePanel();
+  if (!profilePanel) return null;
+
+  const panelRect = profilePanel.getBoundingClientRect();
+  const candidates = Array.from(profilePanel.querySelectorAll<HTMLElement>("[role='button'], button, [tabindex], span[data-icon], [aria-label], [title], svg"))
+    .filter((element) => isVisibleElement(element) && !isGpbElement(element));
+
+  const backElement = candidates.find((element) => {
+    const rect = element.getBoundingClientRect();
+    const text = [
+      element.getAttribute("data-icon"),
+      element.getAttribute("aria-label"),
+      element.getAttribute("title"),
+      element.textContent
+    ].filter(Boolean).join(" ");
+    const isCompactButton = rect.width <= 90 && rect.height <= 90;
+    const isTopLeft = rect.left <= panelRect.left + 86 && rect.top <= panelRect.top + 92;
+    return isCompactButton && isTopLeft && /back|назад|back-refreshed/i.test(text);
+  });
+
+  return backElement?.closest<HTMLElement>("[role='button'], button, [tabindex]") ?? backElement ?? null;
 }
 
 function getElementActionText(element: HTMLElement) {
@@ -14091,14 +16940,24 @@ function calculateBookingTotals(
   hourlyHours: number,
   discountPercent: number,
   breakfastIncluded = true,
-  breakfastPricePerPerson = 0
+  breakfastPricePerPerson = 0,
+  extraInventoryChargeEnabled = false,
+  inventoryAirBedPrice = 0,
+  inventoryRollawayPrice = 0,
+  inventoryExtraPlaceAdultPercent = 100,
+  inventoryExtraPlaceChildPercent = 50,
+  adults = 0,
+  children = 0,
+  extraInventoryByRoomId: Record<string, ExtraInventoryItem> = {}
 ) {
   const nights = getNightsCount(checkIn, checkOut);
   const roomTotal = rooms.reduce((sum, room) => sum + calculateRoomStayPrice(room, checkIn, checkOut, hourlyHours), 0);
   const extraBedTotal = needsExtraBed && extraInventoryCount <= 0
     ? rooms.reduce((sum, room) => sum + (room.extraBedEnabled ? room.extraBedPrice * nights : 0), 0)
     : 0;
-  const extraInventoryTotal = Math.max(0, extraInventoryCount) * getExtraPlaceUnitPrice(rooms) * nights;
+  const extraInventoryTotal = extraInventoryChargeEnabled
+    ? calculateExtraInventoryChargeTotal(rooms, extraInventoryByRoomId, checkIn, checkOut, inventoryAirBedPrice, inventoryRollawayPrice, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceChildPercent, adults, children)
+    : 0;
   const breakfastDiscountAmount = breakfastIncluded
     ? 0
     : calculateBreakfastDiscountAmount(rooms, nights, extraInventoryCount, breakfastPricePerPerson);
@@ -14117,10 +16976,21 @@ function calculateBookingTotals(
 
 function getRoomDateRange(roomId: string, checkIn: string, checkOut: string, overrides: Record<string, { checkIn: string; checkOut: string }>) {
   const override = overrides[roomId];
+  if (isRoomDateOverrideAlignedWithBooking(override, checkIn, checkOut)) {
+    return {
+      checkIn: override.checkIn,
+      checkOut: override.checkOut
+    };
+  }
   return {
-    checkIn: override?.checkIn || checkIn,
-    checkOut: override?.checkOut || checkOut
+    checkIn,
+    checkOut
   };
+}
+
+function getActiveRoomDateOverride(roomId: string, checkIn: string, checkOut: string, overrides: Record<string, { checkIn: string; checkOut: string }>) {
+  const override = overrides[roomId];
+  return isRoomDateOverrideAlignedWithBooking(override, checkIn, checkOut) ? override : null;
 }
 
 function buildReservationItemsFromRooms(
@@ -14130,11 +17000,18 @@ function buildReservationItemsFromRooms(
   checkInTime: string,
   checkOutTime: string,
   roomDateOverrides: Record<string, { checkIn: string; checkOut: string }>,
-  extraInventoryByRoomId: Record<string, { airBeds: number; rollaways: number }>,
+  extraInventoryByRoomId: Record<string, ExtraInventoryItem>,
   hourlyHours: number,
   reservationSubtotal: number,
   reservationDiscountAmount: number,
   reservationTotal: number,
+  extraInventoryChargeEnabled = false,
+  inventoryAirBedPrice = 0,
+  inventoryRollawayPrice = 0,
+  inventoryExtraPlaceAdultPercent = 100,
+  inventoryExtraPlaceChildPercent = 50,
+  adults = 0,
+  children = 0,
   existingItems: ReservationItem[] = []
 ) {
   const existingByRoomId = new Map(existingItems.map((item) => [item.roomId, item]));
@@ -14142,8 +17019,9 @@ function buildReservationItemsFromRooms(
     const dateRange = getRoomDateRange(room.id, checkIn, checkOut, roomDateOverrides);
     const nights = getNightsCount(dateRange.checkIn, dateRange.checkOut);
     const roomInventory = extraInventoryByRoomId[room.id];
-    const extraInventoryCount = (roomInventory?.airBeds ?? 0) + (roomInventory?.rollaways ?? 0);
-    const extraInventoryTotal = extraInventoryCount * getExtraPlaceUnitPrice([room]) * nights;
+    const extraInventoryTotal = extraInventoryChargeEnabled
+      ? calculateExtraInventoryItemCharge(roomInventory, nights, inventoryAirBedPrice, inventoryRollawayPrice, getRoomExtraPlaceDailyPrice(room, dateRange.checkIn, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceChildPercent, adults, children))
+      : 0;
     const subtotal = calculateRoomStayPrice(room, dateRange.checkIn, dateRange.checkOut, hourlyHours) + extraInventoryTotal;
     const existing = existingByRoomId.get(room.id);
     return {
@@ -14205,6 +17083,12 @@ function getReservationItems(reservation: Reservation, rooms: Room[] = []) {
   });
 }
 
+function reservationItemsHaveDifferentPeriods(items: Array<Pick<ReservationItem, "checkIn" | "checkOut">>) {
+  if (items.length <= 1) return false;
+  const periods = new Set(items.map((item) => `${item.checkIn}|${item.checkOut}`));
+  return periods.size > 1;
+}
+
 function buildRoomDateOverridesFromReservation(reservation?: Reservation | null) {
   if (!reservation?.items?.length) return {};
   return Object.fromEntries(
@@ -14220,16 +17104,41 @@ function calculateBookingTotalsWithRoomDates(
   checkOut: string,
   roomDateOverrides: Record<string, { checkIn: string; checkOut: string }>,
   needsExtraBed: boolean,
-  extraInventoryByRoomId: Record<string, { airBeds: number; rollaways: number }>,
+  extraInventoryByRoomId: Record<string, ExtraInventoryItem>,
   extraInventoryCount: number,
   hourlyHours: number,
   discountPercent: number,
   breakfastIncluded = true,
-  breakfastPricePerPerson = 0
+  breakfastPricePerPerson = 0,
+  extraInventoryChargeEnabled = false,
+  inventoryAirBedPrice = 0,
+  inventoryRollawayPrice = 0,
+  inventoryExtraPlaceAdultPercent = 100,
+  inventoryExtraPlaceChildPercent = 50,
+  adults = 0,
+  children = 0
 ) {
   const hasOverrides = Object.keys(roomDateOverrides).length > 0;
   if (!hasOverrides) {
-    return calculateBookingTotals(rooms, checkIn, checkOut, needsExtraBed, extraInventoryCount, hourlyHours, discountPercent, breakfastIncluded, breakfastPricePerPerson);
+    return calculateBookingTotals(
+      rooms,
+      checkIn,
+      checkOut,
+      needsExtraBed,
+      extraInventoryCount,
+      hourlyHours,
+      discountPercent,
+      breakfastIncluded,
+      breakfastPricePerPerson,
+      extraInventoryChargeEnabled,
+      inventoryAirBedPrice,
+      inventoryRollawayPrice,
+      inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceChildPercent,
+      adults,
+      children,
+      extraInventoryByRoomId
+    );
   }
 
   const roomTotal = rooms.reduce((sum, room) => {
@@ -14245,8 +17154,9 @@ function calculateBookingTotalsWithRoomDates(
   const extraInventoryTotal = rooms.reduce((sum, room) => {
     const range = getRoomDateRange(room.id, checkIn, checkOut, roomDateOverrides);
     const inventory = extraInventoryByRoomId[room.id];
-    const count = (inventory?.airBeds ?? 0) + (inventory?.rollaways ?? 0);
-    return sum + count * getExtraPlaceUnitPrice([room]) * getNightsCount(range.checkIn, range.checkOut);
+    return sum + (extraInventoryChargeEnabled
+      ? calculateExtraInventoryItemCharge(inventory, getNightsCount(range.checkIn, range.checkOut), inventoryAirBedPrice, inventoryRollawayPrice, getRoomExtraPlaceDailyPrice(room, range.checkIn, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceChildPercent, adults, children))
+      : 0);
   }, 0);
   const fallbackNights = getNightsCount(checkIn, checkOut);
   const breakfastDiscountAmount = breakfastIncluded
@@ -14302,7 +17212,7 @@ function applyDynamicPricingToRooms({
     .filter((entry) => entry.paymentDate >= from && entry.paymentDate <= seasonEnd)
     .reduce((sum, entry) => sum + entry.amount, 0);
   const periodReservations = reservations.filter((reservation) =>
-    reservation.status === "booked" &&
+    isReservationActiveOccupancy(reservation) &&
     dateRangesOverlap(from, addDaysInput(seasonEnd, 1), reservation.checkIn, reservation.checkOut)
   );
   const periodRevenue = periodReservations.reduce((sum, reservation) => sum + getReservationFinance(reservation).revenue, 0);
@@ -14312,7 +17222,7 @@ function applyDynamicPricingToRooms({
     const nextDate = addDaysInput(date, 1);
     return sum + stayRooms.filter((room) =>
       reservations.some((reservation) =>
-        reservation.status === "booked" &&
+        isReservationActiveOccupancy(reservation) &&
         reservation.roomIds.includes(room.id) &&
         dateRangesOverlap(date, nextDate, reservation.checkIn, reservation.checkOut)
       )
@@ -14338,7 +17248,7 @@ function applyDynamicPricingToRooms({
     const dynamicPricesByDate = periodDates.reduce<Record<string, number>>((prices, date) => {
       const nextDate = addDaysInput(date, 1);
       const isBooked = reservations.some((reservation) =>
-        reservation.status === "booked" &&
+        isReservationActiveOccupancy(reservation) &&
         reservation.roomIds.includes(room.id) &&
         dateRangesOverlap(date, nextDate, reservation.checkIn, reservation.checkOut)
       );
@@ -14421,6 +17331,107 @@ function calculateBreakfastDiscountAmount(rooms: Room[], nights: number, extraIn
 function getExtraPlaceUnitPrice(rooms: Room[]) {
   const pricedRoom = rooms.find((room) => isStayBookingObject(room) && Number.isFinite(room.extraBedPrice));
   return pricedRoom ? Math.max(0, pricedRoom.extraBedPrice) : AIR_MATTRESS_PRICE;
+}
+
+function getExtraInventoryTotalCount(extraInventoryByRoomId: Record<string, ExtraInventoryItem>) {
+  return Object.values(extraInventoryByRoomId).reduce((sum, item) =>
+    sum + Math.max(0, item.airBeds || 0) + Math.max(0, item.rollaways || 0) + Math.max(0, item.extraPlaces || 0), 0);
+}
+
+function getRoomExtraPlaceDailyPrice(room: Room, date: string, adultPercent = 100, childPercent = 50, adults = 0, children = 0) {
+  const roomPrice = Math.max(0, getRoomPriceForDate(room, date));
+  const percent = isNextExtraPlaceForChild(room, adults, children) ? childPercent : adultPercent;
+  return Math.round(roomPrice * clampNumber(percent, 0, 300) / 100);
+}
+
+function isNextExtraPlaceForChild(room: Room, adults = 0, children = 0) {
+  if (children <= 0) return false;
+  const baseCapacity = Math.max(1, calculateRoomSleepingPlacesTotal(room));
+  return adults <= baseCapacity;
+}
+
+function canAddExtraPlaceToRoom(roomId: string, currentMap: Record<string, ExtraInventoryItem>, rooms: Room[]) {
+  const room = rooms.find((item) => item.id === roomId);
+  if (!room || !isStayBookingObject(room)) return false;
+  const currentExtraPlaces = Math.max(0, currentMap[roomId]?.extraPlaces || 0);
+  return currentExtraPlaces < Math.max(0, room.extraBeds || 99);
+}
+
+function calculateReservationExtraPlacesCharge(reservation: Reservation, rooms: Room[]) {
+  const inventoryByRoomId = reservation.extraInventoryByRoomId ?? {};
+  const items = getReservationItems(reservation, rooms);
+  return items.reduce((sum, item) => {
+    const room = rooms.find((candidate) => candidate.id === item.roomId);
+    return room ? sum + calculateRoomExtraPlacesCharge(inventoryByRoomId[room.id], room, item.checkIn, item.checkOut, reservation) : sum;
+  }, 0);
+}
+
+function calculateRoomExtraPlacesCharge(
+  item: ExtraInventoryItem | undefined,
+  room: Room,
+  checkIn: string,
+  checkOut: string,
+  reservation: Pick<Reservation, "adults" | "children" | "inventoryExtraPlaceAdultPercent" | "inventoryExtraPlaceChildPercent">
+) {
+  const count = Math.max(0, item?.extraPlaces || 0);
+  if (!count) return 0;
+  const nights = getNightsCount(checkIn, checkOut);
+  const dailyPrice = getRoomExtraPlaceDailyPrice(
+    room,
+    checkIn,
+    reservation.inventoryExtraPlaceAdultPercent ?? 100,
+    reservation.inventoryExtraPlaceChildPercent ?? 50,
+    reservation.adults,
+    reservation.children
+  );
+  return count * nights * dailyPrice;
+}
+
+function calculateExtraInventoryItemCharge(
+  inventory: ExtraInventoryItem | undefined,
+  nights: number,
+  airBedPrice: number,
+  rollawayPrice: number,
+  extraPlaceDailyPrice = 0
+) {
+  const safeNights = Math.max(0, nights);
+  return (
+    Math.max(0, inventory?.airBeds || 0) * Math.max(0, airBedPrice || 0) * safeNights +
+    Math.max(0, inventory?.rollaways || 0) * Math.max(0, rollawayPrice || 0) * safeNights +
+    Math.max(0, inventory?.extraPlaces || 0) * Math.max(0, extraPlaceDailyPrice || 0) * safeNights
+  );
+}
+
+function getReservationExtraInventoryPrice(reservation: Pick<Reservation, "extraInventoryChargeEnabled" | "inventoryAirBedPrice" | "inventoryRollawayPrice" | "inventoryExtraPlacePrice">, type: ExtraInventoryType, fallbackRooms: Room[] = []) {
+  if (!reservation.extraInventoryChargeEnabled) return 0;
+  const configuredPrice = type === "air-bed"
+    ? reservation.inventoryAirBedPrice
+    : type === "rollaway"
+      ? reservation.inventoryRollawayPrice
+      : reservation.inventoryExtraPlacePrice;
+  return Math.max(0, configuredPrice ?? getExtraPlaceUnitPrice(fallbackRooms));
+}
+
+function calculateExtraInventoryChargeTotal(
+  rooms: Room[],
+  extraInventoryByRoomId: Record<string, ExtraInventoryItem>,
+  checkIn: string,
+  checkOut: string,
+  airBedPrice: number,
+  rollawayPrice: number,
+  extraPlaceAdultPercent: number,
+  extraPlaceChildPercent: number,
+  adults = 0,
+  children = 0
+) {
+  return rooms.reduce((sum, room) =>
+    sum + calculateExtraInventoryItemCharge(
+      extraInventoryByRoomId[room.id],
+      getNightsCount(checkIn, checkOut),
+      airBedPrice,
+      rollawayPrice,
+      getRoomExtraPlaceDailyPrice(room, checkIn, extraPlaceAdultPercent, extraPlaceChildPercent, adults, children)
+    ), 0);
 }
 
 function getEffectiveBookingTotals(totals: ReturnType<typeof calculateBookingTotals>, manualTotalAmount: number, discountPercent: number) {
@@ -14749,7 +17760,7 @@ function buildAnalyticsPriceRecommendation({
     const nextDate = formatDateInput(addDays(parseDateInput(date), 1));
     const availableRooms = stayRooms.filter((room) =>
       !reservations.some((reservation) =>
-        reservation.status === "booked" &&
+        isReservationActiveOccupancy(reservation) &&
         reservation.roomIds.includes(room.id) &&
         dateRangesOverlap(date, nextDate, reservation.checkIn, reservation.checkOut)
       )
@@ -14760,7 +17771,7 @@ function buildAnalyticsPriceRecommendation({
     const nextDate = formatDateInput(addDays(parseDateInput(date), 1));
     return sum + stayRooms.reduce((roomSum, room) => {
       const isBooked = reservations.some((reservation) =>
-        reservation.status === "booked" &&
+        isReservationActiveOccupancy(reservation) &&
         reservation.roomIds.includes(room.id) &&
         dateRangesOverlap(date, nextDate, reservation.checkIn, reservation.checkOut)
       );
@@ -14772,7 +17783,7 @@ function buildAnalyticsPriceRecommendation({
     return stayRooms
       .filter((room) =>
         !reservations.some((reservation) =>
-          reservation.status === "booked" &&
+          isReservationActiveOccupancy(reservation) &&
           reservation.roomIds.includes(room.id) &&
           dateRangesOverlap(date, nextDate, reservation.checkIn, reservation.checkOut)
         )
@@ -15101,7 +18112,13 @@ function createChatDraftFromReservation(reservation: Reservation): ChatBookingDr
     airMattressCount: extraInventoryCounts.airBeds,
     rollawayCount: extraInventoryCounts.rollaways,
     extraInventoryByRoomId: reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation),
-    extraInventoryManual: Boolean(extraInventoryCounts.airBeds || extraInventoryCounts.rollaways),
+    extraInventoryChargeEnabled: Boolean(reservation.extraInventoryChargeEnabled),
+    inventoryAirBedPrice: reservation.inventoryAirBedPrice,
+    inventoryRollawayPrice: reservation.inventoryRollawayPrice,
+    inventoryExtraPlacePrice: reservation.inventoryExtraPlacePrice,
+    inventoryExtraPlaceAdultPercent: reservation.inventoryExtraPlaceAdultPercent,
+    inventoryExtraPlaceChildPercent: reservation.inventoryExtraPlaceChildPercent,
+    extraInventoryManual: Boolean(extraInventoryCounts.airBeds || extraInventoryCounts.rollaways || getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {})),
     hourlyHours: reservation.hourlyHours || 2,
     discountPercent: reservation.discountPercent,
     breakfastIncluded: reservation.breakfastIncluded ?? true,
@@ -15140,7 +18157,8 @@ function calculateReservationSleepingPlacesTotal(reservation: Reservation, rooms
     .filter(isStayBookingObject)
     .reduce((sum, room) => sum + calculateRoomSleepingPlacesTotal(room), 0);
   const extraPlaces = getReservationExtraInventoryCounts(reservation);
-  return basePlaces + extraPlaces.airBeds + extraPlaces.rollaways;
+  const mappedExtraPlaces = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {}) - extraPlaces.airBeds - extraPlaces.rollaways;
+  return basePlaces + extraPlaces.airBeds + extraPlaces.rollaways + Math.max(0, mappedExtraPlaces);
 }
 
 function calculateRoomSleepingPlacesTotal(room: Room) {
@@ -15148,8 +18166,8 @@ function calculateRoomSleepingPlacesTotal(room: Room) {
     .reduce((sum, place) => sum + getSleepingPlacePlacesCount(place), 0);
 }
 
-function calculateRoomReservationSleepingPlacesTotal(room: Room, extraInventory?: { airBeds?: number; rollaways?: number }) {
-  return calculateRoomSleepingPlacesTotal(room) + Math.max(0, extraInventory?.airBeds || 0) + Math.max(0, extraInventory?.rollaways || 0);
+function calculateRoomReservationSleepingPlacesTotal(room: Room, extraInventory?: ExtraInventoryItem) {
+  return calculateRoomSleepingPlacesTotal(room) + Math.max(0, extraInventory?.airBeds || 0) + Math.max(0, extraInventory?.rollaways || 0) + Math.max(0, extraInventory?.extraPlaces || 0);
 }
 
 function calculatePricePdfSleepingPlacesTotal(rooms: Room[], availabilitySummary?: CatalogAvailabilitySummary) {
@@ -15249,7 +18267,8 @@ function formatAdminRoomExtraInventory(reservation: Reservation, stayRooms: Room
       const item = inventoryByRoomId[room.id];
       const details = [
         item?.airBeds ? `матрас ${item.airBeds}` : "",
-        item?.rollaways ? `раскладушка ${item.rollaways}` : ""
+        item?.rollaways ? `раскладушка ${item.rollaways}` : "",
+        item?.extraPlaces ? `доп.место ${item.extraPlaces}` : ""
       ].filter(Boolean).join(", ");
 
       return details ? `${formatAdminBookingObject(room)}: ${details}` : "";
@@ -15436,11 +18455,13 @@ function getAdminIncludedText(rooms: Room[], reservation?: Pick<Reservation, "ai
   return included.length ? included.join(", ") : "нет";
 }
 
-function formatReservationExtraInventory(reservation: Pick<Reservation, "airMattressCount" | "extraBedType" | "rollawayCount">) {
+function formatReservationExtraInventory(reservation: Pick<Reservation, "airMattressCount" | "extraBedType" | "rollawayCount" | "extraInventoryByRoomId">) {
   const counts = getReservationExtraInventoryCounts(reservation);
+  const mappedExtraPlaces = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {}) - counts.airBeds - counts.rollaways;
   return [
     counts.airBeds ? `Матрас: ${counts.airBeds}` : "",
-    counts.rollaways ? `Раскладушка: ${counts.rollaways}` : ""
+    counts.rollaways ? `Раскладушка: ${counts.rollaways}` : "",
+    mappedExtraPlaces > 0 ? `Доп.место: ${mappedExtraPlaces}` : ""
   ].filter(Boolean).join(", ");
 }
 
@@ -15689,10 +18710,7 @@ function phonesMatchForContactLookup(left: string, right: string) {
   if (leftDigits === rightDigits) return true;
   const leftTail = leftDigits.slice(-10);
   const rightTail = rightDigits.slice(-10);
-  if (leftTail.length >= 10 && rightTail.length >= 10 && leftTail === rightTail) return true;
-  const leftLast4 = leftDigits.slice(-4);
-  const rightLast4 = rightDigits.slice(-4);
-  return Boolean(leftLast4.length === 4 && leftLast4 === rightLast4);
+  return Boolean(leftTail.length >= 10 && rightTail.length >= 10 && leftTail === rightTail);
 }
 
 function getAnalyticsPersonKey(phone: string, fallbackName: string) {
@@ -15789,7 +18807,7 @@ function getReservationFinance(
 ) {
   const balance = getReservationBalance(reservation);
 
-  if (isHotelCancelledReservation(reservation)) {
+  if (isRefundedCancelledReservation(reservation)) {
     return {
       balancePayment: 0,
       displayBalance: 0,
@@ -15837,13 +18855,13 @@ function getReservationFinance(
   };
 }
 
-function isHotelCancelledReservation(reservation: Pick<Reservation, "status" | "comment">) {
-  return reservation.status === "cancelled" && /отель\s+отменил|предоплата\s+возвращается/i.test(reservation.comment || "");
+function isRefundedCancelledReservation(reservation: Pick<Reservation, "status" | "comment">) {
+  return reservation.status === "cancelled" && /отель\s+отменил|предоплата\s+возвращается|деньги\s+возвращаются/i.test(reservation.comment || "");
 }
 
 function formatAnalyticsReservationPayment(reservation: Reservation) {
   const finance = getReservationFinance(reservation);
-  const refunded = isHotelCancelledReservation(reservation) ? " · возврат предоплаты" : "";
+  const refunded = isRefundedCancelledReservation(reservation) ? " · возврат предоплаты" : "";
   return (
     <>
       Всего {formatAnalyticsMoney(reservation.total)} · пред. {formatAnalyticsMoney(finance.displayPrepayment)} ·{" "}
@@ -15886,6 +18904,122 @@ function reconcileDraftReservationDates(draft: ChatBookingDraft): ChatBookingDra
   };
 }
 
+function sanitizeChatDraftReservationLink(draft: ChatBookingDraft, activeChat: ActiveChat | null): ChatBookingDraft {
+  if (!draft.lastReservation) return draft;
+
+  const reservationPhone = normalizePhoneSearch(draft.lastReservation.phone);
+  const draftPhone = normalizePhoneSearch(draft.phone);
+  const activeChatPhone = normalizePhoneSearch(activeChat?.phone || "");
+  const expectedPhone = activeChatPhone || draftPhone;
+
+  if (!reservationPhone || !expectedPhone || phonesMatchForContactLookup(reservationPhone, expectedPhone)) {
+    return draft;
+  }
+
+  return {
+    ...draft,
+    agreementSent: false,
+    lastReservation: null,
+    prepaymentAlreadyPaid: false,
+    selectedBookingRoomIds: [],
+    selectedRoomId: ""
+  };
+}
+
+function normalizeReservationPhoneIdentity(reservation: Reservation): Reservation {
+  const phone = formatPhoneDigits(reservation.phone);
+  if (!phone || phone === reservation.phone) return reservation;
+  return {
+    ...reservation,
+    phone
+  };
+}
+
+function repairChatDraftPhoneIdentity(draft: ChatBookingDraft, reservationsById: Map<string, Reservation>): ChatBookingDraft {
+  const normalizedPhone = formatPhoneDigits(draft.phone);
+  const linkedReservation = draft.lastReservation
+    ? reservationsById.get(draft.lastReservation.id) ?? normalizeReservationPhoneIdentity(draft.lastReservation)
+    : null;
+  const nextDraft = {
+    ...draft,
+    phone: normalizedPhone || draft.phone,
+    lastReservation: linkedReservation
+  };
+
+  if (!linkedReservation) {
+    return nextDraft.phone === draft.phone && nextDraft.lastReservation === draft.lastReservation ? draft : nextDraft;
+  }
+
+  const draftPhone = normalizePhoneSearch(nextDraft.phone);
+  const reservationPhone = normalizePhoneSearch(linkedReservation.phone);
+  if (draftPhone && reservationPhone && !phonesMatchForContactLookup(draftPhone, reservationPhone)) {
+    return {
+      ...nextDraft,
+      agreementSent: false,
+      lastReservation: null,
+      prepaymentAlreadyPaid: false,
+      selectedBookingRoomIds: [],
+      selectedRoomId: "",
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  return nextDraft.phone === draft.phone && nextDraft.lastReservation === draft.lastReservation ? draft : nextDraft;
+}
+
+function mergeChatDraftForPhoneAlias(currentDraft: ChatBookingDraft | undefined, sourceDraft: ChatBookingDraft) {
+  if (!currentDraft) return sourceDraft;
+
+  const currentScore = getChatDraftLinkScore(currentDraft);
+  const sourceScore = getChatDraftLinkScore(sourceDraft);
+  const baseDraft = sourceScore > currentScore ? sourceDraft : currentDraft;
+  const contactDraft = sourceScore > currentScore ? currentDraft : sourceDraft;
+  const mergedPhone = formatPhoneDigits(contactDraft.phone || baseDraft.phone) || contactDraft.phone || baseDraft.phone;
+  const mergedGuestName = resolveGuestNameForPhone(contactDraft.guestFirstName || baseDraft.guestFirstName, mergedPhone);
+  const mergedLastReservation = mergeDraftReservationIdentity(baseDraft.lastReservation, contactDraft.lastReservation, mergedGuestName, mergedPhone);
+  const mergedDraft = {
+    ...baseDraft,
+    guestFirstName: mergedGuestName,
+    lastReservation: mergedLastReservation,
+    phone: mergedPhone,
+    updatedAt: [currentDraft.updatedAt, sourceDraft.updatedAt].filter(Boolean).sort().at(-1) || new Date().toISOString()
+  };
+
+  return areChatDraftsEquivalent(currentDraft, mergedDraft) ? currentDraft : mergedDraft;
+}
+
+function mergeDraftReservationIdentity(
+  baseReservation: Reservation | null | undefined,
+  contactReservation: Reservation | null | undefined,
+  guestFirstName: string,
+  phone: string
+) {
+  const reservation = baseReservation ?? contactReservation;
+  if (!reservation) return reservation;
+  if (baseReservation && contactReservation && baseReservation.id !== contactReservation.id) return reservation;
+  if (reservation.guestFirstName === guestFirstName && reservation.phone === phone) return reservation;
+  return {
+    ...reservation,
+    guestFirstName,
+    phone
+  };
+}
+
+function getChatDraftLinkScore(draft: ChatBookingDraft) {
+  return [
+    draft.lastReservation ? 100 : 0,
+    draft.selectedBookingRoomIds?.length ? 20 : 0,
+    draft.selectedRoomId ? 10 : 0,
+    draft.agreementEverSent || draft.agreementSent ? 8 : 0,
+    draft.checkIn && draft.checkOut ? 4 : 0,
+    draft.phone ? 2 : 0
+  ].reduce((sum, value) => sum + value, 0);
+}
+
+function areChatDraftsEquivalent(left: ChatBookingDraft, right: ChatBookingDraft) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function formatReservationDateRange(reservation: Pick<Reservation, "checkIn" | "checkOut">) {
   const checkInDate = parseDateInput(reservation.checkIn);
   const checkOutDate = parseDateInput(reservation.checkOut);
@@ -15919,24 +19053,92 @@ function buildReservationTimelineSegments(
       const startIndex = timelineDays.findIndex((day) => day.date === startDate);
       const endIndex = timelineDays.findIndex((day) => day.date === endDate);
       if (startIndex < 0 || endIndex < 0 || endIndex < startIndex) return null;
+      const checkInTime = item.checkInTime || reservation.checkInTime || DEFAULT_CHECK_IN_TIME;
+      const checkOutTime = item.checkOutTime || reservation.checkOutTime || DEFAULT_CHECK_OUT_TIME;
+      const startPosition = item.checkIn < firstDate
+        ? 0
+        : startIndex + 0.5;
+      const endPosition = item.checkOut > lastDate
+        ? timelineDays.length
+        : endIndex + 0.5;
+      const visibleEndPosition = Math.max(endPosition, startPosition + 0.08);
 
       return {
+        checkInDate: item.checkIn,
+        checkInTime,
+        checkOutDate: item.checkOut,
+        checkOutTime,
         endIndex,
+        endPosition: visibleEndPosition,
+        isCheckInVisible: item.checkIn >= firstDate && item.checkIn <= lastDate,
+        isCheckOutVisible: item.checkOut >= firstDate && item.checkOut <= lastDate,
         lane: 0,
         reservation,
         roomId: room.id,
-        startIndex
+        segmentOffset: 0,
+        startIndex,
+        startPosition
       };
     })
     .filter((segment): segment is NonNullable<typeof segment> => Boolean(segment))
-    .sort((left, right) => left.startIndex - right.startIndex || left.endIndex - right.endIndex);
+    .sort((left, right) => left.startPosition - right.startPosition || left.endPosition - right.endPosition);
 
   const laneEnds: number[] = [];
-  return segments.map((segment) => {
-    const laneIndex = laneEnds.findIndex((endIndex) => endIndex < segment.startIndex);
+  const laneSegments = segments.map((segment) => {
+    const laneIndex = laneEnds.findIndex((endPosition) => endPosition <= segment.startPosition);
     const nextLane = laneIndex >= 0 ? laneIndex : laneEnds.length;
-    laneEnds[nextLane] = segment.endIndex;
+    laneEnds[nextLane] = segment.endPosition;
     return { ...segment, lane: nextLane };
+  });
+  return applyTimelineSegmentOffsets(laneSegments);
+}
+
+function applyTimelineSegmentOffsets<T extends {
+  checkInDate: string;
+  checkOutDate: string;
+  isCheckInVisible: boolean;
+  isCheckOutVisible: boolean;
+  segmentOffset: number;
+}>(segments: T[]) {
+  const eventsByDate = new Map<string, { checkInIndexes: number[]; checkOutIndexes: number[] }>();
+
+  segments.forEach((segment, index) => {
+    if (segment.isCheckInVisible) {
+      const events = eventsByDate.get(segment.checkInDate) ?? { checkInIndexes: [], checkOutIndexes: [] };
+      events.checkInIndexes.push(index);
+      eventsByDate.set(segment.checkInDate, events);
+    }
+    if (segment.isCheckOutVisible) {
+      const events = eventsByDate.get(segment.checkOutDate) ?? { checkInIndexes: [], checkOutIndexes: [] };
+      events.checkOutIndexes.push(index);
+      eventsByDate.set(segment.checkOutDate, events);
+    }
+  });
+
+  const offsets = segments.map(() => 0);
+  const assigned = segments.map(() => false);
+  Array.from(eventsByDate.entries())
+    .filter(([, events]) => events.checkInIndexes.length && events.checkOutIndexes.length)
+    .sort(([leftDate], [rightDate]) => leftDate.localeCompare(rightDate))
+    .forEach(([, events]) => {
+      const checkoutBase = events.checkOutIndexes.find((index) => assigned[index]);
+      const checkoutOffset = checkoutBase !== undefined ? offsets[checkoutBase] : -14;
+      events.checkOutIndexes.forEach((index) => {
+        if (!assigned[index]) {
+          offsets[index] = checkoutOffset;
+          assigned[index] = true;
+        }
+      });
+      events.checkInIndexes.forEach((index) => {
+        if (!assigned[index]) {
+          offsets[index] = -checkoutOffset;
+          assigned[index] = true;
+        }
+      });
+    });
+
+  return segments.map((segment, index) => {
+    return { ...segment, segmentOffset: offsets[index] };
   });
 }
 
@@ -15956,7 +19158,9 @@ function buildCleaningTimelineSegments(
         dayIndex,
         lane: 0,
         reservation,
-        roomId: room.id
+        roomId: room.id,
+        span: 1 / 24,
+        startPosition: dayIndex + 0.5
       };
     })
     .filter((segment): segment is NonNullable<typeof segment> => Boolean(segment));
@@ -15988,15 +19192,35 @@ function getReservationStatusLabel(reservation: Pick<Reservation, "status" | "ch
 function isReservationCheckedOut(reservation: Pick<Reservation, "checkedInAt" | "checkedOutAt" | "checkOut" | "checkOutTime">) {
   if (reservation.checkedOutAt) return true;
   if (!reservation.checkedInAt || !reservation.checkOut) return false;
+  const scheduledCheckOutAt = getReservationScheduledCheckOutDate(reservation);
+  return Boolean(scheduledCheckOutAt && Date.now() >= scheduledCheckOutAt.getTime());
+}
+
+function isReservationActiveOccupancy(reservation: Pick<Reservation, "status" | "checkedInAt" | "checkedOutAt" | "checkOut" | "checkOutTime">) {
+  return reservation.status === "booked" && !isReservationCheckedOut(reservation);
+}
+
+function isBookingPanelActiveReservation(reservation: Pick<Reservation, "status" | "checkedInAt" | "checkedOutAt" | "checkOut" | "checkOutTime"> | null | undefined) {
+  return Boolean(reservation?.status === "booked" && !isReservationCheckedOut(reservation) && !isReservationPastStay(reservation));
+}
+
+function getReservationScheduledCheckOutIso(reservation: Pick<Reservation, "checkOut" | "checkOutTime">) {
+  const checkOutDate = getReservationScheduledCheckOutDate(reservation);
+  return checkOutDate ? checkOutDate.toISOString() : "";
+}
+
+function getReservationScheduledCheckOutDate(reservation: Pick<Reservation, "checkOut" | "checkOutTime">) {
+  if (!reservation.checkOut) return null;
   const [hours, minutes] = (reservation.checkOutTime || DEFAULT_CHECK_OUT_TIME).split(":").map((part) => Number(part));
   const checkOutDate = parseDateInput(reservation.checkOut);
   checkOutDate.setHours(Number.isFinite(hours) ? hours : 12, Number.isFinite(minutes) ? minutes : 0, 0, 0);
-  return Date.now() >= checkOutDate.getTime();
+  return checkOutDate;
 }
 
 function getPanelReservationChipLabel(reservation: Reservation | null) {
   if (!reservation) return "Выбрано";
   if (reservation.noShowAt) return "Незаезд";
+  if (isReservationCheckedOut(reservation)) return "Выехал";
   if (reservation.balancePaidAt) return "Оплата принята";
   if (reservation.checkedInAt) return "Въехал";
   if (reservation.status === "booked") return "Забронировано";
@@ -16038,7 +19262,7 @@ function buildBookingPanelSummary(
   const availableStayRooms = availableRooms.filter((room) => isStayBookingObject(room) && isRoomIncludedInBookingSummary(room));
   const availableServiceObjects = availableRooms.filter((room) => !isStayBookingObject(room) && isRoomIncludedInBookingSummary(room));
   const activeReservations = reservations.filter((reservation) =>
-    reservation.status === "booked" && dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
+    isReservationActiveOccupancy(reservation) && dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
   );
   const bookedStayRoomIds = new Set(
     activeReservations
@@ -16066,12 +19290,12 @@ function buildBookingPanelSummary(
   });
   const packageRequiredRooms = packageMinRooms > 0 ? packageMinRooms : bookableStayRooms.length;
   const configuredPackageDiscountPercent = packageDiscountPercent > 0 && bookableStayRooms.length >= packageRequiredRooms ? packageDiscountPercent : 0;
-  const configuredPeriodDiscountPercent = packagePeriodDiscountPercent > 0 && isDateRangeOverlapping(checkIn, checkOut, packagePeriodDiscountFrom, packagePeriodDiscountTo)
+  const configuredPeriodDiscountPercent = packagePeriodDiscountPercent > 0 && isCheckInWithinDatePeriod(checkIn, packagePeriodDiscountFrom, packagePeriodDiscountTo)
     ? packagePeriodDiscountPercent
     : 0;
   const plannedDiscountPercent = Math.max(recommendation.discountReservePercent, configuredPackageDiscountPercent, configuredPeriodDiscountPercent);
   const plannedDiscountAmount = Math.round(plannedRevenue * plannedDiscountPercent / 100);
-  const availableExtraInventory = getAvailableExtraInventory(reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways);
+  const availableExtraInventory = getAvailableExtraInventory(reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, rooms);
   const availableStayCapacity = calculateAvailableStayCapacity(availableStayRooms, availableExtraInventory);
 
   return {
@@ -16094,9 +19318,10 @@ function buildCatalogAvailabilitySummary(
   checkIn: string,
   checkOut: string,
   inventoryAirBeds: number,
-  inventoryRollaways: number
+  inventoryRollaways: number,
+  inventoryRooms: Room[] = rooms
 ): CatalogAvailabilitySummary {
-  const availableExtraInventory = getAvailableExtraInventory(reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways);
+  const availableExtraInventory = getAvailableExtraInventory(reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, inventoryRooms);
   const visibleRooms = rooms.filter(isRoomIncludedInBookingSummary);
   const visibleStayRooms = visibleRooms.filter(isStayBookingObject);
 
@@ -16136,7 +19361,7 @@ function getRoomBaseSleepingCapacity(room: Room) {
   if (!isStayBookingObject(room)) return 0;
   if (!room.sleepingPlaces.length) return room.capacityAdults + room.capacityChildren;
   return room.sleepingPlaces.reduce((sum, place) => {
-    if (place.type === "air-bed" || place.type === "rollaway") return sum;
+    if (place.type === "rollaway") return sum;
     return sum + getSleepingPlacePlacesCount(place);
   }, 0);
 }
@@ -16146,11 +19371,13 @@ function getAvailableExtraInventory(
   checkIn: string,
   checkOut: string,
   inventoryAirBeds: number,
-  inventoryRollaways: number
+  inventoryRollaways: number,
+  rooms: Room[] = []
 ) {
+  const configured = getConfiguredRoomInventoryCounts(rooms);
   const used = reservations
     .filter((reservation) =>
-      reservation.status === "booked" &&
+      isReservationActiveOccupancy(reservation) &&
       dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
     )
     .reduce((sum, reservation) => {
@@ -16162,9 +19389,24 @@ function getAvailableExtraInventory(
     }, { airBeds: 0, rollaways: 0 });
 
   return {
-    airBeds: Math.max(0, inventoryAirBeds - used.airBeds),
-    rollaways: Math.max(0, inventoryRollaways - used.rollaways)
+    airBeds: Math.max(0, inventoryAirBeds - configured.airBeds - used.airBeds),
+    rollaways: Math.max(0, inventoryRollaways - configured.rollaways - used.rollaways)
   };
+}
+
+function getConfiguredRoomInventoryCounts(rooms: Room[]) {
+  return rooms
+    .filter(isStayBookingObject)
+    .reduce((sum, room) => ({
+      airBeds: sum.airBeds + getConfiguredRoomInventoryCount(room, "air-bed"),
+      rollaways: sum.rollaways + getConfiguredRoomInventoryCount(room, "rollaway")
+    }), { airBeds: 0, rollaways: 0 });
+}
+
+function getConfiguredRoomInventoryCount(room: Pick<Room, "sleepingPlaces">, type: ExtraBedType) {
+  return room.sleepingPlaces
+    .filter((place) => place.type === type && place.count > 0)
+    .reduce((sum, place) => sum + Math.max(0, place.count || 0), 0);
 }
 
 function isStayBookingObject(room: Pick<Room, "category" | "objectType">) {
@@ -16321,6 +19563,15 @@ function formatKitchenSaleRowLabel(sale: Reservation) {
   return `${title} × ${portions} × ${formatPrice(unitPrice)}`;
 }
 
+function buildMenuItemPhotoCaption(item: MenuItem) {
+  return [
+    item.title,
+    item.price ? `Цена: ${formatPrice(item.price)}` : "",
+    item.cookingTime ? `Время приготовления: ${item.cookingTime}` : "",
+    item.composition ? `Состав: ${item.composition}` : ""
+  ].filter(Boolean).join("\n");
+}
+
 function formatAnalyticsMoney(price: number) {
   return `${new Intl.NumberFormat("ru-RU").format(price || 0)} тг`;
 }
@@ -16369,6 +19620,12 @@ function isDateRangeOverlapping(checkIn: string, checkOut: string, periodFrom: s
   if (!checkIn || !checkOut || !periodFrom) return false;
   const normalizedPeriodTo = periodTo || periodFrom;
   return checkIn <= normalizedPeriodTo && checkOut >= periodFrom;
+}
+
+function isCheckInWithinDatePeriod(checkIn: string, periodFrom: string, periodTo: string) {
+  if (!checkIn || !periodFrom) return false;
+  const normalizedPeriodTo = periodTo || periodFrom;
+  return checkIn >= periodFrom && checkIn <= normalizedPeriodTo;
 }
 
 function createExpenseId(prefix: string) {
@@ -16458,7 +19715,7 @@ type SocialPricePriceRow = {
 };
 
 function getSocialPricePeriodDiscountPercent(checkIn: string, checkOut: string, periodDiscountPercent = 0, periodDiscountFrom = "", periodDiscountTo = "") {
-  return periodDiscountPercent > 0 && isDateRangeOverlapping(checkIn, checkOut, periodDiscountFrom, periodDiscountTo)
+  return periodDiscountPercent > 0 && isCheckInWithinDatePeriod(checkIn, periodDiscountFrom, periodDiscountTo)
     ? periodDiscountPercent
     : 0;
 }
@@ -16530,7 +19787,8 @@ function getCatalogCardTitle(room: Room) {
   const objectLabel = getObjectTypeLabel(room);
   if (shouldShowObjectNumber(room)) {
     const objectNumber = room.number ? `${objectLabel} ${room.number}` : objectLabel;
-    return room.title ? `${objectNumber} / ${room.title}` : objectNumber;
+    const titleParts = [objectNumber, room.title, isStayBookingObject(room) ? formatCapacityTitle(getRoomTotalSleepingCapacity(room)) : ""].filter(Boolean);
+    return titleParts.join(" / ");
   }
 
   return room.title || objectLabel;
@@ -16723,16 +19981,23 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     .filter((room): room is Room => Boolean(room));
   const nightlyRooms = bookedRooms.filter((room) => !isHourlyBookingObject(room));
   const hourlyRooms = bookedRooms.filter(isHourlyBookingObject);
-  const guestName = reservation.guestFirstName || "Гость";
+  const guestName = resolveGuestNameForPhone(reservation.guestFirstName, reservation.phone) || "Гость";
   const guestLabel = "Гость";
   const hourlyHours = Math.max(2, reservation.hourlyHours ?? 2);
+  const foodSummary = getReservationFoodSummary(nightlyRooms, reservation.breakfastIncluded !== false);
   const roomLines = reservationItems.map((item) => {
     const room = rooms.find((candidate) => candidate.id === item.roomId);
     if (!room || isHourlyBookingObject(room)) return "";
-    const roomExtraInventory = formatRoomExtraInventoryLines(reservation.extraInventoryByRoomId?.[room.id]);
+    const roomExtraInventory = formatRoomExtraInventoryLines(reservation.extraInventoryByRoomId?.[room.id], room, item, reservation);
+    const roomFoodLine = foodSummary.mode === "per-room" ? formatReservationRoomFoodLine(room) : "";
 
     const sleepingPlaces = formatReservationSleepingPlaceLines(room.sleepingPlaces);
-    const floorText = room.floor ? ` | ${room.floor}` : "";
+    const roomTitleParts = [
+      `${getObjectTypeLabel(room)} ${room.number}`,
+      room.title,
+      isStayBookingObject(room) ? formatCapacityTitle(getRoomTotalSleepingCapacity(room)) : "",
+      room.floor
+    ].filter(Boolean);
     const hasCustomDates = item.checkIn !== reservation.checkIn || item.checkOut !== reservation.checkOut;
     const dateLines = [
       ...(hasCustomDates ? [
@@ -16742,8 +20007,9 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
       `| Сутки: ${getNightsCount(item.checkIn, item.checkOut)}`
     ];
     return [
-      `*${getObjectTypeLabel(room)} ${room.number} | ${room.title}${floorText}*`,
+      `*${roomTitleParts.join(" | ")}*`,
       ...dateLines,
+      roomFoodLine,
       ...sleepingPlaces,
       formatReservationRoomDailyPriceLine(room, item.checkIn, item.checkOut),
       roomExtraInventory
@@ -16764,11 +20030,15 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     )
     .join("\n\n");
   const extraInventoryCounts = getReservationExtraInventoryCounts(reservation);
-  const extraInventoryUnitPrice = getExtraPlaceUnitPrice(bookedRooms);
+  const mappedExtraPlaces = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {}) - extraInventoryCounts.airBeds - extraInventoryCounts.rollaways;
+  const airBedUnitPrice = getReservationExtraInventoryPrice(reservation, "air-bed", bookedRooms);
+  const rollawayUnitPrice = getReservationExtraInventoryPrice(reservation, "rollaway", bookedRooms);
+  const extraPlaceTotal = calculateReservationExtraPlacesCharge(reservation, bookedRooms);
   const extraInventoryNights = getNightsCount(reservation.checkIn, reservation.checkOut);
   const extraInventoryLines = [
-    extraInventoryCounts.airBeds > 0 ? `* Надувной матрас: ${extraInventoryCounts.airBeds} (+${formatPrice(extraInventoryCounts.airBeds * extraInventoryUnitPrice * extraInventoryNights)})` : "",
-    extraInventoryCounts.rollaways > 0 ? `* Раскладушка: ${extraInventoryCounts.rollaways} (+${formatPrice(extraInventoryCounts.rollaways * extraInventoryUnitPrice * extraInventoryNights)})` : ""
+    extraInventoryCounts.airBeds > 0 ? `* Надувной матрас: ${extraInventoryCounts.airBeds}${airBedUnitPrice ? ` (+${formatPrice(extraInventoryCounts.airBeds * airBedUnitPrice * extraInventoryNights)})` : ""}` : "",
+    extraInventoryCounts.rollaways > 0 ? `* Раскладушка: ${extraInventoryCounts.rollaways}${rollawayUnitPrice ? ` (+${formatPrice(extraInventoryCounts.rollaways * rollawayUnitPrice * extraInventoryNights)})` : ""}` : "",
+    mappedExtraPlaces > 0 ? `* Доп.место: ${mappedExtraPlaces}${extraPlaceTotal ? ` (+${formatPrice(extraPlaceTotal)})` : ""}` : ""
   ].filter(Boolean);
   const extraInventory = extraInventoryLines.length ? `\n\n*Допместа всего:*\n${extraInventoryLines.join("\n")}` : "";
   const sleepingPlaceTotal = calculateReservationSleepingPlacesTotal(reservation, bookedRooms);
@@ -16810,7 +20080,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     ? `\nЗаезд: ${formatKazakhDate(reservation.checkIn)} ${reservation.checkInTime}\nВыезд: ${formatKazakhDate(reservation.checkOut)} ${reservation.checkOutTime}`
     : "";
   const breakfastLine = hasNightlyRooms
-    ? `\nПитание: ${reservation.breakfastIncluded === false ? "без завтрака" : "завтрак включен"}`
+    ? foodSummary.header ? `\nПитание: ${foodSummary.header}` : ""
     : "";
   const petLine = reservation.hasPet ? "\nПитомец: да" : "";
 
@@ -16827,6 +20097,36 @@ ${stayDates}
 ${breakfastLine ? breakfastLine.trim() : ""}
 ${petLine ? petLine.trim() : ""}
 ${[roomLines, hourlyReservationLines].filter(Boolean).join("\n\n")}${extraBed}${extraInventory}${comment}${summaryLines ? `\n\n${summaryLines}` : ""}${payment}${bookingCondition ? `\n\n${bookingCondition}` : ""}`;
+}
+
+function getReservationFoodSummary(rooms: Room[], breakfastIncluded: boolean) {
+  if (!breakfastIncluded) {
+    return { header: "без завтрака", mode: "header" as const };
+  }
+
+  const foodLabels = rooms
+    .map(formatReservationRoomFood)
+    .filter(Boolean);
+  const uniqueFoodLabels = Array.from(new Set(foodLabels));
+
+  if (!uniqueFoodLabels.length) {
+    return { header: "завтрак включен", mode: "header" as const };
+  }
+
+  if (uniqueFoodLabels.length === 1 && foodLabels.length === rooms.length) {
+    return { header: uniqueFoodLabels[0], mode: "header" as const };
+  }
+
+  return { header: "", mode: "per-room" as const };
+}
+
+function formatReservationRoomFoodLine(room: Room) {
+  const food = formatReservationRoomFood(room);
+  return food ? `| Питание: ${food}` : "";
+}
+
+function formatReservationRoomFood(room: Room) {
+  return getSelectedFood(room.amenities).join(", ");
 }
 
 function formatReservationRoomDailyPriceLine(room: Room, checkIn: string, checkOut: string) {
@@ -16908,6 +20208,7 @@ function buildReservationPaymentConfirmationMessage(reservation: Reservation, ro
   const paidAmount = Math.max(0, reservation.paidAmount ?? 0);
   const balance = Math.max(0, reservation.total - paidAmount);
   const paymentLabel = getManualSalePaymentLabel(reservation.paymentMethod ?? "");
+  const hasPayment = paidAmount > 0 || Boolean(reservation.prepaymentReceivedAt || reservation.balancePaidAt);
   return [
     `*${reservation.guestFirstName || "Гость"}*`,
     "Подтверждение брони",
@@ -16916,11 +20217,12 @@ function buildReservationPaymentConfirmationMessage(reservation: Reservation, ro
     `Выезд: ${formatKazakhDate(reservation.checkOut)} ${reservation.checkOutTime}`,
     formatReservationGuestCountText(reservation),
     "",
-    "Оплата поступила.",
-    `Получено: ${formatPrice(paidAmount)}`,
-    `Остаток: ${formatPrice(balance)}`,
+    hasPayment ? "Оплата поступила." : "Бронь подтверждена без предоплаты.",
+    hasPayment ? `Получено: ${formatPrice(paidAmount)}` : "Оплата: 100% при заезде",
+    `Итого: ${formatPrice(reservation.total)}`,
+    hasPayment ? `Остаток: ${formatPrice(balance)}` : `К оплате при заезде: ${formatPrice(reservation.total)}`,
     paymentLabel ? `Способ оплаты: ${paymentLabel}` : "",
-    "Оставшаяся сумма вносится в день заезда."
+    hasPayment ? "Оставшаяся сумма вносится в день заезда." : ""
   ].filter(Boolean).join("\n");
 }
 
@@ -16929,10 +20231,14 @@ function formatReservationComment(comment: string) {
   return `\nКомментарий: ${comment}`;
 }
 
-function formatRoomExtraInventoryLines(item?: { airBeds?: number; rollaways?: number }) {
+function formatRoomExtraInventoryLines(item?: ExtraInventoryItem, room?: Room, reservationItem?: ReservationItem, reservation?: Reservation) {
+  const extraPlaceTotal = item?.extraPlaces && room && reservationItem && reservation
+    ? calculateRoomExtraPlacesCharge(item, room, reservationItem.checkIn, reservationItem.checkOut, reservation)
+    : 0;
   const lines = [
     item?.airBeds ? `| Надувной матрас: ${item.airBeds} | Мест: ${item.airBeds}` : "",
-    item?.rollaways ? `| Раскладушка: ${item.rollaways} | Мест: ${item.rollaways}` : ""
+    item?.rollaways ? `| Раскладушка: ${item.rollaways} | Мест: ${item.rollaways}` : "",
+    item?.extraPlaces ? `| Доп.место: ${item.extraPlaces} | Мест: ${item.extraPlaces}${extraPlaceTotal ? ` | +${formatPrice(extraPlaceTotal)}` : ""}` : ""
   ].filter(Boolean);
   return lines.length ? `*Допместа:*\n${lines.join("\n")}` : "";
 }
@@ -17149,6 +20455,315 @@ async function createSocialPriceRoomImageBlob({
   });
 }
 
+function buildIncludedCardDefaultDescription(paths: string[], descriptions: Record<string, string>) {
+  return paths
+    .map((path) => descriptions[path]?.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function createIncludedCardImageBlob(page: IncludedCardPage) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1080;
+  canvas.height = 1920;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas context unavailable");
+
+  context.fillStyle = "#f4f7f4";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  drawRoundRect(context, 48, 48, 984, 1824, 42, "#ffffff");
+
+  context.fillStyle = "#0f6b57";
+  context.font = "900 44px Arial, sans-serif";
+  context.fillText("Включено", 90, 122);
+
+  if (page.template === "photo-description") {
+    await drawIncludedCardSinglePhotoTemplate(context, page);
+  } else {
+    await drawIncludedCardHeroTemplate(context, page);
+  }
+
+  drawRoundRect(context, 90, 1792, 900, 48, 24, "#e2f3ed");
+  context.fillStyle = "#0f6b57";
+  context.font = "800 24px Arial, sans-serif";
+  context.textAlign = "center";
+  context.fillText("Green Pine Burabay", 540, 1824);
+  context.textAlign = "left";
+
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Included card export failed"));
+    }, "image/png", 0.96);
+  });
+}
+
+async function createAvailableRoomsSnapshotBlob(datesNode: HTMLElement, catalogNode: HTMLElement) {
+  if (document.fonts?.ready) await document.fonts.ready;
+
+  const restoreScroll = prepareAvailableRoomsSnapshotViewport(datesNode, catalogNode);
+  let screenshot: HTMLImageElement | null = null;
+  let capture: CaptureRect | null = null;
+  try {
+    await waitForNextPaint();
+    await waitForNextPaint();
+    const screenshotDataUrl = await captureVisibleTabDataUrl();
+    screenshot = await loadImageFromDataUrl(screenshotDataUrl);
+    const viewportWidth = Math.max(1, window.innerWidth);
+    const viewportHeight = Math.max(1, window.innerHeight);
+    const scaleX = screenshot.naturalWidth / viewportWidth;
+    const scaleY = screenshot.naturalHeight / viewportHeight;
+    capture = getAvailableRoomsCaptureRect(datesNode, catalogNode, scaleX, scaleY);
+  } finally {
+    restoreScroll();
+  }
+
+  if (!screenshot || !capture) throw new Error("Не видно блока витрины для скриншота");
+
+  const canvas = document.createElement("canvas");
+  canvas.width = capture.width;
+  canvas.height = capture.height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Available rooms export failed");
+  context.fillStyle = "#f4f7f4";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(screenshot, capture.x, capture.y, capture.width, capture.height, 0, 0, capture.width, capture.height);
+
+  return await canvasToJpegBlobUnderLimit(canvas, 15 * 1024 * 1024, "Available rooms export failed");
+}
+
+type CaptureVisibleTabResponse = {
+  ok: boolean;
+  dataUrl?: string;
+  error?: string;
+};
+
+type CaptureRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+function prepareAvailableRoomsSnapshotViewport(datesNode: HTMLElement, catalogNode: HTMLElement) {
+  const panel = catalogNode.closest<HTMLElement>(".gpb-panel");
+  if (!panel) return () => {};
+
+  const initialScrollTop = panel.scrollTop;
+  const panelRect = panel.getBoundingClientRect();
+  const catalogRect = catalogNode.getBoundingClientRect();
+  const header = panel.querySelector<HTMLElement>(".gpb-panel-header");
+  const dateSection = datesNode.closest<HTMLElement>(".gpb-top-date-section");
+  const headerHeight = header?.getBoundingClientRect().height ?? 0;
+  const dateSectionHeight = dateSection?.getBoundingClientRect().height ?? datesNode.getBoundingClientRect().height;
+  const catalogTopInScroll = catalogRect.top - panelRect.top + panel.scrollTop;
+  const maxScrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
+  const targetScrollTop = clampNumber(catalogTopInScroll - headerHeight - dateSectionHeight - 4, 0, maxScrollTop);
+
+  panel.scrollTo({ top: targetScrollTop, behavior: "auto" });
+  fitFirstCatalogRowIntoSnapshotViewport(catalogNode, panel);
+  return () => {
+    panel.scrollTo({ top: initialScrollTop, behavior: "auto" });
+  };
+}
+
+function captureVisibleTabDataUrl() {
+  return new Promise<string>((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage({ type: "GPB_CAPTURE_VISIBLE_TAB" }, (response: CaptureVisibleTabResponse | undefined) => {
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError) {
+          reject(new Error(runtimeError.message));
+          return;
+        }
+        if (!response?.ok || !response.dataUrl) {
+          reject(new Error(response?.error || "Не удалось сделать скриншот вкладки"));
+          return;
+        }
+        resolve(response.dataUrl);
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function loadImageFromDataUrl(dataUrl: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new window.Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Не удалось открыть скриншот вкладки"));
+    image.src = dataUrl;
+  });
+}
+
+function getAvailableRoomsCaptureRect(datesNode: HTMLElement, catalogNode: HTMLElement, scaleX: number, scaleY: number): CaptureRect | null {
+  const datesRect = datesNode.getBoundingClientRect();
+  const catalogRect = catalogNode.getBoundingClientRect();
+  const completeCardsBottom = getLastCompleteVisibleCatalogRowBottom(catalogNode);
+  const left = clampNumber(Math.min(datesRect.left, catalogRect.left), 0, window.innerWidth);
+  const top = clampNumber(datesRect.top, 0, window.innerHeight);
+  const right = clampNumber(Math.max(datesRect.right, catalogRect.right), 0, window.innerWidth);
+  const bottom = clampNumber(completeCardsBottom || catalogRect.bottom, 0, window.innerHeight);
+  if (right <= left || bottom <= top) return null;
+  return {
+    x: Math.round(left * scaleX),
+    y: Math.round(top * scaleY),
+    width: Math.max(1, Math.round((right - left) * scaleX)),
+    height: Math.max(1, Math.round((bottom - top) * scaleY))
+  };
+}
+
+function getLastCompleteVisibleCatalogRowBottom(catalogNode: HTMLElement) {
+  const viewportBottom = window.innerHeight - 6;
+  const rows = getCatalogCardRows(catalogNode)
+    .filter((row) => row.top >= 0 && row.bottom <= viewportBottom);
+
+  if (!rows.length) return 0;
+
+  const lastCompleteRowBottom = Math.max(...rows.map((row) => row.bottom));
+  const catalogRect = catalogNode.getBoundingClientRect();
+  return Math.min(window.innerHeight, Math.max(lastCompleteRowBottom + 12, catalogRect.top));
+}
+
+function fitFirstCatalogRowIntoSnapshotViewport(catalogNode: HTMLElement, panel: HTMLElement) {
+  const firstRow = getCatalogCardRows(catalogNode)[0];
+  if (!firstRow) return;
+
+  const viewportBottom = window.innerHeight - 12;
+  if (firstRow.bottom <= viewportBottom) return;
+
+  const overflow = firstRow.bottom - viewportBottom;
+  const maxScrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
+  panel.scrollTo({ top: clampNumber(panel.scrollTop + overflow + 12, 0, maxScrollTop), behavior: "auto" });
+}
+
+function getCatalogCardRows(catalogNode: HTMLElement) {
+  const list = catalogNode.querySelector<HTMLElement>(".gpb-panel-object-list");
+  if (!list) return [];
+
+  const rows: Array<{ bottom: number; top: number }> = [];
+  const cards = Array.from(list.querySelectorAll<HTMLElement>(":scope > button"))
+    .map((card) => card.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 && rect.height > 0);
+
+  for (const rect of cards) {
+    const row = rows.find((item) => Math.abs(item.top - rect.top) <= 6);
+    if (row) {
+      row.top = Math.min(row.top, rect.top);
+      row.bottom = Math.max(row.bottom, rect.bottom);
+    } else {
+      rows.push({ top: rect.top, bottom: rect.bottom });
+    }
+  }
+
+  return rows.sort((left, right) => left.top - right.top);
+}
+
+function waitForNextPaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
+async function canvasToJpegBlobUnderLimit(canvas: HTMLCanvasElement, maxBytes: number, errorMessage: string) {
+  let workingCanvas = canvas;
+  for (const quality of [0.86, 0.78, 0.68, 0.58]) {
+    const blob = await canvasToJpegBlob(workingCanvas, quality, errorMessage);
+    if (blob.size <= maxBytes) return blob;
+  }
+
+  for (const scale of [0.85, 0.72, 0.6]) {
+    workingCanvas = resizeCanvas(workingCanvas, scale);
+    const blob = await canvasToJpegBlob(workingCanvas, 0.72, errorMessage);
+    if (blob.size <= maxBytes) return blob;
+  }
+
+  return canvasToJpegBlob(workingCanvas, 0.6, errorMessage);
+}
+
+function canvasToJpegBlob(canvas: HTMLCanvasElement, quality: number, errorMessage: string) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error(errorMessage));
+    }, "image/jpeg", quality);
+  });
+}
+
+function resizeCanvas(sourceCanvas: HTMLCanvasElement, scale: number) {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(sourceCanvas.width * scale));
+  canvas.height = Math.max(1, Math.round(sourceCanvas.height * scale));
+  const context = canvas.getContext("2d");
+  if (!context) return sourceCanvas;
+  context.fillStyle = "#f4f7f4";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(sourceCanvas, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+async function drawIncludedCardHeroTemplate(context: CanvasRenderingContext2D, page: IncludedCardPage) {
+  const mainX = 90;
+  const mainY = 160;
+  const mainWidth = 900;
+  const mainHeight = 620;
+  await drawPdfImage(context, page.mainPhotoPath, mainX, mainY, mainWidth, mainHeight, 34, "cover");
+
+  const thumbs = page.thumbnailPaths.slice(0, getIncludedCardThumbnailLimit(page));
+  const gap = 14;
+  const columns = 4;
+  const thumbWidth = (mainWidth - gap * (columns - 1)) / columns;
+  const thumbHeight = Math.round(thumbWidth * mainHeight / mainWidth);
+  const thumbY = mainY + mainHeight + 22;
+  for (const [index, path] of thumbs.entries()) {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    await drawPdfImage(context, path, mainX + column * (thumbWidth + gap), thumbY + row * (thumbHeight + gap), thumbWidth, thumbHeight, 18, "cover");
+  }
+
+  drawIncludedCardDescription(context, page.description, 116, thumbY + (thumbs.length > 4 ? thumbHeight * 2 + gap : thumbs.length ? thumbHeight : 0) + 74, 848, 1680);
+}
+
+async function drawIncludedCardSinglePhotoTemplate(context: CanvasRenderingContext2D, page: IncludedCardPage) {
+  await drawPdfImage(context, page.mainPhotoPath, 90, 160, 900, 980, 34, "cover");
+  drawIncludedCardDescription(context, page.description, 116, 1220, 848, 1680);
+}
+
+function drawIncludedCardDescription(context: CanvasRenderingContext2D, description: string, x: number, y: number, width: number, maxY: number) {
+  const items = description
+    .split("\n")
+    .map((line) => line.trim())
+    .map((line) => line.replace(/^[✓✔•\-\s]+/, "").trim())
+    .filter(Boolean);
+
+  context.font = "800 34px Arial, sans-serif";
+  context.fillStyle = "#16202a";
+  context.fillText("Что входит", x, y);
+  let cursorY = y + 56;
+  context.font = "700 26px Arial, sans-serif";
+  const checkX = x;
+  const textX = x + 42;
+  const lineHeight = 38;
+  const itemGap = 8;
+  const textWidth = width - 54;
+
+  for (const item of items) {
+    const wrappedLines = wrapCanvasText(context, item, textWidth);
+    for (const [lineIndex, line] of wrappedLines.entries()) {
+      if (cursorY > maxY) return;
+      if (lineIndex === 0) {
+        context.fillStyle = "#0f6b57";
+        context.fillText("✓", checkX, cursorY);
+      }
+      context.fillStyle = "#25313d";
+      context.fillText(fitCanvasText(context, line, textWidth), textX, cursorY);
+      cursorY += lineHeight;
+    }
+    cursorY += itemGap;
+  }
+}
+
 async function createZipBlob(files: Array<{ name: string; blob: Blob }>) {
   const encoder = new TextEncoder();
   const chunks: Uint8Array[] = [];
@@ -17336,6 +20951,7 @@ async function createPriceProposalPdfFile({
   checkOut,
   checkOutTime,
   discountPercent,
+  galleryPhotoDescriptions = {},
   galleryPhotoPaths = [],
   galleryVideoPaths = [],
   freeRoomIds = [],
@@ -17356,6 +20972,7 @@ async function createPriceProposalPdfFile({
   checkOut: string;
   checkOutTime: string;
   discountPercent: number;
+  galleryPhotoDescriptions?: Record<string, string>;
   galleryPhotoPaths?: string[];
   galleryVideoPaths?: string[];
   freeRoomIds?: string[];
@@ -17377,7 +20994,7 @@ async function createPriceProposalPdfFile({
   let canvas = createPdfCanvas(pageWidth, pageHeight);
   let context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas context unavailable");
-  let y = drawPdfHeader(context, { checkIn, checkOut, mode, pageWidth, rooms });
+  let y = drawPdfHeader(context, { checkIn, checkOut, mode, pageWidth });
 
   function pushPage() {
     pages.push(canvas);
@@ -17409,17 +21026,17 @@ async function createPriceProposalPdfFile({
 
   const pdfGalleryPhotoPaths = includeGallery ? galleryPhotoPaths.filter(Boolean) : [];
   const pdfGalleryVideoCount = includeGallery ? galleryVideoPaths.filter(Boolean).length : 0;
-  async function drawGalleryPhoto(path: string, title: string) {
-    const minGalleryHeight = 820;
-    if (y + minGalleryHeight > pageHeight - margin) pushPage();
-    const galleryHeight = Math.max(minGalleryHeight, pageHeight - y - 28);
-    y = await drawPdfGalleryImageCard(context, path, title, y, pageWidth, galleryHeight);
+  async function drawGalleryOverview(paths: string[]) {
+    const galleryDescriptions = buildPdfGalleryDescriptionLines(pdfGalleryPhotoPaths, galleryPhotoDescriptions);
+    const galleryHeight = getPdfGalleryOverviewHeight(pageWidth, galleryDescriptions.length);
+    if (y + galleryHeight > pageHeight - margin) pushPage();
+    y = await drawPdfGalleryImageCard(context, paths, "Галерея объекта", y, pageWidth, galleryHeight, galleryDescriptions);
   }
 
-  if (pdfGalleryPhotoPaths[0]) {
-    await drawGalleryPhoto(pdfGalleryPhotoPaths[0], "Галерея объекта");
-  } else if (pdfGalleryVideoCount > 0) {
-    y = drawPdfInfoBlock(context, "Галерея объекта", [`Видео объекта: ${pdfGalleryVideoCount}`], y, pageWidth);
+  async function drawGalleryGrid(paths: string[], title: string) {
+    const galleryHeight = pageHeight - y - 28;
+    if (galleryHeight < 1080) pushPage();
+    y = await drawPdfGalleryGridPage(context, paths, title, y, pageWidth, pageHeight - y - 28);
   }
 
   if (packageEnabled) {
@@ -17431,11 +21048,21 @@ async function createPriceProposalPdfFile({
     y = drawPdfInfoBlock(context, "Пакетное предложение", packageLines, y, pageWidth);
   }
 
+  if (pdfGalleryPhotoPaths[0]) {
+    pushPage();
+    await drawGalleryOverview(pdfGalleryPhotoPaths.slice(0, 13));
+    pushPage();
+  } else if (pdfGalleryVideoCount > 0) {
+    pushPage();
+    y = drawPdfInfoBlock(context, "Галерея объекта", [`Видео объекта: ${pdfGalleryVideoCount}`], y, pageWidth);
+    pushPage();
+  }
+
   if (guestRooms.length) {
     for (const room of guestRooms) {
       const cardHeight = estimatePdfRoomCardHeight(room, reservation);
       if (y + cardHeight > pageHeight - margin) pushPage();
-      y = await drawPdfRoomCard(context, room, { checkIn, checkInTime, checkOut, checkOutTime, freePrice: freeRoomIdSet.has(room.id), groupPeriodTotals, pageHeight, reservation, y, pageWidth });
+      y = await drawPdfRoomCard(context, room, { checkIn, checkInTime, checkOut, checkOutTime, freePrice: freeRoomIdSet.has(room.id), groupPeriodTotals, reservation, y, pageWidth });
     }
   }
 
@@ -17443,13 +21070,13 @@ async function createPriceProposalPdfFile({
     for (const room of amenities) {
       const cardHeight = estimatePdfRoomCardHeight(room, reservation);
       if (y + cardHeight > pageHeight - margin) pushPage();
-      y = await drawPdfRoomCard(context, room, { checkIn, checkInTime, checkOut, checkOutTime, freePrice: freeRoomIdSet.has(room.id), groupPeriodTotals, pageHeight, reservation, y, pageWidth });
+      y = await drawPdfRoomCard(context, room, { checkIn, checkInTime, checkOut, checkOutTime, freePrice: freeRoomIdSet.has(room.id), groupPeriodTotals, reservation, y, pageWidth });
     }
   }
 
-  if (pdfGalleryPhotoPaths.length > 1) {
-    for (const [index, path] of pdfGalleryPhotoPaths.slice(1).entries()) {
-      await drawGalleryPhoto(path, `Галерея объекта ${index + 2}`);
+  if (pdfGalleryPhotoPaths[0]) {
+    for (let index = 0; index < pdfGalleryPhotoPaths.length; index += 10) {
+      await drawGalleryGrid(pdfGalleryPhotoPaths.slice(index, index + 10), `Фото объекта ${index + 1}-${Math.min(index + 10, pdfGalleryPhotoPaths.length)}`);
     }
   }
 
@@ -17543,16 +21170,14 @@ function createPdfCanvas(width: number, height: number) {
   return canvas;
 }
 
-function drawPdfHeader(context: CanvasRenderingContext2D, { checkIn, checkOut, mode, pageWidth, rooms }: { checkIn: string; checkOut: string; mode: "available" | "booking"; pageWidth: number; rooms: Room[] }) {
-  drawRoundRect(context, 28, 28, pageWidth - 56, 178, 28, "#0f6b57");
+function drawPdfHeader(context: CanvasRenderingContext2D, { checkIn, checkOut, mode, pageWidth }: { checkIn: string; checkOut: string; mode: "available" | "booking"; pageWidth: number }) {
+  drawRoundRect(context, 28, 28, pageWidth - 56, 148, 28, "#0f6b57");
   context.fillStyle = "#ffffff";
   context.font = "700 40px Arial";
   context.fillText(mode === "booking" ? "Бронь на согласование" : "Предложение", 60, 84);
   context.font = "500 23px Arial";
   context.fillText(`${formatKazakhDate(checkIn)} - ${formatKazakhDate(checkOut)}`, 60, 128);
-  context.font = "500 20px Arial";
-  context.fillText(`${mode === "booking" ? "Бронируется" : "Свободно"}: ${rooms.filter((room) => room.category !== "amenity").length} номеров`, 60, 166);
-  return 244;
+  return 214;
 }
 
 function drawPdfSmallHeader(context: CanvasRenderingContext2D, { checkIn, mode, pageWidth }: { checkIn: string; mode: "available" | "booking"; pageWidth: number }) {
@@ -17564,15 +21189,108 @@ function drawPdfSmallHeader(context: CanvasRenderingContext2D, { checkIn, mode, 
   return 84;
 }
 
-async function drawPdfGalleryImageCard(context: CanvasRenderingContext2D, path: string, title: string, y: number, pageWidth: number, height: number) {
+async function drawPdfGalleryImageCard(context: CanvasRenderingContext2D, paths: string[], title: string, y: number, pageWidth: number, height: number, descriptions: string[] = []) {
   const x = 28;
   const width = pageWidth - 56;
+  const photos = paths.filter(Boolean);
+  const mainPhoto = photos[0] || "";
+  const thumbnailPaths = photos.slice(1, 13);
+  const thumbnailGap = 8;
+  const mainY = y + 64;
+  const mainWidth = width - 36;
+  const mainHeight = Math.round(mainWidth * 9 / 16);
+  const thumbnailY = mainY + mainHeight + 14;
   drawPdfShadow(context, x, y, width, height, 28);
   drawRoundRect(context, x, y, width, height, 28, "#ffffff");
   context.fillStyle = "#16202a";
   context.font = "700 24px Arial";
   context.fillText(title, x + 28, y + 42);
-  await drawPdfImage(context, path, x + 18, y + 64, width - 36, height - 88, 22);
+  if (mainPhoto) {
+    await drawPdfImage(context, mainPhoto, x + 18, mainY, mainWidth, mainHeight, 22, "cover");
+  }
+  if (thumbnailPaths.length) {
+    await drawPdfThumbnailGrid(context, thumbnailPaths, x + 18, thumbnailY, mainWidth, 4, 3, thumbnailGap, 12);
+  }
+  if (descriptions.length) {
+    drawPdfGalleryDescriptionChecklist(context, descriptions, x + 28, thumbnailY + getPdfThumbnailGridHeight(mainWidth, 4, 3, thumbnailGap) + 38, width - 56, y + height - 24);
+  }
+  return y + height + 28;
+}
+
+function getPdfGalleryOverviewHeight(pageWidth: number, descriptionCount = 0) {
+  const width = pageWidth - 92;
+  const mainHeight = Math.round(width * 9 / 16);
+  const thumbnailWidth = (width - 8 * 3) / 4;
+  const thumbnailHeight = Math.round(thumbnailWidth * 9 / 16);
+  const descriptionRows = Math.ceil(Math.min(descriptionCount, 20) / 2);
+  const descriptionHeight = descriptionCount ? 44 + descriptionRows * 22 : 0;
+  return 64 + mainHeight + 14 + thumbnailHeight * 3 + 8 * 2 + descriptionHeight + 18;
+}
+
+function buildPdfGalleryDescriptionLines(paths: string[], descriptions: Record<string, string>) {
+  const seen = new Set<string>();
+  return paths
+    .map((path) => descriptions[path]?.trim())
+    .filter((description): description is string => Boolean(description))
+    .filter((description) => {
+      const key = description.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function getPdfThumbnailGridHeight(width: number, columns: number, maxRows: number, gap: number) {
+  const itemWidth = (width - gap * (columns - 1)) / columns;
+  const itemHeight = Math.round(itemWidth * 9 / 16);
+  return itemHeight * maxRows + gap * (maxRows - 1);
+}
+
+function drawPdfGalleryDescriptionChecklist(context: CanvasRenderingContext2D, descriptions: string[], x: number, y: number, width: number, maxY: number) {
+  context.fillStyle = "#16202a";
+  context.font = "700 20px Arial";
+  context.fillText("Преимущества объекта", x, y);
+  const gap = 20;
+  const columnWidth = (width - gap) / 2;
+  const rowHeight = 22;
+  const startY = y + 30;
+  const visibleDescriptions = descriptions.slice(0, 20);
+  context.font = "500 15px Arial";
+  for (const [index, description] of visibleDescriptions.entries()) {
+    const column = index % 2;
+    const row = Math.floor(index / 2);
+    const cursorX = x + column * (columnWidth + gap);
+    const cursorY = startY + row * rowHeight;
+    if (cursorY + rowHeight > maxY) break;
+    context.fillStyle = "#0f6b57";
+    context.fillText("✓", cursorX, cursorY);
+    context.fillStyle = "#25313d";
+    context.fillText(fitCanvasText(context, description, columnWidth - 24), cursorX + 22, cursorY);
+  }
+}
+
+async function drawPdfGalleryGridPage(context: CanvasRenderingContext2D, paths: string[], title: string, y: number, pageWidth: number, height: number) {
+  const x = 28;
+  const width = pageWidth - 56;
+  const gap = 12;
+  const titleHeight = 54;
+  const gridWidth = width - 36;
+  const imageWidthByColumns = (gridWidth - gap) / 2;
+  const maxImageHeightByRows = (height - titleHeight - gap * 4 - 18) / 5;
+  const imageWidth = Math.min(imageWidthByColumns, maxImageHeightByRows * 16 / 9);
+  const imageHeight = Math.round(imageWidth * 9 / 16);
+  const imageX = x + 18;
+  const imageY = y + titleHeight;
+  drawPdfShadow(context, x, y, width, height, 28);
+  drawRoundRect(context, x, y, width, height, 28, "#ffffff");
+  context.fillStyle = "#16202a";
+  context.font = "700 24px Arial";
+  context.fillText(title, x + 28, y + 42);
+  for (const [index, path] of paths.filter(Boolean).slice(0, 10).entries()) {
+    const column = index % 2;
+    const row = Math.floor(index / 2);
+    await drawPdfImage(context, path, imageX + column * (imageWidth + gap), imageY + row * (imageHeight + gap), imageWidth, imageHeight, 18, "cover");
+  }
   return y + height + 28;
 }
 
@@ -17598,7 +21316,8 @@ function drawPdfSectionTitle(context: CanvasRenderingContext2D, title: string, y
 
 function estimatePdfRoomCardHeight(room: Room, reservation?: Reservation | null, checkIn = getDefaultCheckInDate(), checkOut = formatDateInput(addDays(parseDateInput(getDefaultCheckInDate()), 1)), groupPeriodTotals = true) {
   const textLines = buildPdfRoomPreview(room, DEFAULT_CHECK_IN_TIME, DEFAULT_CHECK_OUT_TIME, checkIn, checkOut, false, reservation, groupPeriodTotals).split("\n").length;
-  return Math.max(820, 380 + textLines * 29);
+  const thumbnailHeight = room.photoPaths.length > 1 ? 392 : 0;
+  return Math.max(720, 560 + thumbnailHeight + textLines * 29);
 }
 
 function buildPdfRoomPreview(room: Room, checkInTime: string, checkOutTime: string, priceDate: string, checkOut: string, freePrice: boolean, reservation?: Reservation | null, groupPeriodTotals = true) {
@@ -17643,21 +21362,26 @@ function getPdfRoomCardTextBlockHeight(lines: string[]) {
   return 78 + lines.length * lineHeight + titleExtra;
 }
 
-function formatPdfRoomExtraInventoryLines(item?: { airBeds?: number; rollaways?: number }) {
+function formatPdfRoomExtraInventoryLines(item?: ExtraInventoryItem) {
   const lines = [
     item?.airBeds ? `- Надувной матрас: ${item.airBeds} / Мест: ${item.airBeds}` : "",
-    item?.rollaways ? `- Раскладушка: ${item.rollaways} / Мест: ${item.rollaways}` : ""
+    item?.rollaways ? `- Раскладушка: ${item.rollaways} / Мест: ${item.rollaways}` : "",
+    item?.extraPlaces ? `- Доп.место: ${item.extraPlaces} / Мест: ${item.extraPlaces}` : ""
   ].filter(Boolean);
   return lines.length ? `Допместа:\n${lines.join("\n")}` : "";
 }
 
 function formatPdfExtraInventorySummaryLines(reservation: Reservation, rooms: Room[]) {
   const counts = getReservationExtraInventoryCounts(reservation);
-  const unitPrice = getExtraPlaceUnitPrice(rooms);
+  const mappedExtraPlaces = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {}) - counts.airBeds - counts.rollaways;
+  const airBedUnitPrice = getReservationExtraInventoryPrice(reservation, "air-bed", rooms);
+  const rollawayUnitPrice = getReservationExtraInventoryPrice(reservation, "rollaway", rooms);
+  const extraPlaceTotal = calculateReservationExtraPlacesCharge(reservation, rooms);
   const nights = getNightsCount(reservation.checkIn, reservation.checkOut);
   return [
-    counts.airBeds ? `Надувной матрас: ${counts.airBeds} (+${formatPrice(counts.airBeds * unitPrice * nights)})` : "",
-    counts.rollaways ? `Раскладушка: ${counts.rollaways} (+${formatPrice(counts.rollaways * unitPrice * nights)})` : ""
+    counts.airBeds ? `Надувной матрас: ${counts.airBeds}${airBedUnitPrice ? ` (+${formatPrice(counts.airBeds * airBedUnitPrice * nights)})` : ""}` : "",
+    counts.rollaways ? `Раскладушка: ${counts.rollaways}${rollawayUnitPrice ? ` (+${formatPrice(counts.rollaways * rollawayUnitPrice * nights)})` : ""}` : "",
+    mappedExtraPlaces > 0 ? `Доп.место: ${mappedExtraPlaces}${extraPlaceTotal ? ` (+${formatPrice(extraPlaceTotal)})` : ""}` : ""
   ].filter(Boolean);
 }
 
@@ -17671,11 +21395,10 @@ async function drawPdfRoomCard(
     checkOutTime,
     freePrice,
     groupPeriodTotals,
-    pageHeight,
     pageWidth,
     reservation,
     y
-  }: { checkIn: string; checkInTime: string; checkOut: string; checkOutTime: string; freePrice?: boolean; groupPeriodTotals?: boolean; pageHeight: number; pageWidth: number; reservation?: Reservation | null; y: number }
+  }: { checkIn: string; checkInTime: string; checkOut: string; checkOutTime: string; freePrice?: boolean; groupPeriodTotals?: boolean; pageWidth: number; reservation?: Reservation | null; y: number }
 ) {
   const x = 28;
   const width = pageWidth - 56;
@@ -17683,23 +21406,34 @@ async function drawPdfRoomCard(
   context.font = "500 19px Arial";
   const textX = x + 32;
   const lines = text.split("\n").flatMap((line) => wrapCanvasText(context, line, width - 64));
-  const height = Math.max(estimatePdfRoomCardHeight(room, reservation, checkIn, checkOut, groupPeriodTotals), pageHeight - y - 28);
   const textBlockHeight = getPdfRoomCardTextBlockHeight(lines);
   const imageX = x + 18;
   const imageY = y + 18;
   const imageWidth = width - 36;
   const mainPhoto = getMainPhotoPath(room);
-  const imageHeight = mainPhoto ? Math.max(210, height - textBlockHeight - 18) : 0;
-  const textStartY = y + height - textBlockHeight + 38;
+  const thumbnailPaths = getOrderedPhotoPathsForSending(room).filter((path) => path !== mainPhoto).slice(0, 4);
+  const thumbnailGap = 10;
+  const thumbnailRows = thumbnailPaths.length ? Math.ceil(thumbnailPaths.length / 2) : 0;
+  const thumbnailItemWidth = (imageWidth - thumbnailGap) / 2;
+  const thumbnailItemHeight = Math.round(thumbnailItemWidth * 9 / 16);
+  const thumbnailHeight = thumbnailRows ? thumbnailRows * thumbnailItemHeight + (thumbnailRows - 1) * thumbnailGap : 0;
+  const imageHeight = mainPhoto ? Math.round(imageWidth * 9 / 16) : 0;
+  const mediaHeight = imageHeight + (thumbnailPaths.length ? thumbnailGap + thumbnailHeight : 0);
+  const height = Math.max(
+    estimatePdfRoomCardHeight(room, reservation, checkIn, checkOut, groupPeriodTotals),
+    mediaHeight + textBlockHeight + 46
+  );
+  const textStartY = y + 18 + mediaHeight + 38;
 
   drawPdfShadow(context, x, y, width, height, 28);
   drawRoundRect(context, x, y, width, height, 28, "#ffffff");
   if (mainPhoto) {
-    await drawPdfImage(context, mainPhoto, imageX, imageY, imageWidth, imageHeight, 24);
+    await drawPdfImage(context, mainPhoto, imageX, imageY, imageWidth, imageHeight, 24, "cover");
+  }
+  if (thumbnailPaths.length) {
+    await drawPdfThumbnailGrid(context, thumbnailPaths, imageX, imageY + imageHeight + thumbnailGap, imageWidth, 2, 2, thumbnailGap, 14);
   }
 
-  context.fillStyle = "#ffffff";
-  context.fillRect(x + 18, imageY + imageHeight, imageWidth, height - imageHeight - 18);
   let cursorY = textStartY;
   lines.forEach((line, index) => {
     const isPrice = /^Цена|^Будни|^Выходные|^Праздники/.test(line);
@@ -17713,32 +21447,64 @@ async function drawPdfRoomCard(
   return y + height + 28;
 }
 
-async function drawPdfImage(context: CanvasRenderingContext2D, path: string, x: number, y: number, width: number, height: number, radius = 0) {
-  try {
-    const { image, objectUrl } = await loadPdfImage(path);
-    context.fillStyle = "#ffffff";
-    context.fillRect(x, y, width, height);
-    const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
-    const drawWidth = image.naturalWidth * scale;
-    const drawHeight = image.naturalHeight * scale;
-    context.save();
-    context.beginPath();
-    drawRoundRectPath(context, x, y, width, height, radius);
-    context.clip();
-    context.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
-    context.restore();
-    URL.revokeObjectURL(objectUrl);
-  } catch {
-    context.fillStyle = "#ffffff";
-    context.fillRect(x, y, width, height);
-    context.fillStyle = "#64707d";
-    context.font = "500 20px Arial";
-    context.fillText("Фото недоступно", x + 24, y + height / 2);
+async function drawPdfThumbnailGrid(
+  context: CanvasRenderingContext2D,
+  paths: string[],
+  x: number,
+  y: number,
+  width: number,
+  columns: number,
+  maxRows: number,
+  gap: number,
+  radius: number
+) {
+  const visiblePaths = paths.filter(Boolean).slice(0, columns * maxRows);
+  if (!visiblePaths.length) return;
+  const itemWidth = (width - gap * (columns - 1)) / columns;
+  const itemHeight = Math.round(itemWidth * 9 / 16);
+  for (const [index, path] of visiblePaths.entries()) {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    await drawPdfImage(context, path, x + column * (itemWidth + gap), y + row * (itemHeight + gap), itemWidth, itemHeight, radius, "cover");
   }
 }
 
+async function drawPdfImage(context: CanvasRenderingContext2D, path: string, x: number, y: number, width: number, height: number, radius = 0, fit: PdfImageFit = "cover") {
+  try {
+    const { image, objectUrl } = await loadPdfImage(path);
+    drawPdfLoadedImage(context, image, x, y, width, height, radius, fit);
+    URL.revokeObjectURL(objectUrl);
+  } catch {
+    drawPdfImageFallback(context, x, y, width, height);
+  }
+}
+
+function drawPdfLoadedImage(context: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number, radius = 0, fit: PdfImageFit = "cover") {
+  context.fillStyle = fit === "contain" ? "#eef1f4" : "#ffffff";
+  context.fillRect(x, y, width, height);
+  const scale = fit === "contain"
+    ? Math.min(width / image.naturalWidth, height / image.naturalHeight)
+    : Math.max(width / image.naturalWidth, height / image.naturalHeight);
+  const drawWidth = image.naturalWidth * scale;
+  const drawHeight = image.naturalHeight * scale;
+  context.save();
+  context.beginPath();
+  drawRoundRectPath(context, x, y, width, height, radius);
+  context.clip();
+  context.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
+  context.restore();
+}
+
+function drawPdfImageFallback(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) {
+  context.fillStyle = "#ffffff";
+  context.fillRect(x, y, width, height);
+  context.fillStyle = "#64707d";
+  context.font = "500 20px Arial";
+  context.fillText("Фото недоступно", x + 24, y + height / 2);
+}
+
 function loadPdfImage(path: string) {
-  return new Promise<{ image: HTMLImageElement; objectUrl: string }>(async (resolve, reject) => {
+  return new Promise<PdfLoadedImage>(async (resolve, reject) => {
     let objectUrl = "";
     try {
       const response = await fetch(getMediaUrl(path));
@@ -17788,6 +21554,79 @@ function fitCanvasText(context: CanvasRenderingContext2D, text: string, maxWidth
     nextText = nextText.slice(0, -1);
   }
   return `${nextText.trimEnd()}...`;
+}
+
+function notifyWhatsAppMessageSent() {
+  window.dispatchEvent(new CustomEvent("gpb-whatsapp-message-sent"));
+}
+
+function protectWhatsAppComposerFromResidualSend(durationMs = 4500) {
+  whatsAppAutoSendProtectionUntil = Math.max(whatsAppAutoSendProtectionUntil, Date.now() + durationMs);
+}
+
+async function stabilizeWhatsAppComposerAfterAutoMediaSend() {
+  const input = await waitForElement(findWhatsAppMessageInput, 1800);
+  if (input) {
+    const text = (input.innerText || input.textContent || "").trim();
+    if (!text) clearWhatsAppInput(input);
+  }
+
+  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  if (activeElement && /send|отправить/i.test(getElementActionText(activeElement))) {
+    activeElement.blur();
+  }
+
+  protectWhatsAppComposerFromResidualSend();
+}
+
+function startWhatsAppAutoSendGuard() {
+  function isProtected() {
+    return Date.now() <= whatsAppAutoSendProtectionUntil;
+  }
+
+  function shouldBlockResidualSend(target: EventTarget | null) {
+    if (!isProtected() || !(target instanceof HTMLElement) || isGpbElement(target)) return false;
+    const sendButton = target.closest<HTMLElement>("button, [role='button'], [tabindex]") ?? target;
+    const text = getElementActionText(sendButton);
+    if (!/send|отправить|ic-send|\bsend\b/i.test(text)) return false;
+    const input = findWhatsAppMessageInput();
+    const inputText = (input?.innerText || input?.textContent || "").trim();
+    return inputText.length <= 1;
+  }
+
+  function blockEvent(event: Event) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    debugContactFlow("whatsapp-auto-send-blocked", {
+      type: event.type,
+      inputText: (findWhatsAppMessageInput()?.innerText || findWhatsAppMessageInput()?.textContent || "").trim()
+    });
+  }
+
+  function onPointerEvent(event: MouseEvent | PointerEvent) {
+    if (shouldBlockResidualSend(event.target)) blockEvent(event);
+  }
+
+  function onKeyDown(event: KeyboardEvent) {
+    if (!isProtected() || event.key !== "Enter") return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const input = findWhatsAppMessageInput();
+    if (!target || !input || target !== input) return;
+    const inputText = (input.innerText || input.textContent || "").trim();
+    if (inputText.length <= 1) blockEvent(event);
+  }
+
+  document.addEventListener("pointerdown", onPointerEvent, true);
+  document.addEventListener("mousedown", onPointerEvent, true);
+  document.addEventListener("click", onPointerEvent, true);
+  document.addEventListener("keydown", onKeyDown, true);
+  return () => {
+    document.removeEventListener("pointerdown", onPointerEvent, true);
+    document.removeEventListener("mousedown", onPointerEvent, true);
+    document.removeEventListener("click", onPointerEvent, true);
+    document.removeEventListener("keydown", onKeyDown, true);
+  };
 }
 
 function drawRoundRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number, color: string) {
@@ -17866,6 +21705,23 @@ async function sendRoomVideoToActiveWhatsAppChat(room: Room) {
   return sendImageFileToActiveWhatsAppChat(videoFile, caption);
 }
 
+function buildObjectGallerySinglePhotoCaption(path: string, title: string, descriptions: Record<string, string>) {
+  return descriptions[path]?.trim() || "";
+}
+
+function buildObjectGalleryBatchPhotoCaption(paths: string[], descriptions: Record<string, string>) {
+  const blocks = paths
+    .map((path, index) => {
+      const description = descriptions[path]?.trim();
+      if (!description) return "";
+      const title = index === 0 ? "Фото 1 главное" : `Фото ${index + 1}`;
+      return `${title}\n${description}`;
+    })
+    .filter(Boolean);
+
+  return blocks.length ? blocks.join("\n\n") : "Галерея объекта";
+}
+
 async function sendFileToActiveWhatsAppChat(file: File, caption: string) {
   return sendMediaFilesToActiveWhatsAppChat([file], caption);
 }
@@ -17902,7 +21758,9 @@ async function sendMediaFilesThroughAttachmentToActiveWhatsAppChat(files: File[]
     sendButton.click();
     await waitForMediaPreviewClose(captionInput, 9000);
     await waitForElement(findWhatsAppMessageInput, 9000);
+    await stabilizeWhatsAppComposerAfterAutoMediaSend();
     await waitForDelay(1200);
+    notifyWhatsAppMessageSent();
     return true;
   } catch {
     return false;
@@ -17941,7 +21799,9 @@ async function sendMediaFilesToActiveWhatsAppChat(files: File[], caption: string
     sendButton.click();
     await waitForMediaPreviewClose(captionInput, 9000);
     await waitForElement(findWhatsAppMessageInput, 9000);
+    await stabilizeWhatsAppComposerAfterAutoMediaSend();
     await waitForDelay(1200);
+    notifyWhatsAppMessageSent();
     return true;
   } catch {
     return false;
@@ -17980,7 +21840,9 @@ async function sendImageFileToActiveWhatsAppChat(file: File, caption: string) {
     sendButton.click();
     await waitForMediaPreviewClose(captionInput, 9000);
     await waitForElement(findWhatsAppMessageInput, 9000);
+    await stabilizeWhatsAppComposerAfterAutoMediaSend();
     await waitForDelay(1200);
+    notifyWhatsAppMessageSent();
     return true;
   } catch {
     return false;
@@ -18081,12 +21943,14 @@ async function sendTextToActiveWhatsAppChat(message: string) {
   if (sendButton) {
     sendButton.click();
     await waitForDelay(650);
+    notifyWhatsAppMessageSent();
     return true;
   }
 
   input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter", code: "Enter" }));
   input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: "Enter", code: "Enter" }));
   await waitForDelay(650);
+  notifyWhatsAppMessageSent();
   return true;
 }
 
@@ -18106,6 +21970,7 @@ async function insertTextIntoActiveWhatsAppChat(message: string) {
   await pasteTextIntoWhatsAppInput(input, message);
   await waitForDelay(120);
   input.focus();
+  notifyWhatsAppMessageSent();
   return true;
 }
 
@@ -18272,6 +22137,159 @@ function waitForElement<T extends HTMLElement>(finder: () => T | null, timeoutMs
   });
 }
 
+function startWhatsAppContactDomProbe() {
+  let lastSignature = "";
+  const intervalId = window.setInterval(() => {
+    try {
+      const profilePanel = findVisibleProfilePanel();
+      const contactForm = findEditableContactFormPanel();
+      if (!profilePanel && !contactForm) return;
+
+      const root = contactForm ?? profilePanel ?? document.body;
+      const rootRect = root.getBoundingClientRect();
+      const actions = Array.from(document.querySelectorAll<HTMLElement>("[role='button'], button, [tabindex], span[data-icon], [aria-label], [title], svg, div, span"))
+        .filter((element) => {
+          if (!isVisibleElement(element) || isGpbElement(element)) return false;
+          const rect = element.getBoundingClientRect();
+          const isNearRoot = rect.left >= rootRect.left - 80 &&
+            rect.right <= rootRect.right + 220 &&
+            rect.top >= rootRect.top - 80 &&
+            rect.bottom <= rootRect.bottom + 180;
+          if (!isNearRoot) return false;
+          const text = getElementActionText(element);
+          return /контакт|добав|редакт|измен|сохран|готов|галоч|назад|закры|новый|contact|add|edit|save|done|check|close|back|person|pencil|compose|plus|ic-|data-icon/i.test(text);
+        })
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            tag: element.tagName.toLowerCase(),
+            role: element.getAttribute("role") ?? "",
+            dataIcon: element.getAttribute("data-icon") ?? "",
+            aria: element.getAttribute("aria-label") ?? "",
+            title: element.getAttribute("title") ?? "",
+            text: getElementActionText(element).replace(/\s+/g, " ").trim().slice(0, 120),
+            rect: {
+              left: Math.round(rect.left),
+              top: Math.round(rect.top),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height)
+            }
+          };
+        })
+        .filter((item, index, list) =>
+          item.text && list.findIndex((other) => other.text === item.text && other.rect.left === item.rect.left && other.rect.top === item.rect.top) === index
+        )
+        .slice(0, 40);
+
+      const fields = Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLElement>("input, textarea, [contenteditable='true'], [role='textbox']"))
+        .filter((element) => isVisibleElement(element) && !isGpbElement(element))
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            tag: element.tagName.toLowerCase(),
+            aria: element.getAttribute("aria-label") ?? "",
+            placeholder: element.getAttribute("placeholder") ?? "",
+            name: element.getAttribute("name") ?? "",
+            value: getContactFieldValue(element).slice(0, 80),
+            rect: {
+              left: Math.round(rect.left),
+              top: Math.round(rect.top),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height)
+            }
+          };
+        })
+        .slice(0, 20);
+
+      const signature = JSON.stringify({
+        profile: getDebugText(profilePanel),
+        form: getDebugText(contactForm),
+        actions: actions.map((item) => `${item.text}@${item.rect.left},${item.rect.top}`),
+        fields: fields.map((item) => `${item.aria}|${item.placeholder}|${item.value}@${item.rect.left},${item.rect.top}`)
+      });
+      if (signature === lastSignature) return;
+      lastSignature = signature;
+
+      debugContactFlow("contact-dom-probe", {
+        profileFound: Boolean(profilePanel),
+        formFound: Boolean(contactForm),
+        profileText: getDebugText(profilePanel),
+        formText: getDebugText(contactForm),
+        actions,
+        fields
+      });
+    } catch (error) {
+      debugContactFlow("contact-dom-probe-error", { message: error instanceof Error ? error.message : String(error) });
+    }
+  }, 900);
+
+  return () => window.clearInterval(intervalId);
+}
+
+function startWhatsAppManualClickTrace() {
+  let lastClickAt = 0;
+
+  function onPointerEvent(event: MouseEvent | PointerEvent) {
+    try {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (!target || isGpbElement(target)) return;
+
+      const now = Date.now();
+      if (now - lastClickAt < 50) return;
+      lastClickAt = now;
+
+      const clickable = target.closest<HTMLElement>("[role='button'], [role='menuitem'], button, [tabindex], a");
+      const profilePanel = findVisibleProfilePanel();
+      const contactForm = findEditableContactFormPanel();
+      const elementAtPoint = document.elementFromPoint(event.clientX, event.clientY);
+      const pointedElement = elementAtPoint instanceof HTMLElement ? elementAtPoint : null;
+
+      debugContactFlow("manual-click-trace", {
+        type: event.type,
+        x: Math.round(event.clientX),
+        y: Math.round(event.clientY),
+        target: getClickTraceElementInfo(target),
+        pointed: getClickTraceElementInfo(pointedElement),
+        clickable: getClickTraceElementInfo(clickable),
+        profileFound: Boolean(profilePanel),
+        formFound: Boolean(contactForm),
+        profileText: getDebugText(profilePanel),
+        formText: getDebugText(contactForm)
+      });
+    } catch (error) {
+      debugContactFlow("manual-click-trace-error", { message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  document.addEventListener("pointerdown", onPointerEvent, true);
+  document.addEventListener("mousedown", onPointerEvent, true);
+  document.addEventListener("click", onPointerEvent, true);
+  return () => {
+    document.removeEventListener("pointerdown", onPointerEvent, true);
+    document.removeEventListener("mousedown", onPointerEvent, true);
+    document.removeEventListener("click", onPointerEvent, true);
+  };
+}
+
+function getClickTraceElementInfo(element: HTMLElement | null | undefined) {
+  if (!element) return null;
+  const rect = element.getBoundingClientRect();
+  return {
+    tag: element.tagName.toLowerCase(),
+    role: element.getAttribute("role") ?? "",
+    dataIcon: element.getAttribute("data-icon") ?? "",
+    aria: element.getAttribute("aria-label") ?? "",
+    title: element.getAttribute("title") ?? "",
+    text: getElementActionText(element).replace(/\s+/g, " ").trim().slice(0, 180),
+    rect: {
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height)
+    }
+  };
+}
+
 function isVisibleElement(element: HTMLElement) {
   const rect = element.getBoundingClientRect();
   return rect.width > 0 && rect.height > 0;
@@ -18291,6 +22309,17 @@ function getDebugText(element: HTMLElement | null | undefined) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 240);
+}
+
+function getDebugRect(element: HTMLElement | null | undefined) {
+  if (!element) return null;
+  const rect = element.getBoundingClientRect();
+  return {
+    left: Math.round(rect.left),
+    top: Math.round(rect.top),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height)
+  };
 }
 
 function isGpbElement(element: HTMLElement) {
@@ -18398,12 +22427,12 @@ function formatReservationSleepingPlaceLines(places: SleepingPlace[]) {
 
 function getVisibleSleepingPlaces(places: SleepingPlace[]) {
   return places
-    .filter((place) => place.count > 0 && getSleepingPlacePlacesCount(place) > 0 && place.type !== "air-bed" && place.type !== "rollaway")
+    .filter((place) => place.count > 0 && getSleepingPlacePlacesCount(place) > 0 && place.type !== "rollaway")
 }
 
 function getConfiguredExtraSleepingPlaces(places: SleepingPlace[]) {
   return places
-    .filter((place) => place.count > 0 && getSleepingPlacePlacesCount(place) > 0 && (place.type === "air-bed" || place.type === "rollaway"));
+    .filter((place) => place.count > 0 && getSleepingPlacePlacesCount(place) > 0 && place.type === "rollaway");
 }
 
 function getSleepingPlaceTitle(place: Pick<SleepingPlace, "title" | "type">) {

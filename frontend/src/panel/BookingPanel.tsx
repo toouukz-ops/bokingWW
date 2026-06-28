@@ -12951,6 +12951,7 @@ function RoomCatalogModal({
                       }}
                       onFocus={() => setFocusedPriceRoomId(`${activeRoom.id}:weekday`)}
                     />
+                    {getRoomPricePerPersonHint(activeRoom, activeRoom.weekdayPrice)}
                   </label>
                   <label className="gpb-price-input">
                     Выходные
@@ -12963,6 +12964,7 @@ function RoomCatalogModal({
                       onChange={(event) => updateActiveRoom({ weekendPrice: parsePriceInput(event.target.value) })}
                       onFocus={() => setFocusedPriceRoomId(`${activeRoom.id}:weekend`)}
                     />
+                    {getRoomPricePerPersonHint(activeRoom, activeRoom.weekendPrice)}
                   </label>
                   <label className="gpb-price-input">
                     Праздники
@@ -12975,6 +12977,7 @@ function RoomCatalogModal({
                       onChange={(event) => updateActiveRoom({ holidayPrice: parsePriceInput(event.target.value) })}
                       onFocus={() => setFocusedPriceRoomId(`${activeRoom.id}:holiday`)}
                     />
+                    {getRoomPricePerPersonHint(activeRoom, activeRoom.holidayPrice)}
                   </label>
                   {isStayBookingObject(activeRoom) ? (
                     <label className="gpb-price-input">
@@ -19414,6 +19417,13 @@ function getRoomBaseSleepingCapacity(room: Room) {
     if (place.type === "rollaway") return sum;
     return sum + getSleepingPlacePlacesCount(place);
   }, 0);
+}
+
+function getRoomPricePerPersonHint(room: Room, price: number) {
+  if (!isStayBookingObject(room) || price <= 0) return null;
+  const capacity = getRoomBaseSleepingCapacity(room);
+  if (capacity <= 0) return null;
+  return <small>Средняя: {formatPrice(Math.round(price / capacity))}/чел</small>;
 }
 
 function getAvailableExtraInventory(

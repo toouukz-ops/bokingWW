@@ -1,6 +1,6 @@
 import type { ActiveDialog, BookingDraft, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, Room, RoomHold } from "./types";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8765";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://bokingww.onrender.com";
 const LOCAL_ROOMS_STORAGE_KEY = "gpb-booking-rooms";
 const LOCAL_RESERVATIONS_STORAGE_KEY = "gpb-booking-reservations";
 const LOCAL_PAYMENT_SETTINGS_STORAGE_KEY = "gpb-payment-settings";

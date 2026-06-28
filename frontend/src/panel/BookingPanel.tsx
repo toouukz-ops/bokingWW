@@ -1603,19 +1603,6 @@ export function BookingPanel() {
       .filter((entry): entry is { chatId: string; draft: ChatBookingDraft } => Boolean(entry));
     const draftSaveMap = new Map<string, ChatBookingDraft>(repairedDraftEntries.map(({ chatId, draft }) => [chatId, draft]));
 
-    Object.entries(drafts).forEach(([chatId, draft]) => {
-      const repairedDraft = draftSaveMap.get(chatId) ?? repairChatDraftPhoneIdentity(draft, normalizedReservationById);
-      const normalizedPhone = formatPhoneDigits(repairedDraft.phone);
-      if (!normalizedPhone) return;
-      const phoneChatId = createChatId(`phone:${normalizedPhone}`);
-      if (phoneChatId === chatId) return;
-      const currentAliasDraft = draftSaveMap.get(phoneChatId) ?? drafts[phoneChatId];
-      const mergedAliasDraft = mergeChatDraftForPhoneAlias(currentAliasDraft, repairedDraft);
-      if (mergedAliasDraft !== currentAliasDraft) {
-        draftSaveMap.set(phoneChatId, mergedAliasDraft);
-      }
-    });
-
     if (reservationChanged || draftSaveMap.size) {
       await Promise.all([
         ...normalizedReservations.map((reservation, index) => reservation === sourceReservations[index] ? Promise.resolve() : saveReservation(reservation)),
@@ -2001,18 +1988,13 @@ export function BookingPanel() {
     const draft = reconcileDraftReservationDates({ ...buildChatDraft(), ...patch, updatedAt: new Date().toISOString() });
     await saveCachedChatBookingDraft(chat.id, draft);
     const normalizedPhone = formatPhoneDigits(draft.phone);
-    const phoneChatId = normalizedPhone ? createChatId(`phone:${normalizedPhone}`) : "";
+    const chatPhone = formatPhoneDigits(chat.phone || "");
+    const phoneBelongsToChat = Boolean(normalizedPhone && chatPhone && phonesMatchForContactLookup(chatPhone, normalizedPhone));
+    const phoneChatId = phoneBelongsToChat ? createChatId(`phone:${normalizedPhone}`) : "";
     if (phoneChatId && phoneChatId !== chat.id) {
       const existingPhoneDraft = getCachedChatBookingDraft(phoneChatId) ?? await getChatBookingDraft(phoneChatId);
       const mergedDraft = mergeChatDraftForPhoneAlias(existingPhoneDraft ?? undefined, draft);
       await saveCachedChatBookingDraft(phoneChatId, mergedDraft);
-    }
-    const title = draft.lastReservation?.guestFirstName || draft.guestFirstName || chat.title;
-    const titleChatId = title ? createChatId(`title:${title}`) : "";
-    if (titleChatId && titleChatId !== chat.id && titleChatId !== phoneChatId) {
-      const existingTitleDraft = getCachedChatBookingDraft(titleChatId) ?? await getChatBookingDraft(titleChatId);
-      const mergedDraft = mergeChatDraftForPhoneAlias(existingTitleDraft ?? undefined, draft);
-      await saveCachedChatBookingDraft(titleChatId, mergedDraft);
     }
   }
 
@@ -2087,14 +2069,10 @@ export function BookingPanel() {
   async function findFallbackChatDraftForActiveChat(chat: ActiveChat, cachedDrafts?: Record<string, ChatBookingDraft>) {
     const drafts = cachedDrafts ?? await ensureDraftCacheLoaded();
     const chatPhone = normalizePhoneSearch(chat.phone || "");
-    const chatTitle = normalizeExtractedText(chat.title);
-    const titleKey = chatTitle.toLowerCase();
     const matches = Object.values(drafts).filter((draft) => {
       const draftPhone = normalizePhoneSearch(draft.phone || draft.lastReservation?.phone || "");
       if (chatPhone && draftPhone && phonesMatchForContactLookup(chatPhone, draftPhone)) return true;
-      if (!titleKey || titleKey.length < 5) return false;
-      const draftName = normalizeExtractedText(draft.guestFirstName || draft.lastReservation?.guestFirstName || "").toLowerCase();
-      return Boolean(draftName && draftName === titleKey);
+      return false;
     });
     const phoneGroups = new Set(matches.map((draft) => normalizePhoneSearch(draft.phone || draft.lastReservation?.phone || "")).filter(Boolean));
     if (phoneGroups.size > 1) return null;
@@ -4364,12 +4342,7 @@ export function BookingPanel() {
     closeWhatsAppProfilePanels();
 
     const phoneChat = createActiveChatFromProfile({ name: contactName || normalizedPhone, phone: normalizedPhone });
-    const titleChat = contactName ? {
-      id: createChatId(`title:${contactName}`),
-      phone: normalizedPhone,
-      title: contactName
-    } : null;
-    const chats = [activeChat, phoneChat, titleChat].filter((chat, index, list): chat is ActiveChat =>
+    const chats = [activeChat, phoneChat].filter((chat, index, list): chat is ActiveChat =>
       Boolean(chat) && list.findIndex((item) => item?.id === chat?.id) === index
     );
     if (phoneChat) {

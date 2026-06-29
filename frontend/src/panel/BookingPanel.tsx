@@ -3135,6 +3135,7 @@ export function BookingPanel() {
     suppressActiveChatSyncRef.current = true;
     setSendState("sending");
     try {
+      await preloadMediaBlobs(activeMenuItems.map((item) => item.photoPath).filter(Boolean));
       const pdfFile = await createMenuPdfFile(activeMenuItems);
       const sent = await sendFileToActiveWhatsAppChat(pdfFile, "Меню Green Pine Burabay");
       if (sent) {
@@ -21980,13 +21981,7 @@ function loadPdfImage(path: string) {
   return new Promise<PdfLoadedImage>(async (resolve, reject) => {
     let objectUrl = "";
     try {
-      const response = await fetch(getMediaUrl(path));
-      if (!response.ok) {
-        reject(new Error(`Image fetch failed: ${response.status}`));
-        return;
-      }
-
-      const blob = await response.blob();
+      const blob = await fetchCachedMediaBlob(path);
       objectUrl = URL.createObjectURL(blob);
     } catch (error) {
       reject(error);
@@ -22358,6 +22353,12 @@ async function fetchCachedMediaBlob(path: string) {
     await cache.put(url, response.clone()).catch(() => undefined);
   }
   return response.blob();
+}
+
+async function preloadMediaBlobs(paths: string[]) {
+  const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
+  if (!uniquePaths.length) return;
+  await Promise.allSettled(uniquePaths.map((path) => fetchCachedMediaBlob(path)));
 }
 
 async function openMediaCache() {

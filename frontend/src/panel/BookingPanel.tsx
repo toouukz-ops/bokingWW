@@ -1267,12 +1267,9 @@ export function BookingPanel() {
       if (!payload || typeof payload !== "object") return;
       if (payload.action === "replace" && payload.drafts && typeof payload.drafts === "object" && !Array.isArray(payload.drafts)) {
         draftCacheRef.current = payload.drafts as Record<string, ChatBookingDraft>;
-        const activeChat = activeChatRef.current;
-        if (activeChat) {
-          const activeDraft = draftCacheRef.current[activeChat.id];
-          if (activeDraft) {
-            applyRealtimeChatDraft(activeChat.id, activeDraft);
-          }
+        const activeEntry = getRealtimeDraftEntryForActiveChat(draftCacheRef.current);
+        if (activeEntry) {
+          applyRealtimeChatDraft(activeEntry.chatId, activeEntry.draft);
         }
       }
       if (payload.action === "upsert" && typeof payload.chatId === "string" && payload.draft && typeof payload.draft === "object") {
@@ -2024,10 +2021,6 @@ export function BookingPanel() {
 
   async function saveChatDraftForChat(chat: ActiveChat, patch: Partial<ChatBookingDraft> = {}) {
     if (isRestoringChatDraftRef.current) return;
-    const dialogOwner = activeDialogs.find((dialog) => dialog.chatKey === chat.id && new Date(dialog.expiresAt).getTime() > Date.now());
-    if (dialogOwner && dialogOwner.clientId !== syncClientIdRef.current) {
-      return;
-    }
     const draft = reconcileDraftReservationDates({ ...buildChatDraft(), ...patch, updatedAt: new Date().toISOString() });
     const normalizedPhone = formatPhoneDigits(draft.phone);
     const chatPhone = formatPhoneDigits(chat.phone || "");
@@ -2070,14 +2063,14 @@ export function BookingPanel() {
 
   async function saveCachedChatBookingDraft(chatId: string, draft: ChatBookingDraft) {
     updateDraftCache(chatId, draft);
-    if (chatId === activeChatIdRef.current) {
+    if (isRealtimeDraftForActiveChat(chatId, draft)) {
       lastAppliedDraftUpdatedAtRef.current = maxIsoDate(lastAppliedDraftUpdatedAtRef.current, draft.updatedAt);
     }
     await saveChatBookingDraft(chatId, draft);
   }
 
   function applyRealtimeChatDraft(chatId: string, draft: ChatBookingDraft) {
-    if (!chatId || chatId !== activeChatIdRef.current) return;
+    if (!isRealtimeDraftForActiveChat(chatId, draft)) return;
     if (!draft.updatedAt || draft.updatedAt <= lastAppliedDraftUpdatedAtRef.current) return;
     if (isRestoringChatDraftRef.current || suppressActiveChatSyncRef.current) return;
 
@@ -2094,6 +2087,22 @@ export function BookingPanel() {
       if (draftRestoreVersionRef.current !== restoreVersion) return;
       isRestoringChatDraftRef.current = false;
     }, 0);
+  }
+
+  function getRealtimeDraftEntryForActiveChat(drafts: Record<string, ChatBookingDraft>) {
+    const entry = Object.entries(drafts)
+      .filter(([chatId, draft]) => isRealtimeDraftForActiveChat(chatId, draft))
+      .sort(([, left], [, right]) => right.updatedAt.localeCompare(left.updatedAt))[0];
+    return entry ? { chatId: entry[0], draft: entry[1] } : null;
+  }
+
+  function isRealtimeDraftForActiveChat(chatId: string, draft: ChatBookingDraft) {
+    const activeChat = activeChatRef.current;
+    if (!activeChat || !chatId) return false;
+    if (chatId === activeChat.id) return true;
+    const activePhone = formatPhoneDigits(activeChat.phone || "");
+    const draftPhone = formatPhoneDigits(draft.phone || draft.lastReservation?.phone || "");
+    return Boolean(activePhone && draftPhone && phonesMatchForContactLookup(activePhone, draftPhone));
   }
 
   async function deleteCachedChatBookingDraft(chatId: string) {

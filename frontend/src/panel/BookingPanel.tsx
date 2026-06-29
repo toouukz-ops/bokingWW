@@ -907,6 +907,10 @@ export function BookingPanel() {
     () => availableRooms,
     [availableRooms]
   );
+  const catalogCandidateRooms = useMemo(
+    () => pricedRooms.filter((room) => isRoomAvailableInBookingPanel(room)),
+    [pricedRooms]
+  );
   const bookingPanelSummary = useMemo(
     () => buildBookingPanelSummary(
       pricedRooms,
@@ -958,9 +962,9 @@ export function BookingPanel() {
     [lastReservation?.checkOut, lastReservation?.checkOutTime, lastReservation?.checkedInAt, lastReservation?.checkedOutAt, lastReservation?.roomIds, lastReservation?.status, pricedRooms]
   );
   const catalogPanelRooms = useMemo(() => {
-    const sourceRooms = isBookingPanelActiveReservation(lastReservation) ? bookedReservationRooms : visibleAvailableRooms;
+    const sourceRooms = isBookingPanelActiveReservation(lastReservation) ? bookedReservationRooms : catalogCandidateRooms;
     return sourceRooms.filter((room) => room.objectType !== "gazebo");
-  }, [bookedReservationRooms, lastReservation, visibleAvailableRooms]);
+  }, [bookedReservationRooms, catalogCandidateRooms, lastReservation]);
   const addOnSaleServiceRoom = useMemo(
     () => pricedRooms.find((room) => room.objectType === "sauna" && isRoomAvailableInBookingPanel(room)) ?? null,
     [pricedRooms]
@@ -1025,8 +1029,8 @@ export function BookingPanel() {
   const catalogAvailabilitySummary = useMemo(
     () => isBookingPanelActiveReservation(lastReservation)
       ? buildBookedCatalogSummary(bookedReservationRooms, lastReservation)
-      : buildCatalogAvailabilitySummary(catalogPanelRooms, reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms),
-    [bookedReservationRooms, catalogPanelRooms, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, lastReservation, pricedRooms, reservations]
+      : buildCatalogAvailabilitySummary(visibleAvailableRooms.filter((room) => room.objectType !== "gazebo"), reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms),
+    [bookedReservationRooms, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, lastReservation, pricedRooms, reservations, visibleAvailableRooms]
   );
   const pricePdfCandidateRooms = useMemo(() => {
     const roomsForPrice = pricedRooms.filter(isRoomAvailableInBookingPanel);
@@ -1238,6 +1242,37 @@ export function BookingPanel() {
           void saveStoredRoomHolds(nextHolds);
           return nextHolds;
         });
+      }
+    });
+    events.addEventListener("reservations.changed", (event) => {
+      const payload = safeParseRealtimeEvent(event);
+      if (!payload || typeof payload !== "object") return;
+      if (payload.action === "replace" && Array.isArray(payload.items)) {
+        setReservations(payload.items as Reservation[]);
+      }
+      if (payload.action === "upsert" && payload.reservation && typeof payload.reservation === "object") {
+        const reservation = payload.reservation as Reservation;
+        setReservations((currentReservations) =>
+          currentReservations.filter((item) => item.id !== reservation.id).concat(reservation)
+        );
+      }
+      if (payload.action === "delete" && typeof payload.id === "string") {
+        setReservations((currentReservations) => currentReservations.filter((reservation) => reservation.id !== payload.id));
+      }
+    });
+    events.addEventListener("chat-drafts.changed", (event) => {
+      const payload = safeParseRealtimeEvent(event);
+      if (!payload || typeof payload !== "object") return;
+      if (payload.action === "replace" && payload.drafts && typeof payload.drafts === "object" && !Array.isArray(payload.drafts)) {
+        draftCacheRef.current = payload.drafts as Record<string, ChatBookingDraft>;
+      }
+      if (payload.action === "upsert" && typeof payload.chatId === "string" && payload.draft && typeof payload.draft === "object") {
+        updateDraftCache(payload.chatId, payload.draft as ChatBookingDraft);
+      }
+      if (payload.action === "delete" && typeof payload.chatId === "string") {
+        const nextCache = { ...draftCacheRef.current };
+        delete nextCache[payload.chatId];
+        draftCacheRef.current = nextCache;
       }
     });
 
@@ -2184,8 +2219,61 @@ export function BookingPanel() {
     return resolvedName || resolvedStoredName;
   }
 
+  function findBestActiveReservationForPhone(phone: string, preferredReservationId = "") {
+    const normalizedPhone = normalizePhoneSearch(phone);
+    if (!normalizedPhone) return null;
+    const matchingReservations = reservations
+      .filter((reservation) =>
+        !reservation.isAddOnSale &&
+        isBookingPanelActiveReservation(reservation) &&
+        phonesMatchForContactLookup(normalizedPhone, reservation.phone)
+      );
+    if (!matchingReservations.length) return null;
+
+    const preferredReservation = preferredReservationId
+      ? matchingReservations.find((reservation) => reservation.id === preferredReservationId)
+      : null;
+    if (preferredReservation) return preferredReservation;
+
+    return matchingReservations
+      .sort((left, right) =>
+        left.checkIn.localeCompare(right.checkIn) ||
+        right.createdAt.localeCompare(left.createdAt)
+      )[0] ?? null;
+  }
+
+  function mergeReservationIntoChatDraft(draft: ChatBookingDraft, reservation: Reservation): ChatBookingDraft {
+    return reconcileDraftReservationDates({
+      ...draft,
+      agreementSent: true,
+      agreementEverSent: true,
+      adminComment: reservation.adminComment ?? draft.adminComment,
+      checkIn: reservation.checkIn,
+      checkOut: reservation.checkOut,
+      checkInTime: reservation.checkInTime,
+      checkOutTime: reservation.checkOutTime,
+      guestFirstName: resolveReservationGuestName(reservation.guestFirstName, reservation.phone),
+      lastReservation: reservation,
+      manualSaleOpen: Boolean(reservation.isManualSale),
+      manualSalePaymentMethod: reservation.paymentMethod ?? draft.manualSalePaymentMethod,
+      phone: formatPhoneDigits(reservation.phone) || reservation.phone,
+      prepaymentAlreadyPaid: Boolean(reservation.prepaymentReceivedAt),
+      roomDateOverrides: buildRoomDateOverridesFromReservation(reservation),
+      selectedBookingRoomIds: reservation.roomIds,
+      selectedRoomId: reservation.roomIds[0] || draft.selectedRoomId,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
   function restoreChatDraft(draft: ChatBookingDraft) {
-    const restoredDraft = sanitizeChatDraftReservationLink(reconcileDraftReservationDates(draft), activeChat);
+    let restoredDraft = sanitizeChatDraftReservationLink(reconcileDraftReservationDates(draft), activeChat);
+    const matchingReservation = findBestActiveReservationForPhone(
+      restoredDraft.phone || restoredDraft.lastReservation?.phone || activeChat?.phone || "",
+      restoredDraft.lastReservation?.id ?? ""
+    );
+    if (matchingReservation) {
+      restoredDraft = mergeReservationIntoChatDraft(restoredDraft, matchingReservation);
+    }
     const shouldResetPastBookingFields = isChatDraftPastStay(restoredDraft);
     const restoredCheckIn = shouldResetPastBookingFields ? getDefaultCheckInDate() : restoredDraft.checkIn;
     const restoredCheckOut = shouldResetPastBookingFields ? getDefaultCheckOutDate() : restoredDraft.checkOut;
@@ -2428,26 +2516,29 @@ export function BookingPanel() {
     if (lastReservation || !guestPhone.trim()) return;
     const currentPhone = normalizePhoneSearch(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
     if (!currentPhone) return;
-    const matchingReservation = reservations
-      .filter((reservation) =>
-        !reservation.isAddOnSale &&
-        isBookingPanelActiveReservation(reservation) &&
-        phonesMatchForContactLookup(currentPhone, reservation.phone) &&
-        dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
-      )
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+    const matchingReservation = findBestActiveReservationForPhone(currentPhone);
     if (!matchingReservation) return;
+    const matchingOverrides = buildRoomDateOverridesFromReservation(matchingReservation);
     setLastReservation(matchingReservation);
     setSelectedRoomId(matchingReservation.roomIds[0] || "");
     setSelectedBookingRoomIds(matchingReservation.roomIds);
+    setRoomDateOverrides(matchingOverrides);
+    setCheckIn(matchingReservation.checkIn);
+    setCheckOut(matchingReservation.checkOut);
+    setCheckInTime(matchingReservation.checkInTime);
+    setCheckOutTime(matchingReservation.checkOutTime);
     setAgreementSent(true);
     setAgreementEverSent(true);
     void saveCurrentChatDraft({
       agreementSent: true,
       agreementEverSent: true,
+      checkIn: matchingReservation.checkIn,
+      checkOut: matchingReservation.checkOut,
+      checkInTime: matchingReservation.checkInTime,
+      checkOutTime: matchingReservation.checkOutTime,
       lastReservation: matchingReservation
     });
-  }, [checkIn, checkOut, guestPhone, guestPhonePrefix, lastReservation, reservations]);
+  }, [guestPhone, guestPhonePrefix, lastReservation, reservations]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -2472,16 +2563,8 @@ export function BookingPanel() {
   }, [backendState]);
   const phoneMatchedActiveReservation = useMemo(() => {
     const currentPhone = normalizePhoneSearch(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
-    if (!currentPhone) return null;
-    return reservations
-      .filter((reservation) =>
-        !reservation.isAddOnSale &&
-        isBookingPanelActiveReservation(reservation) &&
-        phonesMatchForContactLookup(currentPhone, reservation.phone) &&
-        dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
-      )
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
-  }, [checkIn, checkOut, guestPhone, guestPhonePrefix, reservations]);
+    return currentPhone ? findBestActiveReservationForPhone(currentPhone) : null;
+  }, [guestPhone, guestPhonePrefix, reservations]);
   const hasActiveLastReservation = isBookingPanelActiveReservation(lastReservation);
   const hasBookingSelection = Boolean(selectedBookingRooms.length);
   const currentReservationDraft = hasBookingSelection ? buildReservationDraft(hasActiveLastReservation ? lastReservation?.status ?? "pending" : "pending") : null;
@@ -5637,17 +5720,24 @@ export function BookingPanel() {
             {catalogPanelRooms.length ? (
               <>
                 <div className="gpb-panel-object-list">
-                  {catalogPanelRooms.map((room) => (
+                  {catalogPanelRooms.map((room) => {
+                    const roomIsReserved = !isHourlyBookingObject(room) && isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations);
+                    return (
                     <button
                       className={[
                         room.id === selectedRoomId ? "is-active" : "",
                         selectedBookingRoomIds.includes(room.id) ? "is-selected" : "",
-                        saunaBusySlotsByRoomId[room.id]?.length ? "has-busy-slots" : ""
+                        saunaBusySlotsByRoomId[room.id]?.length ? "has-busy-slots" : "",
+                        roomIsReserved ? "is-reserved" : ""
                       ].filter(Boolean).join(" ")}
                       key={room.id}
                       type="button"
                       disabled={isBookingLocked}
                       onClick={() => {
+                        if (roomIsReserved) {
+                          setBookingDateWarning(`${formatBookingPickerObjectLabel(room)} занят в выбранный период.`);
+                          return;
+                        }
                         toggleBookingRoom(room.id);
                         setSendState("idle");
                       }}
@@ -5727,6 +5817,9 @@ export function BookingPanel() {
                           <span>{getRoomHoldsForRoom(room.id).length > 1 ? `${getRoomHoldsForRoom(room.id).length} соглас.` : "На соглас."}</span>
                           {formatHoldCountdown(getRoomHoldsForRoom(room.id)[0]?.expiresAt ?? "", holdNowMs)}
                         </span>
+                      ) : null}
+                      {roomIsReserved && !getRoomHoldsForRoom(room.id).length ? (
+                        <span className="gpb-room-hold-badge is-other">Занят</span>
                       ) : null}
                       <span className="gpb-panel-object-info">
                         <strong>{getPanelObjectCapacityTitle(room)}</strong>
@@ -5823,7 +5916,7 @@ export function BookingPanel() {
                         ) : null}
                       </span>
                     </button>
-                  ))}
+                  );})}
                 </div>
                 <div className="gpb-send-object-actions">
                   <button className="gpb-primary gpb-send-object-button" type="button" onClick={sendSelectedRoomToWhatsApp} disabled={isBookingConfirmed || !(selectedBookingRooms.length || selectedRoom) || sendState === "sending"}>

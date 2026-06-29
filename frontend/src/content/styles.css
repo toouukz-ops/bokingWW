@@ -661,6 +661,12 @@ body.gpb-booking-panel-open #app {
   box-shadow: inset 0 0 0 1px #d92d20;
 }
 
+.gpb-panel-object-list button.is-reserved:not(.is-selected) {
+  border-color: #d8b4a0;
+  background: #fff8f4;
+  color: #5b463b;
+}
+
 .gpb-availability-conflicts {
   display: grid;
   gap: 8px;

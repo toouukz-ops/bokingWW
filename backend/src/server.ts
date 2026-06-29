@@ -247,7 +247,9 @@ app.get("/api/reservations", async () => {
 
 app.put("/api/reservations", async (request) => {
   const body = request.body as { items?: Array<Record<string, unknown>> } | undefined;
-  return replaceReservations(Array.isArray(body?.items) ? body.items : []);
+  const items = await replaceReservations(Array.isArray(body?.items) ? body.items : []);
+  broadcastRealtime("reservations.changed", { action: "replace", items });
+  return items;
 });
 
 app.put("/api/reservations/:id", async (request, reply) => {
@@ -257,12 +259,15 @@ app.put("/api/reservations/:id", async (request, reply) => {
     return reply.status(400).send({ error: "Invalid reservation" });
   }
 
-  return saveReservationData(id, body);
+  const reservation = await saveReservationData(id, body);
+  broadcastRealtime("reservations.changed", { action: "upsert", reservation });
+  return reservation;
 });
 
 app.delete("/api/reservations/:id", async (request, reply) => {
   const { id } = request.params as { id: string };
   await deleteReservationData(id);
+  broadcastRealtime("reservations.changed", { action: "delete", id: decodeURIComponent(id) });
   return reply.status(204).send();
 });
 
@@ -300,7 +305,9 @@ app.get("/api/chat-drafts", async () => {
 app.put("/api/chat-drafts", async (request) => {
   const body = request.body as { drafts?: Record<string, unknown> } | undefined;
   const drafts = body?.drafts && typeof body.drafts === "object" && !Array.isArray(body.drafts) ? body.drafts : {};
-  return { drafts: await replaceChatDraftData(drafts) };
+  const savedDrafts = await replaceChatDraftData(drafts);
+  broadcastRealtime("chat-drafts.changed", { action: "replace", drafts: savedDrafts });
+  return { drafts: savedDrafts };
 });
 
 app.put("/api/chat-drafts/:chatId", async (request, reply) => {
@@ -310,12 +317,17 @@ app.put("/api/chat-drafts/:chatId", async (request, reply) => {
     return reply.status(400).send({ error: "Invalid chat draft" });
   }
 
-  return { draft: await saveChatDraftData(decodeURIComponent(chatId), body.draft) };
+  const decodedChatId = decodeURIComponent(chatId);
+  const draft = await saveChatDraftData(decodedChatId, body.draft);
+  broadcastRealtime("chat-drafts.changed", { action: "upsert", chatId: decodedChatId, draft });
+  return { draft };
 });
 
 app.delete("/api/chat-drafts/:chatId", async (request, reply) => {
   const { chatId } = request.params as { chatId: string };
-  await deleteChatDraftData(decodeURIComponent(chatId));
+  const decodedChatId = decodeURIComponent(chatId);
+  await deleteChatDraftData(decodedChatId);
+  broadcastRealtime("chat-drafts.changed", { action: "delete", chatId: decodedChatId });
   return reply.status(204).send();
 });
 

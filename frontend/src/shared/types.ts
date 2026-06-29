@@ -77,6 +77,12 @@ export interface ReservationItem {
   checkOut: string;
   checkInTime?: string;
   checkOutTime?: string;
+  priceSnapshot?: {
+    capturedAt: string;
+    dailyPrices: Array<{ date: string; price: number; priceType: "weekday" | "weekend" | "holiday" }>;
+    roomSubtotal: number;
+    extraInventoryTotal: number;
+  };
   subtotal: number;
   discountAmount?: number;
   total: number;

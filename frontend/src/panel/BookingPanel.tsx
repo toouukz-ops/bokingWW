@@ -4536,23 +4536,33 @@ export function BookingPanel() {
     const reservationPhone = formatPhoneDigits(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
     const reservationGuestName = resolveReservationGuestName(guestFirstName, reservationPhone);
     const isManualSale = isManualSaleMode;
+    const reservationCheckInTime = hasHourlyBookingObject ? checkInTime : defaultCheckInTime;
+    const reservationCheckOutTime = hasHourlyBookingObject ? addHoursToTimeInput(reservationCheckInTime, hourlyHours) : DEFAULT_CHECK_OUT_TIME;
+    const lockedFinancials = getLockedReservationFinancials(
+      lastReservation,
+      proposalRooms,
+      checkIn,
+      checkOut,
+      reservationCheckInTime,
+      reservationCheckOutTime,
+      roomDateOverrides
+    );
+    const reservationTotals = lockedFinancials ?? effectiveBookingTotals;
     const hasSavedPrepayment = Boolean(lastReservation?.prepaymentReceivedAt);
     const reservationPrepayment = isManualSale
-      ? effectiveBookingTotals.total
+      ? reservationTotals.total
       : hasSavedPrepayment
-        ? lastReservation?.prepayment ?? effectiveBookingTotals.prepayment
-        : effectiveBookingTotals.prepayment;
-    const reservationDiscountPercent = effectiveBookingTotals.discountPercent;
+        ? lastReservation?.prepayment ?? reservationTotals.prepayment
+        : reservationTotals.prepayment;
+    const reservationDiscountPercent = reservationTotals.discountPercent;
     const paymentReceivedAt = hasSavedPrepayment
       ? lastReservation?.prepaymentReceivedAt
       : prepaymentAlreadyPaid
         ? new Date().toISOString()
       : undefined;
-    const reservationCheckInTime = hasHourlyBookingObject ? checkInTime : defaultCheckInTime;
-    const reservationCheckOutTime = hasHourlyBookingObject ? addHoursToTimeInput(reservationCheckInTime, hourlyHours) : DEFAULT_CHECK_OUT_TIME;
     const reservationBalancePaidAt = isManualSale && prepaymentAlreadyPaid ? lastReservation?.balancePaidAt ?? paymentReceivedAt : undefined;
     const paidAmount = reservationBalancePaidAt
-      ? effectiveBookingTotals.total
+      ? reservationTotals.total
       : paymentReceivedAt
         ? reservationPrepayment
         : lastReservation?.paidAmount ?? 0;
@@ -4565,9 +4575,9 @@ export function BookingPanel() {
       roomDateOverrides,
       extraInventoryByRoomId,
       hourlyHours,
-      effectiveBookingTotals.subtotal,
-      effectiveBookingTotals.discountAmount,
-      effectiveBookingTotals.total,
+      reservationTotals.subtotal,
+      reservationTotals.discountAmount,
+      reservationTotals.total,
       extraInventoryChargeEnabled,
       inventoryAirBedPrice,
       inventoryRollawayPrice,
@@ -4608,15 +4618,15 @@ export function BookingPanel() {
       extraInventoryManual,
       hourlyHours,
       discountPercent: reservationDiscountPercent,
-      subtotal: effectiveBookingTotals.subtotal,
-      discountAmount: effectiveBookingTotals.discountAmount,
-      total: effectiveBookingTotals.total,
+      subtotal: reservationTotals.subtotal,
+      discountAmount: reservationTotals.discountAmount,
+      total: reservationTotals.total,
       prepayment: reservationPrepayment,
       paidAmount,
       paymentLink: getPaymentLinkForMethod(manualSalePaymentMethod, paymentMethods, paymentLink),
       paymentMethod: manualSalePaymentMethod || undefined,
       breakfastIncluded,
-      breakfastDiscountAmount: effectiveBookingTotals.breakfastDiscountAmount,
+      breakfastDiscountAmount: reservationTotals.breakfastDiscountAmount,
       isManualSale,
       status,
       prepaymentReceivedAt: paymentReceivedAt,
@@ -17319,6 +17329,42 @@ function getActiveRoomDateOverride(roomId: string, checkIn: string, checkOut: st
   return isRoomDateOverrideAlignedWithBooking(override, checkIn, checkOut) ? override : null;
 }
 
+function getLockedReservationFinancials(
+  reservation: Reservation | null | undefined,
+  rooms: Room[],
+  checkIn: string,
+  checkOut: string,
+  checkInTime: string,
+  checkOutTime: string,
+  roomDateOverrides: Record<string, { checkIn: string; checkOut: string }>
+) {
+  if (!reservation || !reservation.total || !rooms.length) return null;
+  const roomIds = rooms.map((room) => room.id).sort();
+  const reservationRoomIds = reservation.roomIds.slice().sort();
+  if (roomIds.length !== reservationRoomIds.length || roomIds.some((roomId, index) => roomId !== reservationRoomIds[index])) return null;
+  const items = getReservationItems(reservation);
+  const itemsByRoomId = new Map(items.map((item) => [item.roomId, item]));
+  const sameScope = rooms.every((room) => {
+    const item = itemsByRoomId.get(room.id);
+    const dateRange = getRoomDateRange(room.id, checkIn, checkOut, roomDateOverrides);
+    return item &&
+      item.checkIn === dateRange.checkIn &&
+      item.checkOut === dateRange.checkOut &&
+      (item.checkInTime || reservation.checkInTime) === checkInTime &&
+      (item.checkOutTime || reservation.checkOutTime) === checkOutTime;
+  });
+  if (!sameScope) return null;
+
+  return {
+    breakfastDiscountAmount: reservation.breakfastDiscountAmount ?? 0,
+    discountAmount: reservation.discountAmount ?? 0,
+    discountPercent: reservation.discountPercent ?? 0,
+    prepayment: reservation.prepayment ?? Math.round(reservation.total * 0.5),
+    subtotal: reservation.subtotal,
+    total: reservation.total
+  };
+}
+
 function buildReservationItemsFromRooms(
   rooms: Room[],
   checkIn: string,
@@ -17341,15 +17387,28 @@ function buildReservationItemsFromRooms(
   existingItems: ReservationItem[] = []
 ) {
   const existingByRoomId = new Map(existingItems.map((item) => [item.roomId, item]));
+  type DraftReservationItem = ReservationItem & { locked: boolean };
   const rawItems = rooms.map((room) => {
     const dateRange = getRoomDateRange(room.id, checkIn, checkOut, roomDateOverrides);
     const nights = getNightsCount(dateRange.checkIn, dateRange.checkOut);
     const roomInventory = extraInventoryByRoomId[room.id];
+    const roomSubtotal = calculateRoomStayPrice(room, dateRange.checkIn, dateRange.checkOut, hourlyHours);
     const extraInventoryTotal = extraInventoryChargeEnabled
       ? calculateExtraInventoryItemCharge(roomInventory, nights, inventoryAirBedPrice, inventoryRollawayPrice, getRoomExtraPlaceDailyPrice(room, dateRange.checkIn, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceChildPercent, adults, children))
       : 0;
-    const subtotal = calculateRoomStayPrice(room, dateRange.checkIn, dateRange.checkOut, hourlyHours) + extraInventoryTotal;
+    const subtotal = roomSubtotal + extraInventoryTotal;
     const existing = existingByRoomId.get(room.id);
+    const locked = existing && reservationItemMatchesBooking(existing, dateRange.checkIn, dateRange.checkOut, checkInTime, checkOutTime);
+    if (locked) {
+      return {
+        ...existing,
+        paidAmount: existing.paidAmount ?? 0,
+        balancePaidAt: existing.balancePaidAt,
+        checkedInAt: existing.checkedInAt,
+        checkedOutAt: existing.checkedOutAt,
+        locked: true
+      } satisfies DraftReservationItem;
+    }
     return {
       id: existing?.id ?? `item-${room.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       roomId: room.id,
@@ -17357,6 +17416,7 @@ function buildReservationItemsFromRooms(
       checkOut: dateRange.checkOut,
       checkInTime,
       checkOutTime,
+      priceSnapshot: buildReservationItemPriceSnapshot(room, dateRange.checkIn, dateRange.checkOut, hourlyHours, roomSubtotal, extraInventoryTotal),
       subtotal,
       discountAmount: 0,
       total: subtotal,
@@ -17364,20 +17424,27 @@ function buildReservationItemsFromRooms(
       paidAmount: existing?.paidAmount ?? 0,
       balancePaidAt: existing?.balancePaidAt,
       checkedInAt: existing?.checkedInAt,
-      checkedOutAt: existing?.checkedOutAt
-    } satisfies ReservationItem;
+      checkedOutAt: existing?.checkedOutAt,
+      locked: false
+    } satisfies DraftReservationItem;
   });
   const rawSubtotal = rawItems.reduce((sum, item) => sum + item.subtotal, 0) || reservationSubtotal || 0;
   let distributedTotal = 0;
   return rawItems.map((item, index) => {
+    if (item.locked) {
+      const { locked, ...reservationItem } = item;
+      distributedTotal += reservationItem.total;
+      return reservationItem;
+    }
     const isLast = index === rawItems.length - 1;
     const discountAmount = rawSubtotal > 0 ? Math.round(item.subtotal * reservationDiscountAmount / rawSubtotal) : 0;
     const total = isLast
       ? Math.max(0, reservationTotal - distributedTotal)
       : Math.max(0, item.subtotal - discountAmount);
     distributedTotal += total;
+    const { locked, ...reservationItem } = item;
     return {
-      ...item,
+      ...reservationItem,
       discountAmount,
       total,
       prepayment: Math.round(total * 0.5)
@@ -17390,6 +17457,9 @@ function getReservationItems(reservation: Reservation, rooms: Room[] = []) {
   return reservation.roomIds.map((roomId) => {
     const room = rooms.find((item) => item.id === roomId);
     const subtotal = room ? calculateRoomStayPrice(room, reservation.checkIn, reservation.checkOut, reservation.hourlyHours) : 0;
+    const priceSnapshot = room
+      ? buildReservationItemPriceSnapshot(room, reservation.checkIn, reservation.checkOut, reservation.hourlyHours, subtotal, 0)
+      : undefined;
     return {
       id: `legacy-${reservation.id}-${roomId}`,
       roomId,
@@ -17397,6 +17467,7 @@ function getReservationItems(reservation: Reservation, rooms: Room[] = []) {
       checkOut: reservation.checkOut,
       checkInTime: reservation.checkInTime,
       checkOutTime: reservation.checkOutTime,
+      priceSnapshot,
       subtotal,
       discountAmount: 0,
       total: subtotal,
@@ -17407,6 +17478,41 @@ function getReservationItems(reservation: Reservation, rooms: Room[] = []) {
       checkedOutAt: reservation.checkedOutAt
     } satisfies ReservationItem;
   });
+}
+
+function reservationItemMatchesBooking(item: ReservationItem, checkIn: string, checkOut: string, checkInTime: string, checkOutTime: string) {
+  return item.checkIn === checkIn &&
+    item.checkOut === checkOut &&
+    (item.checkInTime || "") === checkInTime &&
+    (item.checkOutTime || "") === checkOutTime &&
+    item.subtotal > 0 &&
+    item.total > 0;
+}
+
+function buildReservationItemPriceSnapshot(room: Room, checkIn: string, checkOut: string, hourlyHours: number, roomSubtotal: number, extraInventoryTotal: number): ReservationItem["priceSnapshot"] {
+  if (isHourlyBookingObject(room)) {
+    return {
+      capturedAt: new Date().toISOString(),
+      dailyPrices: [{ date: checkIn, price: getRoomPriceForDate(room, checkIn), priceType: getPriceTypeForDate(checkIn) }],
+      roomSubtotal,
+      extraInventoryTotal
+    };
+  }
+
+  const nights = getNightsCount(checkIn, checkOut);
+  return {
+    capturedAt: new Date().toISOString(),
+    dailyPrices: Array.from({ length: nights }, (_, day) => {
+      const date = formatDateInput(addDays(parseDateInput(checkIn), day));
+      return {
+        date,
+        price: getRoomPriceForDate(room, date),
+        priceType: getPriceTypeForDate(date)
+      };
+    }),
+    roomSubtotal,
+    extraInventoryTotal
+  };
 }
 
 function reservationItemsHaveDifferentPeriods(items: Array<Pick<ReservationItem, "checkIn" | "checkOut">>) {
@@ -20344,23 +20450,29 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
       ...dateLines,
       roomFoodLine,
       ...sleepingPlaces,
-      formatReservationRoomDailyPriceLine(room, item.checkIn, item.checkOut),
+      formatReservationRoomDailyPriceLine(room, item),
       roomExtraInventory
     ].filter(Boolean).join("\n");
   }).filter(Boolean).join("\n\n");
   const hasNightlyRooms = nightlyRooms.length > 0;
   const hasHourlyRooms = hourlyRooms.length > 0;
   const hasOnlyHourlyRooms = hasHourlyRooms && !hasNightlyRooms;
-  const hourlyRoomTotal = hourlyRooms.reduce((sum, room) => sum + calculateRoomStayPrice(room, reservation.checkIn, reservation.checkOut, hourlyHours), 0);
+  const hourlyRoomTotal = reservationItems.reduce((sum, item) => {
+    const room = rooms.find((candidate) => candidate.id === item.roomId);
+    return room && isHourlyBookingObject(room) ? sum + item.total : sum;
+  }, 0);
   const hourlyReservationLines = hourlyRooms
-    .map((room) => hasOnlyHourlyRooms
+    .map((room) => {
+      const item = reservationItems.find((candidate) => candidate.roomId === room.id);
+      const lockedTotal = item?.total ?? calculateRoomStayPrice(room, reservation.checkIn, reservation.checkOut, hourlyHours);
+      return hasOnlyHourlyRooms
       ? [
         `*${room.title}:*`,
         `* Время: ${reservation.checkInTime} - ${reservation.checkOutTime} (${hourlyHours} ч.)`,
-        `* Цена: ${formatPrice(calculateRoomStayPrice(room, reservation.checkIn, reservation.checkOut, hourlyHours))}`
+        `* Цена: ${formatPrice(lockedTotal)}`
       ].join("\n")
-      : `Сауна: ${formatKazakhDate(reservation.checkIn)} с ${reservation.checkInTime} по ${reservation.checkOutTime}, ${hourlyHours} ч.`
-    )
+      : `Сауна: ${formatKazakhDate(reservation.checkIn)} с ${reservation.checkInTime} по ${reservation.checkOutTime}, ${hourlyHours} ч.`;
+    })
     .join("\n\n");
   const extraInventoryTotalCount = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {});
   const extraInventorySummaryLine = formatReservationExtraInventorySummaryLine(reservation, bookedRooms);
@@ -20453,7 +20565,31 @@ function formatReservationRoomFood(room: Room) {
   return getSelectedFood(room.amenities).join(", ");
 }
 
-function formatReservationRoomDailyPriceLine(room: Room, checkIn: string, checkOut: string) {
+function formatReservationRoomDailyPriceLine(room: Room, item: ReservationItem) {
+  const snapshotPrices = item.priceSnapshot?.dailyPrices?.filter((entry) => typeof entry.price === "number" && entry.price > 0) ?? [];
+  if (snapshotPrices.length) {
+    const uniquePrices = Array.from(new Set(snapshotPrices.map((entry) => entry.price)));
+    if (uniquePrices.length <= 1) {
+      return `| Цена за сутки: ${formatPrice(uniquePrices[0])}`;
+    }
+
+    const labels: Record<"weekday" | "weekend" | "holiday", string> = {
+      holiday: "Праздник",
+      weekend: "Выходной",
+      weekday: "Будний"
+    };
+    const order: Array<"weekend" | "holiday" | "weekday"> = ["weekend", "holiday", "weekday"];
+    const compactGroups = order
+      .map((priceType) => {
+        const group = snapshotPrices.find((entry) => entry.priceType === priceType);
+        return group ? `${labels[priceType]} ${formatPrice(group.price)}` : "";
+      })
+      .filter(Boolean);
+
+    return `| Цена за сутки: ${compactGroups.join(" / ")}`;
+  }
+
+  const { checkIn, checkOut } = item;
   if (!checkIn || !checkOut) {
     return `| Цена за сутки: ${formatPrice(getRoomPriceForDate(room, checkIn))}`;
   }

@@ -20252,18 +20252,9 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
       : `Сауна: ${formatKazakhDate(reservation.checkIn)} с ${reservation.checkInTime} по ${reservation.checkOutTime}, ${hourlyHours} ч.`
     )
     .join("\n\n");
-  const extraInventoryCounts = getReservationExtraInventoryCounts(reservation);
-  const mappedExtraPlaces = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {}) - extraInventoryCounts.airBeds - extraInventoryCounts.rollaways;
-  const airBedUnitPrice = getReservationExtraInventoryPrice(reservation, "air-bed", bookedRooms);
-  const rollawayUnitPrice = getReservationExtraInventoryPrice(reservation, "rollaway", bookedRooms);
-  const extraPlaceTotal = calculateReservationExtraPlacesCharge(reservation, bookedRooms);
-  const extraInventoryNights = getNightsCount(reservation.checkIn, reservation.checkOut);
-  const extraInventoryLines = [
-    extraInventoryCounts.airBeds > 0 ? `* Надувной матрас: ${extraInventoryCounts.airBeds}${airBedUnitPrice ? ` (+${formatPrice(extraInventoryCounts.airBeds * airBedUnitPrice * extraInventoryNights)})` : ""}` : "",
-    extraInventoryCounts.rollaways > 0 ? `* Раскладушка: ${extraInventoryCounts.rollaways}${rollawayUnitPrice ? ` (+${formatPrice(extraInventoryCounts.rollaways * rollawayUnitPrice * extraInventoryNights)})` : ""}` : "",
-    mappedExtraPlaces > 0 ? `* Доп.место: ${mappedExtraPlaces}${extraPlaceTotal ? ` (+${formatPrice(extraPlaceTotal)})` : ""}` : ""
-  ].filter(Boolean);
-  const extraInventory = extraInventoryLines.length ? `\n\n*Допместа всего:*\n${extraInventoryLines.join("\n")}` : "";
+  const extraInventoryTotalCount = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {});
+  const extraInventorySummaryLine = formatReservationExtraInventorySummaryLine(reservation, bookedRooms);
+  const extraInventory = extraInventorySummaryLine ? `\n\n${extraInventorySummaryLine}` : "";
   const sleepingPlaceTotal = calculateReservationSleepingPlacesTotal(reservation, bookedRooms);
   const nightlyReservationItems = reservationItems.filter((item) => {
     const room = rooms.find((candidate) => candidate.id === item.roomId);
@@ -20292,7 +20283,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     `*| Сумма со скидкой: ${formatPrice(reservation.total)}*`,
     averagePerPersonLine
   ].filter(Boolean).join("\n");
-  const extraBed = reservation.extraBed && !extraInventoryLines.length ? "\nДоп. кровать: по согласованию включена" : "";
+  const extraBed = reservation.extraBed && !extraInventoryTotalCount ? "\nДоп. кровать: по согласованию включена" : "";
   const comment = formatReservationComment(reservation.comment);
   const balance = Math.max(0, reservation.total - reservation.prepayment);
   const fullPaymentMode = reservation.prepayment >= reservation.total;
@@ -21594,17 +21585,24 @@ function formatPdfRoomExtraInventoryLines(item?: ExtraInventoryItem) {
 }
 
 function formatPdfExtraInventorySummaryLines(reservation: Reservation, rooms: Room[]) {
+  const line = formatReservationExtraInventorySummaryLine(reservation, rooms);
+  return line ? [line] : [];
+}
+
+function formatReservationExtraInventorySummaryLine(reservation: Reservation, rooms: Room[]) {
   const counts = getReservationExtraInventoryCounts(reservation);
-  const mappedExtraPlaces = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {}) - counts.airBeds - counts.rollaways;
+  const totalCount = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {});
+  if (!totalCount) return "";
+
   const airBedUnitPrice = getReservationExtraInventoryPrice(reservation, "air-bed", rooms);
   const rollawayUnitPrice = getReservationExtraInventoryPrice(reservation, "rollaway", rooms);
-  const extraPlaceTotal = calculateReservationExtraPlacesCharge(reservation, rooms);
   const nights = getNightsCount(reservation.checkIn, reservation.checkOut);
-  return [
-    counts.airBeds ? `Надувной матрас: ${counts.airBeds}${airBedUnitPrice ? ` (+${formatPrice(counts.airBeds * airBedUnitPrice * nights)})` : ""}` : "",
-    counts.rollaways ? `Раскладушка: ${counts.rollaways}${rollawayUnitPrice ? ` (+${formatPrice(counts.rollaways * rollawayUnitPrice * nights)})` : ""}` : "",
-    mappedExtraPlaces > 0 ? `Доп.место: ${mappedExtraPlaces}${extraPlaceTotal ? ` (+${formatPrice(extraPlaceTotal)})` : ""}` : ""
-  ].filter(Boolean);
+  const totalCharge =
+    counts.airBeds * airBedUnitPrice * nights +
+    counts.rollaways * rollawayUnitPrice * nights +
+    calculateReservationExtraPlacesCharge(reservation, rooms);
+
+  return `Допместа всего${totalCharge ? `: (+${formatPrice(totalCharge)})` : ""}`;
 }
 
 async function drawPdfRoomCard(

@@ -2880,6 +2880,7 @@ export function BookingPanel() {
     const roomById = new Map(pricePdfCandidateRooms.map((room) => [room.id, room]));
     const selectedRooms = socialPriceRoomIds.map((roomId) => roomById.get(roomId)).filter((room): room is Room => Boolean(room));
     if (!selectedRooms.length) return;
+    await preloadMediaBlobs(getRoomMediaCachePaths(selectedRooms));
     const blob = await createSocialPriceImageBlob({
       checkIn,
       checkOut,
@@ -2900,6 +2901,7 @@ export function BookingPanel() {
 
     setSendState("sending");
     try {
+      await preloadMediaBlobs(getRoomMediaCachePaths(selectedRooms));
       for (const [index, room] of selectedRooms.entries()) {
         const blob = await createSocialPriceRoomImageBlob({
           checkIn,
@@ -2932,6 +2934,7 @@ export function BookingPanel() {
     suppressActiveChatSyncRef.current = true;
     setSendState("sending");
     try {
+      await preloadMediaBlobs(getPriceProposalMediaCachePaths(proposalRooms, includeGalleryInPricePdf ? selectedObjectGalleryPhotoPaths : []));
       const pdfFile = await createPriceProposalPdfFile({
         availabilitySummary: buildCatalogAvailabilitySummary(proposalRooms, reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways),
         checkIn,
@@ -3000,6 +3003,7 @@ export function BookingPanel() {
     suppressActiveChatSyncRef.current = true;
     setSendState("sending");
     try {
+      await preloadMediaBlobs(getPriceProposalMediaCachePaths(proposalRooms, []));
       const pdfFile = await createPriceProposalPdfFile({
         checkIn,
         checkOut,
@@ -3138,6 +3142,7 @@ export function BookingPanel() {
     suppressActiveChatSyncRef.current = true;
     setSendState("sending");
     try {
+      await preloadMediaBlobs(getIncludedCardMediaCachePaths(readyPages));
       const blobs = await Promise.all(readyPages.map((page) => createIncludedCardImageBlob(page)));
       const files = blobs.map((blob, index) => new File([blob], `included-${index + 1}.png`, { type: "image/png" }));
       const sent = files.length
@@ -3160,6 +3165,8 @@ export function BookingPanel() {
     suppressActiveChatSyncRef.current = true;
     setSendState("sending");
     try {
+      await preloadMediaBlobs(getRoomMediaCachePaths(catalogPanelRooms));
+      await waitForNextPaint();
       const blob = await createAvailableRoomsSnapshotBlob(bookingDatesSnapshotRef.current, catalogSnapshotRef.current);
       const file = new File([blob], `available-rooms-${checkIn || "today"}.jpg`, { type: "image/jpeg" });
       const sent = await sendImageFileToActiveWhatsAppChat(file, "");
@@ -9627,6 +9634,7 @@ function PricePdfOptionsModal({
 
   async function buildStoryExportItems() {
     if (!orderedRooms.length) return [];
+    await preloadMediaBlobs(getRoomMediaCachePaths(orderedRooms));
     if (storyExportMode === "list") {
       return [{
         blob: await createSocialPriceImageBlob({
@@ -9669,8 +9677,8 @@ function PricePdfOptionsModal({
 
   useEffect(() => {
     let isCancelled = false;
-    setPdfPreviewState("loading");
-    setStoryPreviewState("loading");
+    setPdfPreviewState(previewMode === "pdf" ? "loading" : "idle");
+    setStoryPreviewState(previewMode === "story" ? "loading" : "idle");
 
     async function renderPreviews() {
       if (!orderedRooms.length) {
@@ -9687,50 +9695,55 @@ function PricePdfOptionsModal({
         return;
       }
 
-      try {
-        const linkMethodsRecord = Object.fromEntries(linkMethods.map((method) => [method.id, method.value]));
-        const pdfFile = await createPriceProposalPdfFile({
-          availabilitySummary,
-          checkIn,
-          checkOut,
-          checkInTime: defaultCheckInTime,
-          checkOutTime: defaultCheckOutTime,
-          discountPercent,
-          giftText,
-          galleryPhotoDescriptions,
-          galleryPhotoPaths,
-          galleryVideoPaths,
-          groupPeriodTotals,
-          includeGallery,
-          linkIds,
-          linkMethods: linkMethodsRecord,
-          minRooms,
-          mode: "available",
-          rooms: orderedRooms,
-          summaryOptions: options
-        });
-        const nextPdfUrl = URL.createObjectURL(pdfFile);
-        if (isCancelled) {
-          URL.revokeObjectURL(nextPdfUrl);
-        } else {
-          setPdfPreviewUrl((previousUrl) => {
-            if (previousUrl) URL.revokeObjectURL(previousUrl);
-            return nextPdfUrl;
+      if (previewMode === "pdf") {
+        try {
+          await preloadMediaBlobs(getPriceProposalMediaCachePaths(orderedRooms, includeGallery ? galleryPhotoPaths : []));
+          const linkMethodsRecord = Object.fromEntries(linkMethods.map((method) => [method.id, method.value]));
+          const pdfFile = await createPriceProposalPdfFile({
+            availabilitySummary,
+            checkIn,
+            checkOut,
+            checkInTime: defaultCheckInTime,
+            checkOutTime: defaultCheckOutTime,
+            discountPercent,
+            giftText,
+            galleryPhotoDescriptions,
+            galleryPhotoPaths,
+            galleryVideoPaths,
+            groupPeriodTotals,
+            includeGallery,
+            linkIds,
+            linkMethods: linkMethodsRecord,
+            minRooms,
+            mode: "available",
+            rooms: orderedRooms,
+            summaryOptions: options
           });
-          setPdfPreviewState("idle");
+          const nextPdfUrl = URL.createObjectURL(pdfFile);
+          if (isCancelled) {
+            URL.revokeObjectURL(nextPdfUrl);
+          } else {
+            setPdfPreviewUrl((previousUrl) => {
+              if (previousUrl) URL.revokeObjectURL(previousUrl);
+              return nextPdfUrl;
+            });
+            setPdfPreviewState("idle");
+          }
+        } catch (error) {
+          console.error("[GPB] PDF preview failed", error);
+          void sendDebugLog("price-pdf-preview-failed", {
+            message: error instanceof Error ? error.message : String(error),
+            checkIn,
+            checkOut,
+            selectedRoomIds
+          });
+          if (!isCancelled) setPdfPreviewState("error");
         }
-      } catch (error) {
-        console.error("[GPB] PDF preview failed", error);
-        void sendDebugLog("price-pdf-preview-failed", {
-          message: error instanceof Error ? error.message : String(error),
-          checkIn,
-          checkOut,
-          selectedRoomIds
-        });
-        if (!isCancelled) setPdfPreviewState("error");
+        return;
       }
 
       try {
+        await preloadMediaBlobs(getRoomMediaCachePaths(orderedRooms));
         const nextStoryItems = await buildStoryExportItems();
         const nextStoryItemsWithUrls = nextStoryItems.map((item) => ({
           ...item,
@@ -9758,7 +9771,7 @@ function PricePdfOptionsModal({
     return () => {
       isCancelled = true;
     };
-  }, [previewKey]);
+  }, [previewKey, previewMode]);
 
   useEffect(() => {
     return () => {
@@ -20912,6 +20925,10 @@ async function createSocialPriceRoomImageBlob({
   periodDiscountTo?: string;
   room: Room;
 }) {
+  if (includePhoto) {
+    await preloadMediaBlobs([getMainPhotoPath(room)]);
+  }
+
   const canvas = document.createElement("canvas");
   canvas.width = 1080;
   canvas.height = 1920;
@@ -21521,6 +21538,8 @@ async function createPriceProposalPdfFile({
   rooms: Room[];
   summaryOptions?: PricePdfSummaryOptionKey[];
 }) {
+  await preloadMediaBlobs(getPriceProposalMediaCachePaths(rooms, includeGallery ? galleryPhotoPaths : []));
+
   const pageWidth = 780;
   const pageHeight = 1200;
   const margin = 36;
@@ -22426,6 +22445,22 @@ async function preloadMediaBlobs(paths: string[]) {
   const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
   if (!uniquePaths.length) return;
   await Promise.allSettled(uniquePaths.map((path) => fetchCachedMediaBlob(path)));
+}
+
+function getRoomMediaCachePaths(rooms: Array<Pick<Room, "photoPaths">>) {
+  return Array.from(new Set(rooms.flatMap((room) => room.photoPaths).filter(Boolean)));
+}
+
+function getPriceProposalMediaCachePaths(rooms: Array<Pick<Room, "photoPaths">>, galleryPhotoPaths: string[]) {
+  return Array.from(new Set(getRoomMediaCachePaths(rooms).concat(galleryPhotoPaths.filter(Boolean))));
+}
+
+function getIncludedCardMediaCachePaths(pages: IncludedCardPage[]) {
+  return Array.from(new Set(
+    pages
+      .flatMap((page) => [page.mainPhotoPath, ...page.thumbnailPaths.slice(0, getIncludedCardThumbnailLimit(page))])
+      .filter(Boolean)
+  ));
 }
 
 async function deleteCachedMediaBlobs(paths: string[]) {

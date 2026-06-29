@@ -850,11 +850,13 @@ export function BookingPanel() {
   } | null>(null);
   const shouldKeepAdminCommentListeningRef = useRef(false);
   const activeChatIdRef = useRef("");
+  const activeChatRef = useRef<ActiveChat | null>(null);
   const isRestoringChatDraftRef = useRef(false);
   const suppressActiveChatSyncRef = useRef(false);
   const recentContactExtractionAtRef = useRef(0);
   const saveChatDraftTimerRef = useRef<number | null>(null);
   const draftCacheRef = useRef<Record<string, ChatBookingDraft>>({});
+  const lastAppliedDraftUpdatedAtRef = useRef("");
   const draftCacheLoadPromiseRef = useRef<Promise<Record<string, ChatBookingDraft>> | null>(null);
   const draftRestoreVersionRef = useRef(0);
   const activeChatBeforeRestoreRef = useRef<ActiveChat | null>(null);
@@ -1265,9 +1267,18 @@ export function BookingPanel() {
       if (!payload || typeof payload !== "object") return;
       if (payload.action === "replace" && payload.drafts && typeof payload.drafts === "object" && !Array.isArray(payload.drafts)) {
         draftCacheRef.current = payload.drafts as Record<string, ChatBookingDraft>;
+        const activeChat = activeChatRef.current;
+        if (activeChat) {
+          const activeDraft = draftCacheRef.current[activeChat.id];
+          if (activeDraft) {
+            applyRealtimeChatDraft(activeChat.id, activeDraft);
+          }
+        }
       }
       if (payload.action === "upsert" && typeof payload.chatId === "string" && payload.draft && typeof payload.draft === "object") {
-        updateDraftCache(payload.chatId, payload.draft as ChatBookingDraft);
+        const draft = payload.draft as ChatBookingDraft;
+        updateDraftCache(payload.chatId, draft);
+        applyRealtimeChatDraft(payload.chatId, draft);
       }
       if (payload.action === "delete" && typeof payload.chatId === "string") {
         const nextCache = { ...draftCacheRef.current };
@@ -1412,6 +1423,7 @@ export function BookingPanel() {
 
   useEffect(() => {
     activeChatIdRef.current = activeChat?.id ?? "";
+    activeChatRef.current = activeChat;
   }, [activeChat?.id, activeChat?.phone, activeChat?.title]);
 
   useEffect(() => {
@@ -2058,7 +2070,30 @@ export function BookingPanel() {
 
   async function saveCachedChatBookingDraft(chatId: string, draft: ChatBookingDraft) {
     updateDraftCache(chatId, draft);
+    if (chatId === activeChatIdRef.current) {
+      lastAppliedDraftUpdatedAtRef.current = maxIsoDate(lastAppliedDraftUpdatedAtRef.current, draft.updatedAt);
+    }
     await saveChatBookingDraft(chatId, draft);
+  }
+
+  function applyRealtimeChatDraft(chatId: string, draft: ChatBookingDraft) {
+    if (!chatId || chatId !== activeChatIdRef.current) return;
+    if (!draft.updatedAt || draft.updatedAt <= lastAppliedDraftUpdatedAtRef.current) return;
+    if (isRestoringChatDraftRef.current || suppressActiveChatSyncRef.current) return;
+
+    lastAppliedDraftUpdatedAtRef.current = draft.updatedAt;
+    if (saveChatDraftTimerRef.current) {
+      window.clearTimeout(saveChatDraftTimerRef.current);
+      saveChatDraftTimerRef.current = null;
+    }
+    const restoreVersion = draftRestoreVersionRef.current + 1;
+    draftRestoreVersionRef.current = restoreVersion;
+    isRestoringChatDraftRef.current = true;
+    restoreChatDraft(draft);
+    window.setTimeout(() => {
+      if (draftRestoreVersionRef.current !== restoreVersion) return;
+      isRestoringChatDraftRef.current = false;
+    }, 0);
   }
 
   async function deleteCachedChatBookingDraft(chatId: string) {
@@ -2279,6 +2314,9 @@ export function BookingPanel() {
   }
 
   function restoreChatDraft(draft: ChatBookingDraft) {
+    if (draft.updatedAt) {
+      lastAppliedDraftUpdatedAtRef.current = maxIsoDate(lastAppliedDraftUpdatedAtRef.current, draft.updatedAt);
+    }
     let restoredDraft = sanitizeChatDraftReservationLink(reconcileDraftReservationDates(draft), activeChat);
     const matchingReservation = findBestActiveReservationForPhone(
       restoredDraft.phone || restoredDraft.lastReservation?.phone || activeChat?.phone || "",
@@ -20063,6 +20101,12 @@ function formatDateTimeText(value: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+function maxIsoDate(left: string, right: string) {
+  if (!left) return right || "";
+  if (!right) return left;
+  return right > left ? right : left;
 }
 
 function isDateRangeOverlapping(checkIn: string, checkOut: string, periodFrom: string, periodTo: string) {

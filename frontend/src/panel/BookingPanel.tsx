@@ -4105,7 +4105,9 @@ export function BookingPanel() {
   }
 
   async function extractGuestNameFromChat() {
+    const sourceChatId = activeChatIdRef.current;
     const profile = await extractActiveChatProfile(activeChat);
+    if (sourceChatId && activeChatIdRef.current !== sourceChatId) return;
     const name = getSafeGuestName(profile.name, profile.phone || guestPhone);
     if (!name) return;
     const chat = activeChat;
@@ -4121,9 +4123,11 @@ export function BookingPanel() {
 
   async function extractGuestPhoneFromChat() {
     const sourceChat = activeChat;
+    const sourceChatId = sourceChat?.id ?? "";
     suppressActiveChatSyncRef.current = true;
     try {
       const profile = await extractActiveChatPhoneFast(sourceChat);
+      if (sourceChatId && activeChatIdRef.current !== sourceChatId) return false;
       const phone = profile.phone;
       if (!phone) {
         setContactExtracted(false);
@@ -4135,8 +4139,10 @@ export function BookingPanel() {
       const phoneParts = splitPhoneForInput(phone);
       const normalizedPhone = buildPhoneWithPrefix(phoneParts.local, phoneParts.prefix) || formatPhoneDigits(phone);
       const contactName = fallbackName || guestFirstName;
+      const sourceChatPhone = formatPhoneDigits(sourceChat?.phone || "");
+      const sourceChatBelongsToExtractedPhone = Boolean(sourceChatPhone && phonesMatchForContactLookup(sourceChatPhone, normalizedPhone));
       const chat = createActiveChatFromProfile({
-        name: sourceChat?.title || contactName || normalizedPhone,
+        name: sourceChatBelongsToExtractedPhone ? sourceChat?.title || contactName || normalizedPhone : contactName || normalizedPhone,
         phone: normalizedPhone
       }) ?? sourceChat;
 
@@ -4158,7 +4164,13 @@ export function BookingPanel() {
           phone: normalizedPhone
         };
         await saveChatDraftForChat(chat, extractedDraftPatch);
-        if (sourceChat && sourceChat.id !== chat.id) {
+        const canSaveSourceChatAlias = Boolean(
+          sourceChat &&
+          sourceChat.id !== chat.id &&
+          sourceChatPhone &&
+          phonesMatchForContactLookup(sourceChatPhone, normalizedPhone)
+        );
+        if (canSaveSourceChatAlias) {
           await saveChatDraftForChat(sourceChat, extractedDraftPatch);
         }
       }

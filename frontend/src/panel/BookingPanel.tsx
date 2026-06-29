@@ -12760,6 +12760,13 @@ function RoomCatalogModal({
     );
   }
 
+  function updateActiveRoomPrice(patch: Partial<Pick<Room, "basePrice" | "weekdayPrice" | "weekendPrice" | "holidayPrice" | "extraBedPrice">>) {
+    updateActiveRoom(patch);
+    if (dynamicPricingEnabled) {
+      void onDynamicPricingChange({ dynamicPricingEnabled: false });
+    }
+  }
+
   function toggleAmenity(amenity: string) {
     if (!activeRoom) return;
     const amenities = parseAmenities(activeRoom.amenities);
@@ -12812,7 +12819,7 @@ function RoomCatalogModal({
 
   function pasteActiveRoomPrices() {
     if (!activeRoom || !copiedPriceSettings) return;
-    updateActiveRoom(copiedPriceSettings);
+    updateActiveRoomPrice(copiedPriceSettings);
   }
 
   function moveActiveRoom(direction: -1 | 1) {
@@ -13230,7 +13237,7 @@ function RoomCatalogModal({
                       onBlur={() => setFocusedPriceRoomId(null)}
                       onChange={(event) => {
                         const price = parsePriceInput(event.target.value);
-                        updateActiveRoom({ basePrice: price, weekdayPrice: price });
+                        updateActiveRoomPrice({ basePrice: price, weekdayPrice: price });
                       }}
                       onFocus={() => setFocusedPriceRoomId(`${activeRoom.id}:weekday`)}
                     />
@@ -13244,7 +13251,7 @@ function RoomCatalogModal({
                       type="text"
                       value={getPriceInputValue(activeRoom.weekendPrice, focusedPriceRoomId === `${activeRoom.id}:weekend`)}
                       onBlur={() => setFocusedPriceRoomId(null)}
-                      onChange={(event) => updateActiveRoom({ weekendPrice: parsePriceInput(event.target.value) })}
+                      onChange={(event) => updateActiveRoomPrice({ weekendPrice: parsePriceInput(event.target.value) })}
                       onFocus={() => setFocusedPriceRoomId(`${activeRoom.id}:weekend`)}
                     />
                     {getRoomPricePerPersonHint(activeRoom, activeRoom.weekendPrice)}
@@ -13257,7 +13264,7 @@ function RoomCatalogModal({
                       type="text"
                       value={getPriceInputValue(activeRoom.holidayPrice, focusedPriceRoomId === `${activeRoom.id}:holiday`)}
                       onBlur={() => setFocusedPriceRoomId(null)}
-                      onChange={(event) => updateActiveRoom({ holidayPrice: parsePriceInput(event.target.value) })}
+                      onChange={(event) => updateActiveRoomPrice({ holidayPrice: parsePriceInput(event.target.value) })}
                       onFocus={() => setFocusedPriceRoomId(`${activeRoom.id}:holiday`)}
                     />
                     {getRoomPricePerPersonHint(activeRoom, activeRoom.holidayPrice)}
@@ -13271,7 +13278,7 @@ function RoomCatalogModal({
                         type="text"
                         value={getPriceInputValue(activeRoom.extraBedPrice, focusedPriceRoomId === `${activeRoom.id}:extra`)}
                         onBlur={() => setFocusedPriceRoomId(null)}
-                        onChange={(event) => updateActiveRoom({ extraBedPrice: parsePriceInput(event.target.value) })}
+                        onChange={(event) => updateActiveRoomPrice({ extraBedPrice: parsePriceInput(event.target.value) })}
                         onFocus={() => setFocusedPriceRoomId(`${activeRoom.id}:extra`)}
                       />
                     </label>
@@ -13305,7 +13312,7 @@ function RoomCatalogModal({
                     />
                   </label>
                   <small>
-                    При включении карточки берут цену от расходов, свободных номеро-ночей и заполняемости. Цены в базе каталога не перезаписываются.
+                    При включении карточки берут цену от расходов, свободных номеро-ночей и заполняемости. Ручное изменение цены выключает авторасчет.
                   </small>
                 </div>
                 <div className="gpb-holiday-settings">

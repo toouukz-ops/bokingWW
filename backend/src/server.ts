@@ -9,6 +9,7 @@ import {
   deleteReservationData,
   deleteChatDraftData,
   deleteRoomHoldData,
+  getChatDraftById,
   getChatDraftData,
   getPaymentSettingsData,
   listActiveDialogs,
@@ -300,6 +301,11 @@ app.put("/api/expense-entries", async (request) => {
 
 app.get("/api/chat-drafts", async () => {
   return { drafts: await getChatDraftData() };
+});
+
+app.get("/api/chat-drafts/:chatId", async (request) => {
+  const { chatId } = request.params as { chatId: string };
+  return { draft: await getChatDraftById(decodeURIComponent(chatId)) };
 });
 
 app.put("/api/chat-drafts", async (request) => {

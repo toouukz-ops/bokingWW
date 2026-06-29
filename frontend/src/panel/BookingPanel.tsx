@@ -1486,10 +1486,6 @@ export function BookingPanel() {
   }, [guestPhonePrefix, guestPhone, guestFirstName, contactExtracted, contactSavedInWhatsApp, activeChat?.id, activeChat?.phone, activeChat?.title, bookingNewChatOpen]);
 
   useEffect(() => {
-    void ensureDraftCacheLoaded();
-  }, []);
-
-  useEffect(() => {
     if (suppressActiveChatSyncRef.current) return;
     if (!activeChat) {
       if (manualSaleOpen || bookingNewChatOpen) return;
@@ -2102,8 +2098,9 @@ export function BookingPanel() {
   }
 
   async function getStoredChatDraftForActiveChat(chat: ActiveChat) {
-    const drafts = await ensureDraftCacheLoaded();
-    const draft = drafts[chat.id] ?? await findFallbackChatDraftForActiveChat(chat, drafts);
+    const directDraft = getCachedChatBookingDraft(chat.id) ?? await getChatBookingDraft(chat.id);
+    if (directDraft) updateDraftCache(chat.id, directDraft);
+    const draft = directDraft ?? await findFallbackChatDraftForActiveChat(chat, draftCacheRef.current);
     debugContactFlow("chat-draft-strict-restore", {
       activeChatId: chat.id,
       activeChatTitle: chat.title,
@@ -2117,8 +2114,9 @@ export function BookingPanel() {
   }
 
   async function findFallbackChatDraftForActiveChat(chat: ActiveChat, cachedDrafts?: Record<string, ChatBookingDraft>) {
-    const drafts = cachedDrafts ?? await ensureDraftCacheLoaded();
+    const drafts = cachedDrafts ?? draftCacheRef.current;
     const chatPhone = normalizePhoneSearch(chat.phone || "");
+    if (!chatPhone) return null;
     const matches = Object.values(drafts).filter((draft) => {
       const draftPhone = normalizePhoneSearch(draft.phone || draft.lastReservation?.phone || "");
       if (chatPhone && draftPhone && phonesMatchForContactLookup(chatPhone, draftPhone)) return true;

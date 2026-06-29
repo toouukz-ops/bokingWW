@@ -64,6 +64,11 @@ export async function getChatDraftData() {
   return Object.fromEntries(documents.map((document) => [document.chatId, document.draft]));
 }
 
+export async function getChatDraftById(chatId: string) {
+  const document = await chatDrafts.findOne({ chatId });
+  return document?.draft ?? null;
+}
+
 export async function saveChatDraftData(chatId: string, draft: unknown) {
   await chatDrafts.updateOne(
     { chatId },

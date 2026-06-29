@@ -2021,11 +2021,26 @@ export function BookingPanel() {
       return;
     }
     const draft = reconcileDraftReservationDates({ ...buildChatDraft(), ...patch, updatedAt: new Date().toISOString() });
-    await saveCachedChatBookingDraft(chat.id, draft);
     const normalizedPhone = formatPhoneDigits(draft.phone);
     const chatPhone = formatPhoneDigits(chat.phone || "");
-    const phoneBelongsToChat = Boolean(normalizedPhone && chatPhone && phonesMatchForContactLookup(chatPhone, normalizedPhone));
-    const phoneChatId = phoneBelongsToChat ? createChatId(`phone:${normalizedPhone}`) : "";
+    const phoneBelongsToChat = !normalizedPhone || !chatPhone || phonesMatchForContactLookup(chatPhone, normalizedPhone);
+    const phoneChatId = normalizedPhone ? createChatId(`phone:${normalizedPhone}`) : "";
+
+    if (!phoneBelongsToChat) {
+      void sendDebugLog("chat-draft-save-blocked-phone-mismatch", {
+        chatId: chat.id,
+        chatPhone,
+        draftPhone: normalizedPhone,
+        draftGuest: draft.guestFirstName,
+        reservationId: draft.lastReservation?.id ?? ""
+      });
+      if (phoneChatId) {
+        await saveCachedChatBookingDraft(phoneChatId, draft);
+      }
+      return;
+    }
+
+    await saveCachedChatBookingDraft(chat.id, draft);
     if (phoneChatId && phoneChatId !== chat.id) {
       const existingPhoneDraft = getCachedChatBookingDraft(phoneChatId) ?? await getChatBookingDraft(phoneChatId);
       const mergedDraft = mergeChatDraftForPhoneAlias(existingPhoneDraft ?? undefined, draft);
@@ -2962,7 +2977,7 @@ export function BookingPanel() {
         setAgreementEverSent(true);
         await holdRoomsForAgreement(currentReservationDraft);
         await ensureGuestContactForReservation(currentReservationDraft);
-        await saveAgreementDraftForReservation(currentReservationDraft);
+        await saveAgreementDraftForReservation(currentReservationDraft, { includeActiveChat: true });
       }
       setSendState(sent ? "sent" : "error");
     } catch {
@@ -4269,14 +4284,25 @@ export function BookingPanel() {
     await saveContactToDatabase(contactName, normalizedPhone);
   }
 
-  async function saveAgreementDraftForReservation(reservation: Reservation) {
+  function shouldAttachReservationToActiveChat(reservation: Reservation) {
+    if (!activeChat) return false;
+    if (lastReservation?.id === reservation.id) return true;
+
+    const reservationPhone = normalizePhoneSearch(reservation.phone);
+    const activeChatPhone = normalizePhoneSearch(activeChat.phone || "");
+    return Boolean(reservationPhone && activeChatPhone && reservationPhone === activeChatPhone);
+  }
+
+  async function saveAgreementDraftForReservation(reservation: Reservation, options: { includeActiveChat?: boolean } = {}) {
     const reservationChat = createActiveChatFromProfile({
       name: resolveGuestNameForPhone(reservation.guestFirstName, reservation.phone) || reservation.phone,
       phone: reservation.phone
     });
-    const chats = [activeChat, reservationChat].filter((chat): chat is ActiveChat => Boolean(chat));
+    const shouldIncludeActiveChat = options.includeActiveChat ?? shouldAttachReservationToActiveChat(reservation);
+    const chats = [shouldIncludeActiveChat ? activeChat : null, reservationChat].filter((chat, index, list): chat is ActiveChat =>
+      Boolean(chat) && list.findIndex((item) => item?.id === chat?.id) === index
+    );
     if (!chats.length) return;
-    if (!activeChat && reservationChat) setActiveChat(reservationChat);
     const draftPatch: Partial<ChatBookingDraft> = {
       agreementSent: true,
       agreementEverSent: true,
@@ -4299,16 +4325,7 @@ export function BookingPanel() {
   }
 
   function shouldSyncActiveChatForReservation(reservation: Reservation) {
-    if (!activeChat) return false;
-    if (lastReservation?.id === reservation.id) return true;
-
-    const reservationPhone = normalizePhoneSearch(reservation.phone);
-    const activeChatPhone = normalizePhoneSearch(activeChat.phone || "");
-    if (reservationPhone && activeChatPhone && reservationPhone === activeChatPhone) return true;
-
-    const reservationName = createChatId(resolveReservationGuestName(reservation.guestFirstName, reservation.phone));
-    const activeChatName = createChatId(activeChat.name || "");
-    return Boolean(reservationName && activeChatName && reservationName === activeChatName);
+    return shouldAttachReservationToActiveChat(reservation);
   }
 
   async function syncReservationDraftForStatus(reservation: Reservation) {
@@ -4794,7 +4811,7 @@ export function BookingPanel() {
     setSelectedBookingRoomIds(confirmedReservation.roomIds);
     setAgreementSent(true);
     setAgreementEverSent(true);
-    await saveAgreementDraftForReservation(confirmedReservation);
+    await saveAgreementDraftForReservation(confirmedReservation, { includeActiveChat: true });
   }
 
   async function cancelReservation(reservation: Reservation, reason?: string) {
@@ -4858,7 +4875,9 @@ export function BookingPanel() {
     await saveReservation(normalizedReservation);
     await ensureGuestContactForReservation(normalizedReservation);
     setReservations((currentReservations) => currentReservations.filter((item) => item.id !== normalizedReservation.id).concat(normalizedReservation));
-    setLastReservation(normalizedReservation);
+    if (shouldAttachReservationToActiveChat(normalizedReservation)) {
+      setLastReservation(normalizedReservation);
+    }
     await syncReservationDraftForStatus(normalizedReservation);
   }
 

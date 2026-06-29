@@ -3795,6 +3795,7 @@ export function BookingPanel() {
       } catch {
         // The same media endpoint is reused for menu photos; keep deleting the record even if the file is already gone.
       }
+      await deleteCachedMediaBlobs([target.photoPath]);
     }
     await saveMenuItems(menuItems.filter((item) => item.id !== itemId));
   }
@@ -3805,8 +3806,13 @@ export function BookingPanel() {
 
     setMenuUploadItemId(itemId);
     try {
+      const previousPhotoPath = menuItems.find((item) => item.id === itemId)?.photoPath;
       const uploaded = await uploadObjectGalleryMedia(file);
       if (uploaded.mediaType !== "photo") return;
+      await preloadMediaBlobs([uploaded.path]);
+      if (previousPhotoPath && previousPhotoPath !== uploaded.path) {
+        await deleteCachedMediaBlobs([previousPhotoPath]);
+      }
       const nextItems = menuItems.map((item) => item.id === itemId ? { ...item, photoPath: uploaded.path } : item);
       await saveMenuItems(nextItems);
     } finally {
@@ -3832,12 +3838,7 @@ export function BookingPanel() {
   async function downloadMenuItemPhoto(item: MenuItem) {
     if (!item.photoPath) return;
 
-    const response = await fetch(getMediaUrl(item.photoPath));
-    if (!response.ok) {
-      throw new Error(`Menu photo fetch failed: ${response.status}`);
-    }
-
-    const blob = await response.blob();
+    const blob = await fetchCachedMediaBlob(item.photoPath);
     const baseName = createObjectCode(item.title || "menu-photo");
     downloadBlobFile(blob, getDownloadMediaFileName(item.photoPath, blob.type, baseName));
   }
@@ -3847,12 +3848,7 @@ export function BookingPanel() {
     if (!itemsWithPhotos.length) return;
 
     const files = await Promise.all(itemsWithPhotos.map(async (item, index) => {
-      const response = await fetch(getMediaUrl(item.photoPath));
-      if (!response.ok) {
-        throw new Error(`Menu photo fetch failed: ${response.status}`);
-      }
-
-      const blob = await response.blob();
+      const blob = await fetchCachedMediaBlob(item.photoPath);
       const baseName = `${String(index + 1).padStart(2, "0")}-${createObjectCode(item.title || "menu-photo")}`;
       return {
         blob,
@@ -12932,6 +12928,10 @@ function RoomCatalogModal({
     setMediaError("");
     try {
       const updatedRoom = await uploadRoomMedia(activeRoom, file);
+      const nextPaths = updatedRoom.photoPaths.concat(updatedRoom.videoPaths);
+      const previousPaths = activeRoom.photoPaths.concat(activeRoom.videoPaths);
+      const addedPaths = nextPaths.filter((path) => !previousPaths.includes(path));
+      await preloadMediaBlobs(addedPaths);
       setRooms((currentRooms) => currentRooms.map((room) => (room.id === updatedRoom.id ? updatedRoom : room)));
       setSaveState("saved");
     } catch {
@@ -12949,6 +12949,7 @@ function RoomCatalogModal({
     setMediaError("");
     try {
       const updatedRoom = await deleteRoomMedia(activeRoom, path);
+      await deleteCachedMediaBlobs([path]);
       setRooms((currentRooms) => currentRooms.map((room) => (room.id === updatedRoom.id ? updatedRoom : room)));
       setSaveState("saved");
     } catch {
@@ -12966,11 +12967,7 @@ function RoomCatalogModal({
     try {
       const roomCode = createObjectCode(`${activeRoom.number || activeRoom.title || activeRoom.id}`);
       const files = await Promise.all(paths.map(async (path, index) => {
-        const response = await fetch(getMediaUrl(path));
-        if (!response.ok) {
-          throw new Error(`Media fetch failed: ${response.status}`);
-        }
-        const blob = await response.blob();
+        const blob = await fetchCachedMediaBlob(path);
         return {
           blob,
           name: getDownloadMediaFileName(path, blob.type, `${roomCode}-${type === "photo" ? "photo" : "video"}-${index + 1}`)
@@ -12999,6 +12996,11 @@ function RoomCatalogModal({
     setSaveState("saving");
     try {
       const updatedRoom = await cropRoomMedia(activeRoom, options.path, options);
+      const nextPaths = updatedRoom.photoPaths.concat(updatedRoom.videoPaths);
+      const previousPaths = activeRoom.photoPaths.concat(activeRoom.videoPaths);
+      const addedPaths = nextPaths.filter((path) => !previousPaths.includes(path));
+      await preloadMediaBlobs(addedPaths);
+      await deleteCachedMediaBlobs([options.path]);
       setRooms((currentRooms) => currentRooms.map((room) => (room.id === updatedRoom.id ? updatedRoom : room)));
       setCropPath(null);
       setSaveState("saved");
@@ -22359,6 +22361,14 @@ async function preloadMediaBlobs(paths: string[]) {
   const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
   if (!uniquePaths.length) return;
   await Promise.allSettled(uniquePaths.map((path) => fetchCachedMediaBlob(path)));
+}
+
+async function deleteCachedMediaBlobs(paths: string[]) {
+  const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
+  if (!uniquePaths.length) return;
+  const cache = await openMediaCache();
+  if (!cache) return;
+  await Promise.allSettled(uniquePaths.map((path) => cache.delete(getMediaUrl(path))));
 }
 
 async function openMediaCache() {

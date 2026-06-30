@@ -5904,7 +5904,7 @@ export function BookingPanel() {
                 <div className="gpb-panel-object-list">
                   {catalogPanelRooms.map((room) => {
                     const roomIsReserved = !isHourlyBookingObject(room) && isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations);
-                    const roomReservationConflict = roomAvailabilityConflicts.find((conflict) => conflict.room.id === room.id && conflict.reservation)?.reservation;
+                    const roomReservationConflict = findRoomReservedReservation(room, checkIn, checkOut, reservations);
                     return (
                     <button
                       className={[
@@ -14858,6 +14858,24 @@ function isRoomReserved(room: Room, checkIn: string, checkOut: string, checkInTi
   }
 
   return reservations.some((reservation) =>
+    isReservationActiveOccupancy(reservation) &&
+    getReservationItems(reservation).some((item) =>
+      item.roomId === room.id &&
+      dateRangesOverlap(checkIn, checkOut, item.checkIn, item.checkOut)
+    )
+  );
+}
+
+function findRoomReservedReservation(room: Room, checkIn: string, checkOut: string, reservations: Reservation[]) {
+  if (isHourlyBookingObject(room)) {
+    return reservations.find((reservation) =>
+      isReservationActiveOccupancy(reservation) &&
+      reservation.roomIds.includes(room.id) &&
+      reservation.checkIn === checkIn
+    );
+  }
+
+  return reservations.find((reservation) =>
     isReservationActiveOccupancy(reservation) &&
     getReservationItems(reservation).some((item) =>
       item.roomId === room.id &&

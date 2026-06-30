@@ -10759,6 +10759,7 @@ function SettingsModal({
     { id: "users", label: "Пользователи", icon: Users },
     { id: "service", label: "Сервис", icon: Settings }
   ] as const;
+  const savedChatDialogsForDisplay = useMemo(() => mergeSavedChatDialogs(savedChatDialogs), [savedChatDialogs]);
 
   useEffect(() => {
     setLocalOperatorName(operatorName);
@@ -10874,7 +10875,7 @@ function SettingsModal({
   }
 
   async function copySavedChatDialogs() {
-    const text = buildSavedChatDialogsText(savedChatDialogs);
+    const text = buildSavedChatDialogsText(savedChatDialogsForDisplay);
     if (!text.trim()) return;
     const copied = await copyTextToClipboard(text);
     setSavedChatDialogActionState(copied ? "copied" : "error");
@@ -10882,7 +10883,7 @@ function SettingsModal({
   }
 
   function exportSavedChatDialogs() {
-    const text = buildSavedChatDialogsText(savedChatDialogs);
+    const text = buildSavedChatDialogsText(savedChatDialogsForDisplay);
     if (!text.trim()) return;
     downloadTextFile(`gpb-dialogs-${formatDateInput(new Date())}.txt`, text, "text/plain;charset=utf-8");
     setSavedChatDialogActionState("exported");
@@ -11001,11 +11002,11 @@ function SettingsModal({
                 <RefreshCw size={15} />
                 <span>{savedChatDialogStatus === "loading" ? "Обновляю" : "Обновить"}</span>
               </button>
-              <button className="gpb-settings-add-button" type="button" onClick={copySavedChatDialogs} disabled={!savedChatDialogs.length}>
+              <button className="gpb-settings-add-button" type="button" onClick={copySavedChatDialogs} disabled={!savedChatDialogsForDisplay.length}>
                 <Copy size={15} />
                 <span>Копировать все</span>
               </button>
-              <button className="gpb-primary" type="button" onClick={exportSavedChatDialogs} disabled={!savedChatDialogs.length}>
+              <button className="gpb-primary" type="button" onClick={exportSavedChatDialogs} disabled={!savedChatDialogsForDisplay.length}>
                 <Download size={15} />
                 <span>Экспорт TXT</span>
               </button>
@@ -11017,9 +11018,9 @@ function SettingsModal({
               <p className="gpb-settings-note">Загружаю диалоги из базы...</p>
             ) : savedChatDialogStatus === "error" ? (
               <p className="gpb-settings-note">Не удалось загрузить диалоги.</p>
-            ) : savedChatDialogs.length ? (
+            ) : savedChatDialogsForDisplay.length ? (
               <div className="gpb-dialogs-log-list">
-                {savedChatDialogs.map((dialog) => (
+                {savedChatDialogsForDisplay.map((dialog) => (
                   <article className="gpb-dialog-log-card" key={dialog.chatKey}>
                     <header>
                       <strong>{getSavedChatDialogTitle(dialog)}</strong>
@@ -15681,20 +15682,30 @@ function normalizeDialogExportPayload(payload: WhatsAppDialogExportPayload | und
 function collectVisibleWhatsAppDialog(activeChat: ActiveChat | null): WhatsAppDialogExportItem | null {
   const main = document.querySelector<HTMLElement>("#main");
   if (!main) return null;
-  const messageNodes = Array.from(main.querySelectorAll<HTMLElement>("[data-id], .message-in, .message-out, [role='row']"))
-    .filter((element) => isVisibleElement(element) && !element.closest("header, footer"));
+  const messageSelector = ".message-in, .message-out, [data-id^='true_'], [data-id^='false_']";
+  const messageNodes = Array.from(main.querySelectorAll<HTMLElement>(messageSelector))
+    .filter((element) => {
+      if (!isVisibleElement(element) || element.closest("header, footer")) return false;
+      const nestedMessage = element.querySelector<HTMLElement>(messageSelector);
+      return !nestedMessage;
+    });
+  const seenMessages = new Set<string>();
   const messages = messageNodes
     .map((element) => {
       const rawText = normalizeExtractedText(element.innerText || element.textContent || "");
       const timestamp = extractVisibleMessageTimestamp(rawText);
       const mediaText = getVisibleMessageMediaMarker(element);
-      const text = normalizeDialogMessageText(rawText) || mediaText;
-      if (!text || isLikelyWhatsAppSystemText(text)) return null;
+      const fromMe = isVisibleWhatsAppMessageFromMe(element, rawText);
+      const text = cleanVisibleDialogMessageText(normalizeDialogMessageText(rawText) || mediaText, fromMe);
+      if (!text || isLikelyWhatsAppSystemText(text) || isLikelyWhatsAppNonMessageText(text)) return null;
+      const messageKey = buildDialogMessageDedupeKey({ fromMe, text, timestamp });
+      if (seenMessages.has(messageKey)) return null;
+      seenMessages.add(messageKey);
       return {
         author: "",
-        fromMe: element.classList.contains("message-out") || /message-out/.test(element.className),
-        id: element.getAttribute("data-id") || `${timestamp}:${text.slice(0, 80)}`,
-        text: timestamp ? text.replace(timestamp, "").trim() : text,
+        fromMe,
+        id: messageKey,
+        text,
         timestamp,
         type: "visible"
       } satisfies WhatsAppDialogExportMessage;
@@ -15709,6 +15720,28 @@ function collectVisibleWhatsAppDialog(activeChat: ActiveChat | null): WhatsAppDi
     phone: activeChat?.phone || extractPhoneFromActiveChat(),
     title: activeChat?.title || getActiveChatDisplayName() || "Открытый чат"
   };
+}
+
+function isVisibleWhatsAppMessageFromMe(element: HTMLElement, rawText: string) {
+  return element.classList.contains("message-out") ||
+    /message-out/.test(String(element.className)) ||
+    /^Вы\b/i.test(rawText);
+}
+
+function cleanVisibleDialogMessageText(value: string, fromMe: boolean) {
+  let text = value.replace(/\b\d{1,2}:\d{2}\b\s*$/g, "").trim();
+  if (fromMe) {
+    text = text.replace(/^Вы\s+/i, "").trim();
+  }
+  return text;
+}
+
+function buildDialogMessageDedupeKey(message: Pick<WhatsAppDialogExportMessage, "fromMe" | "text" | "timestamp">) {
+  return [
+    message.timestamp,
+    message.fromMe ? "operator" : "client",
+    normalizeDialogMessageForDedupe(message.text)
+  ].join("|");
 }
 
 async function walkWhatsAppChatListForDialogExport(
@@ -15967,6 +16000,37 @@ function buildSavedChatDialogsText(dialogs: ChatMessageDialog[]) {
     .join("\n\n-----\n\n");
 }
 
+function mergeSavedChatDialogs(dialogs: ChatMessageDialog[]) {
+  const dialogMap = new Map<string, ChatMessageDialog>();
+  for (const dialog of dialogs) {
+    const key = getSavedChatDialogMergeKey(dialog);
+    const existing = dialogMap.get(key);
+    if (!existing) {
+      dialogMap.set(key, {
+        ...dialog,
+        messages: normalizeSavedChatMessages(dialog.messages)
+      });
+      continue;
+    }
+    dialogMap.set(key, {
+      ...existing,
+      chatKey: existing.chatKey || dialog.chatKey,
+      chatTitle: existing.chatTitle || dialog.chatTitle,
+      phone: existing.phone || dialog.phone,
+      messages: normalizeSavedChatMessages(existing.messages.concat(dialog.messages))
+    });
+  }
+  return Array.from(dialogMap.values()).sort((left, right) =>
+    getSavedChatDialogTitle(left).localeCompare(getSavedChatDialogTitle(right), "ru")
+  );
+}
+
+function getSavedChatDialogMergeKey(dialog: ChatMessageDialog) {
+  const phone = formatPhoneDigits(dialog.phone || "");
+  if (phone) return `phone:${phone}`;
+  return `title:${normalizeExtractedText(dialog.chatTitle || dialog.chatKey || "Гость").toLowerCase()}`;
+}
+
 function getSavedChatDialogTitle(dialog: ChatMessageDialog) {
   return dialog.chatTitle || dialog.phone || dialog.chatKey || "Гость";
 }
@@ -15984,14 +16048,44 @@ function buildSavedChatDialogBody(dialog: ChatMessageDialog) {
 function normalizeSavedChatMessages(messages: ChatMessageLogItem[]) {
   const seen = new Set<string>();
   return messages
-    .filter((message) => message?.text)
+    .map((message) => normalizeSavedChatMessage(message))
+    .filter((message): message is ChatMessageLogItem => Boolean(message?.text && !isLikelyWhatsAppSystemText(message.text) && !isLikelyWhatsAppNonMessageText(message.text)))
     .sort((left, right) => String(left.sortKey || left.timestamp || left.createdAt || "").localeCompare(String(right.sortKey || right.timestamp || right.createdAt || "")))
     .filter((message) => {
-      const key = message.messageKey || message.id || `${message.timestamp}:${message.fromMe ? "1" : "0"}:${message.text}`;
+      const key = buildSavedChatMessageDedupeKey(message);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
+}
+
+function normalizeSavedChatMessage(message: ChatMessageLogItem): ChatMessageLogItem | null {
+  if (!message?.text) return null;
+  const fromMe = message.fromMe || /^Вы\b/i.test(message.text);
+  const text = cleanVisibleDialogMessageText(message.text, fromMe);
+  if (!text) return null;
+  return {
+    ...message,
+    fromMe,
+    text
+  };
+}
+
+function buildSavedChatMessageDedupeKey(message: ChatMessageLogItem) {
+  return [
+    message.timestamp || message.createdAt || "",
+    message.fromMe ? "operator" : "client",
+    normalizeDialogMessageForDedupe(message.text)
+  ].join("|");
+}
+
+function normalizeDialogMessageForDedupe(value: string) {
+  return normalizeExtractedText(value)
+    .replace(/^Вы\s+/i, "")
+    .replace(/\b\d{1,2}:\d{2}\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function formatSavedChatMessageTime(value: string) {
@@ -16019,6 +16113,10 @@ function extractVisibleMessageTimestamp(value: string) {
 
 function isLikelyWhatsAppSystemText(value: string) {
   return /сообщения и звонки защищены|messages and calls are end-to-end encrypted|нажмите, чтобы узнать больше|click to learn more/i.test(value);
+}
+
+function isLikelyWhatsAppNonMessageText(value: string) {
+  return /инструменты безопасности|заблокировать|нет общих групп|нет в списке контактов|ваш контакт|использует автоматический таймер|исчезающих сообщений|реклама \(instagram\)|автоматическое приветствие/i.test(value);
 }
 
 function ensureWhatsAppStoreBridge() {

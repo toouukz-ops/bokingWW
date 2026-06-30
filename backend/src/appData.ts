@@ -13,8 +13,9 @@ export async function listReservations() {
 }
 
 export async function saveReservationData(id: string, reservation: Record<string, unknown>) {
-  const document = { ...reservation, id, updatedAt: new Date() };
-  await reservations.updateOne({ id }, { $set: document, $setOnInsert: { createdAt: reservation.createdAt ?? new Date().toISOString() } }, { upsert: true });
+  const { createdAt, ...reservationData } = reservation;
+  const document = { ...reservationData, id, updatedAt: new Date() };
+  await reservations.updateOne({ id }, { $set: document, $setOnInsert: { createdAt: createdAt ?? new Date().toISOString() } }, { upsert: true });
   return document;
 }
 

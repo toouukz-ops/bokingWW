@@ -82,12 +82,13 @@ import {
 import type { BackupExportOptions } from "../shared/api";
 import type { ActiveChat, ActiveDialog, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
-const MIN_WIDTH = 760;
-const MAX_WIDTH = 1160;
+const MIN_WIDTH = 560;
+const MAX_WIDTH = 960;
 const DEFAULT_CHECK_IN_TIME = "15:00";
 const DEFAULT_CHECK_OUT_TIME = "12:00";
 const PENDING_CONTACT_SAVE_KEY = "gpb-pending-contact-save";
 const MANUAL_SALE_MODE_KEY = "gpb-manual-sale-mode";
+const PANEL_WIDTH_STORAGE_KEY = "gpb-panel-width";
 const CUSTOM_HOLIDAY_DATES_STORAGE_KEY = "gpb-custom-holiday-dates";
 const CUSTOM_AMENITY_OPTIONS_STORAGE_KEY = "gpb-custom-amenity-options";
 const CUSTOM_FOOD_OPTIONS_STORAGE_KEY = "gpb-custom-food-options";
@@ -430,8 +431,17 @@ function getMaxPanelWidth() {
   return Math.min(MAX_WIDTH, Math.floor(window.innerWidth * 0.62));
 }
 
+function clampPanelWidth(value: number) {
+  return Math.min(getMaxPanelWidth(), Math.max(MIN_WIDTH, Math.round(value)));
+}
+
 function getDefaultPanelWidth() {
-  return Math.min(getMaxPanelWidth(), Math.max(MIN_WIDTH, Math.round(window.innerWidth * PANEL_WIDTH_RATIO) + 200));
+  return clampPanelWidth(window.innerWidth * PANEL_WIDTH_RATIO);
+}
+
+function getInitialPanelWidth() {
+  const storedWidth = Number(window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY));
+  return Number.isFinite(storedWidth) && storedWidth > 0 ? clampPanelWidth(storedWidth) : getDefaultPanelWidth();
 }
 
 function getDefaultCheckInDate() {
@@ -723,7 +733,7 @@ export function BookingPanel() {
   const [startupCleanDone, setStartupCleanDone] = useState(false);
   const [activeBookingPanel, setActiveBookingPanel] = useState<"dates" | "catalog" | "booking" | "links" | null>(null);
   const [activeWorkflowBlock, setActiveWorkflowBlock] = useState<"flow" | "catalog" | "booking" | "links" | null>(null);
-  const [width, setWidth] = useState(getDefaultPanelWidth);
+  const [width, setWidth] = useState(getInitialPanelWidth);
   const [backendState, setBackendState] = useState<"checking" | "online" | "offline">("checking");
   const [activeChat, setActiveChat] = useState<ActiveChat | null>(null);
   const [guestContacts, setGuestContacts] = useState<GuestContact[]>([]);
@@ -2699,7 +2709,9 @@ export function BookingPanel() {
 
     function onMove(moveEvent: PointerEvent) {
       const nextWidth = startWidth + startX - moveEvent.clientX;
-      setWidth(Math.min(getMaxPanelWidth(), Math.max(MIN_WIDTH, nextWidth)));
+      const clampedWidth = clampPanelWidth(nextWidth);
+      setWidth(clampedWidth);
+      window.localStorage.setItem(PANEL_WIDTH_STORAGE_KEY, String(clampedWidth));
     }
 
     function onUp() {

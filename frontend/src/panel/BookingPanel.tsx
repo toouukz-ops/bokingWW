@@ -165,6 +165,27 @@ type PricePdfRoomStatus = {
 };
 type PdfImageFit = "cover" | "contain";
 type PdfLoadedImage = { image: HTMLImageElement; objectUrl: string };
+type WhatsAppDialogExportMessage = {
+  author: string;
+  fromMe: boolean;
+  id: string;
+  text: string;
+  timestamp: string;
+  type: string;
+};
+type WhatsAppDialogExportItem = {
+  id: string;
+  isActive?: boolean;
+  messages: WhatsAppDialogExportMessage[];
+  phone: string;
+  title: string;
+};
+type WhatsAppDialogExportPayload = {
+  dialogs: WhatsAppDialogExportItem[];
+  exportedAt: string;
+  messageLimit: number;
+  source: string;
+};
 type IncludedCardTemplate = "hero-thumbs-description" | "photo-description";
 type IncludedCardPage = {
   description: string;
@@ -681,6 +702,7 @@ export function BookingPanel() {
   const [isReservationsOpen, setIsReservationsOpen] = useState(false);
   const [isGuestDatabaseOpen, setIsGuestDatabaseOpen] = useState(false);
   const [isExpensesOpen, setIsExpensesOpen] = useState(false);
+  const [dialogExportState, setDialogExportState] = useState<"idle" | "exporting" | "done" | "error">("idle");
   const [startupCleanDone, setStartupCleanDone] = useState(false);
   const [activeBookingPanel, setActiveBookingPanel] = useState<"dates" | "catalog" | "booking" | "links" | null>(null);
   const [activeWorkflowBlock, setActiveWorkflowBlock] = useState<"flow" | "catalog" | "booking" | "links" | null>(null);
@@ -5389,6 +5411,37 @@ export function BookingPanel() {
     setLastReservation(null);
   }
 
+  async function exportWhatsAppDialogsForAnalytics() {
+    setDialogExportState("exporting");
+    try {
+      const storePayload = await requestWhatsAppDialogExport({ chatLimit: 80, messageLimit: 350 });
+      const fallbackDialog = collectVisibleWhatsAppDialog(activeChat);
+      const payload = mergeDialogExportPayload(storePayload, fallbackDialog);
+      if (!payload.dialogs.length) {
+        setDialogExportState("error");
+        window.setTimeout(() => setDialogExportState("idle"), 2200);
+        return;
+      }
+
+      const exportedDate = formatDateInput(new Date());
+      const jsonBlob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const textBlob = new Blob([buildDialogExportText(payload)], { type: "text/plain;charset=utf-8" });
+      const zipBlob = await createZipBlob([
+        { name: "dialogs.json", blob: jsonBlob },
+        { name: "dialogs.txt", blob: textBlob }
+      ]);
+      downloadBlobFile(zipBlob, `whatsapp-dialogs-${exportedDate}.zip`);
+      setDialogExportState("done");
+      window.setTimeout(() => setDialogExportState("idle"), 2200);
+    } catch (error) {
+      void sendDebugLog("whatsapp-dialog-export-failed", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+      setDialogExportState("error");
+      window.setTimeout(() => setDialogExportState("idle"), 2200);
+    }
+  }
+
   async function clearGuestDatabaseFields() {
     await clearBookingStatistics();
     draftCacheRef.current = {};
@@ -5580,6 +5633,20 @@ export function BookingPanel() {
           </button>
           <button type="button" onClick={() => setIsAnalyticsOpen(true)} title="Статистика">
             <BarChart3 size={18} />
+          </button>
+          <button
+            type="button"
+            onClick={() => void exportWhatsAppDialogsForAnalytics()}
+            disabled={dialogExportState === "exporting"}
+            title={
+              dialogExportState === "done"
+                ? "Диалоги экспортированы"
+                : dialogExportState === "error"
+                  ? "Не удалось экспортировать диалоги"
+                  : "Экспорт диалогов для аналитики отказов"
+            }
+          >
+            <Download size={18} />
           </button>
           <button type="button" onClick={() => setIsReservationsOpen(true)} title="Брони">
             <CalendarDays size={18} />
@@ -15315,6 +15382,158 @@ async function extractPhoneFromWhatsAppStore() {
     window.addEventListener("gpb-active-chat-phone", onResult as EventListener);
     window.dispatchEvent(new CustomEvent("gpb-request-active-chat-phone", { detail: { requestId } }));
   });
+}
+
+async function requestWhatsAppDialogExport(options: { chatLimit: number; messageLimit: number }): Promise<WhatsAppDialogExportPayload> {
+  await ensureWhatsAppStoreBridge();
+
+  return new Promise<WhatsAppDialogExportPayload>((resolve, reject) => {
+    const requestId = `gpb-dialog-export-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    const timeoutId = window.setTimeout(() => {
+      window.removeEventListener("gpb-chat-dialog-export", onResult as EventListener);
+      resolve(createEmptyDialogExportPayload("timeout", options.messageLimit));
+    }, 3500);
+
+    function onResult(event: Event) {
+      const detail = (event as CustomEvent<{ requestId: string; ok: boolean; payload?: WhatsAppDialogExportPayload; error?: string }>).detail;
+      if (detail?.requestId !== requestId) return;
+
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("gpb-chat-dialog-export", onResult as EventListener);
+      if (!detail.ok) {
+        reject(new Error(detail.error || "Dialog export failed"));
+        return;
+      }
+      resolve(normalizeDialogExportPayload(detail.payload, options.messageLimit));
+    }
+
+    window.addEventListener("gpb-chat-dialog-export", onResult as EventListener);
+    window.dispatchEvent(new CustomEvent("gpb-request-chat-dialog-export", { detail: { requestId, ...options } }));
+  });
+}
+
+function createEmptyDialogExportPayload(source: string, messageLimit: number): WhatsAppDialogExportPayload {
+  return {
+    dialogs: [],
+    exportedAt: new Date().toISOString(),
+    messageLimit,
+    source
+  };
+}
+
+function normalizeDialogExportPayload(payload: WhatsAppDialogExportPayload | undefined, messageLimit: number): WhatsAppDialogExportPayload {
+  return {
+    dialogs: Array.isArray(payload?.dialogs)
+      ? payload.dialogs.map((dialog) => ({
+        id: String(dialog.id || ""),
+        isActive: Boolean(dialog.isActive),
+        phone: formatPhoneDigits(dialog.phone || ""),
+        title: normalizeExtractedText(dialog.title || ""),
+        messages: Array.isArray(dialog.messages)
+          ? dialog.messages.map((message) => ({
+            author: normalizeExtractedText(message.author || ""),
+            fromMe: Boolean(message.fromMe),
+            id: String(message.id || ""),
+            text: normalizeDialogMessageText(message.text || ""),
+            timestamp: String(message.timestamp || ""),
+            type: String(message.type || "")
+          })).filter((message) => message.text)
+          : []
+      })).filter((dialog) => dialog.messages.length)
+      : [],
+    exportedAt: payload?.exportedAt || new Date().toISOString(),
+    messageLimit,
+    source: payload?.source || "unknown"
+  };
+}
+
+function collectVisibleWhatsAppDialog(activeChat: ActiveChat | null): WhatsAppDialogExportItem | null {
+  const main = document.querySelector<HTMLElement>("#main");
+  if (!main) return null;
+  const messageNodes = Array.from(main.querySelectorAll<HTMLElement>("[data-id], .message-in, .message-out"))
+    .filter((element) => isVisibleElement(element) && !element.closest("header, footer"));
+  const messages = messageNodes
+    .map((element) => {
+      const rawText = normalizeExtractedText(element.innerText || element.textContent || "");
+      const timestamp = extractVisibleMessageTimestamp(rawText);
+      const text = normalizeDialogMessageText(rawText);
+      if (!text || isLikelyWhatsAppSystemText(text)) return null;
+      return {
+        author: "",
+        fromMe: element.classList.contains("message-out") || /message-out/.test(element.className),
+        id: element.getAttribute("data-id") || `${timestamp}:${text.slice(0, 80)}`,
+        text: timestamp ? text.replace(timestamp, "").trim() : text,
+        timestamp,
+        type: "visible"
+      } satisfies WhatsAppDialogExportMessage;
+    })
+    .filter((message): message is WhatsAppDialogExportMessage => Boolean(message));
+
+  if (!messages.length) return null;
+  return {
+    id: activeChat?.id || createChatId(`title:${getActiveChatDisplayName() || "active-chat"}`),
+    isActive: true,
+    messages,
+    phone: activeChat?.phone || extractPhoneFromActiveChat(),
+    title: activeChat?.title || getActiveChatDisplayName() || "Открытый чат"
+  };
+}
+
+function mergeDialogExportPayload(payload: WhatsAppDialogExportPayload, fallbackDialog: WhatsAppDialogExportItem | null): WhatsAppDialogExportPayload {
+  if (!fallbackDialog?.messages.length) return payload;
+  const normalizedFallback = {
+    ...fallbackDialog,
+    phone: formatPhoneDigits(fallbackDialog.phone || "")
+  };
+  const matchesFallback = (dialog: WhatsAppDialogExportItem) =>
+    Boolean(normalizedFallback.id && dialog.id === normalizedFallback.id) ||
+    Boolean(normalizedFallback.phone && dialog.phone === normalizedFallback.phone) ||
+    Boolean(normalizedFallback.title && dialog.title === normalizedFallback.title);
+
+  if (payload.dialogs.some(matchesFallback)) return payload;
+  return {
+    ...payload,
+    dialogs: [normalizedFallback, ...payload.dialogs],
+    source: payload.source === "timeout" ? "visible-chat" : `${payload.source}+visible-chat`
+  };
+}
+
+function buildDialogExportText(payload: WhatsAppDialogExportPayload) {
+  return [
+    `Экспорт: ${payload.exportedAt}`,
+    `Источник: ${payload.source}`,
+    `Диалогов: ${payload.dialogs.length}`,
+    "",
+    ...payload.dialogs.flatMap((dialog, index) => [
+      `#${index + 1} ${dialog.title || dialog.phone || dialog.id}`,
+      dialog.phone ? `Телефон: ${dialog.phone}` : "",
+      `Сообщений: ${dialog.messages.length}`,
+      "",
+      ...dialog.messages.map((message) => {
+        const side = message.fromMe ? "Оператор" : "Клиент";
+        const time = message.timestamp ? `[${message.timestamp}] ` : "";
+        return `${time}${side}: ${message.text}`;
+      }),
+      "",
+      "-----",
+      ""
+    ])
+  ].filter((line, index, lines) => line || lines[index - 1]).join("\n");
+}
+
+function normalizeDialogMessageText(value: string) {
+  return normalizeExtractedText(value)
+    .replace(/\b\d{1,2}:\d{2}\b\s*$/g, "")
+    .trim();
+}
+
+function extractVisibleMessageTimestamp(value: string) {
+  return value.match(/\b\d{1,2}:\d{2}\b/g)?.at(-1) || "";
+}
+
+function isLikelyWhatsAppSystemText(value: string) {
+  return /сообщения и звонки защищены|messages and calls are end-to-end encrypted|нажмите, чтобы узнать больше|click to learn more/i.test(value);
 }
 
 function ensureWhatsAppStoreBridge() {

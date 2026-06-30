@@ -161,6 +161,11 @@ export async function saveChatMessagesData(chatKey: string, payload: Record<stri
   return { saved: documents.length };
 }
 
+export async function deleteAllChatMessagesData() {
+  const result = await chatMessages.deleteMany({});
+  return { deleted: result.deletedCount ?? 0 };
+}
+
 export async function listRoomHolds() {
   await deleteExpiredRoomHolds();
   return roomHolds.find({ expiresAt: { $gt: new Date().toISOString() } }).sort({ expiresAt: 1 }).toArray();

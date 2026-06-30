@@ -1,4 +1,4 @@
-import type { ActiveDialog, BookingDraft, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, Room, RoomHold } from "./types";
+import type { ActiveDialog, BookingDraft, ChatBookingDraft, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, Room, RoomHold } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://bokingww.onrender.com";
 const LOCAL_ROOMS_STORAGE_KEY = "gpb-booking-rooms";
@@ -67,6 +67,25 @@ export async function releaseActiveDialog(chatKey: string, clientId: string): Pr
   });
   if (!response.ok && response.status !== 404) {
     throw new Error(`Active dialog release failed: ${response.status}`);
+  }
+}
+
+export async function saveChatMessages(chatKey: string, payload: {
+  chatTitle: string;
+  clientId: string;
+  messages: ChatMessageLogItem[];
+  operatorName: string;
+  phone: string;
+}): Promise<void> {
+  if (!chatKey || !payload.messages.length) return;
+  try {
+    await fetch(`${API_BASE_URL}/api/chat-messages/${encodeURIComponent(chatKey)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    return;
   }
 }
 

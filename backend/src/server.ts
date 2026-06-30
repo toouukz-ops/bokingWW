@@ -11,6 +11,7 @@ import {
   deleteRoomHoldData,
   getChatDraftById,
   getChatDraftData,
+  listChatMessages,
   getPaymentSettingsData,
   listActiveDialogs,
   listExpenseCategories,
@@ -23,6 +24,7 @@ import {
   replaceExpenseEntries,
   replaceReservations,
   saveChatDraftData,
+  saveChatMessagesData,
   savePaymentSettingsData,
   saveReservationData,
   saveRoomHoldData
@@ -335,6 +337,23 @@ app.delete("/api/chat-drafts/:chatId", async (request, reply) => {
   await deleteChatDraftData(decodedChatId);
   broadcastRealtime("chat-drafts.changed", { action: "delete", chatId: decodedChatId });
   return reply.status(204).send();
+});
+
+app.get("/api/chat-messages/:chatKey", async (request) => {
+  const { chatKey } = request.params as { chatKey: string };
+  const query = request.query as { limit?: string };
+  const limit = Number.parseInt(query.limit || "500", 10);
+  return { messages: await listChatMessages(decodeURIComponent(chatKey), Number.isFinite(limit) ? limit : 500) };
+});
+
+app.put("/api/chat-messages/:chatKey", async (request, reply) => {
+  const { chatKey } = request.params as { chatKey: string };
+  const body = request.body as Record<string, unknown> | undefined;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return reply.status(400).send({ error: "Invalid chat messages payload" });
+  }
+
+  return saveChatMessagesData(decodeURIComponent(chatKey), body);
 });
 
 app.get("/api/room-holds", async () => {

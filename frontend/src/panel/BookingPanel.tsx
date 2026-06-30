@@ -72,6 +72,7 @@ import {
   saveExpenseEntries,
   savePaymentSettings,
   saveChatBookingDraft,
+  saveChatMessages,
   saveReservation,
   saveRoom,
   saveRoomHold,
@@ -80,7 +81,7 @@ import {
   uploadRoomMedia
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
-import type { ActiveChat, ActiveDialog, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
+import type { ActiveChat, ActiveDialog, ChatBookingDraft, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -911,6 +912,7 @@ export function BookingPanel() {
   const draftRestoreVersionRef = useRef(0);
   const activeChatBeforeRestoreRef = useRef<ActiveChat | null>(null);
   const claimedActiveDialogKeyRef = useRef("");
+  const lastSavedChatMessagesSignatureRef = useRef<Record<string, string>>({});
   const saveAdminCommentTimerRef = useRef<number | null>(null);
   const quickPhraseSendingRef = useRef(false);
   const syncClientIdRef = useRef(getOrCreateSyncClientId());
@@ -1509,6 +1511,50 @@ export function BookingPanel() {
       isCancelled = true;
       window.clearInterval(intervalId);
       void releaseActiveDialog(activeChat.id, syncClientIdRef.current).catch(() => undefined);
+    };
+  }, [activeChat?.id, activeChat?.phone, activeChat?.title, currentOperatorName]);
+
+  useEffect(() => {
+    if (!activeChat) return;
+
+    let isCancelled = false;
+    const saveVisibleMessages = () => {
+      if (isCancelled) return;
+      const dialog = collectVisibleWhatsAppDialog(activeChat);
+      const messages = dialog?.messages
+        .filter((message) => message.text && !isDialogMediaMarker(message.text))
+        .slice(-120)
+        .map((message) => ({
+          author: message.author,
+          fromMe: message.fromMe,
+          id: message.id,
+          sortKey: message.timestamp || message.id,
+          text: message.text,
+          timestamp: message.timestamp,
+          type: message.type
+        } satisfies ChatMessageLogItem)) ?? [];
+      if (!messages.length) return;
+
+      const signature = messages.map((message) =>
+        [message.id, message.timestamp, message.fromMe ? "1" : "0", message.text].join("|")
+      ).join("\n");
+      if (lastSavedChatMessagesSignatureRef.current[activeChat.id] === signature) return;
+      lastSavedChatMessagesSignatureRef.current[activeChat.id] = signature;
+
+      void saveChatMessages(activeChat.id, {
+        chatTitle: activeChat.title,
+        clientId: syncClientIdRef.current,
+        messages,
+        operatorName: currentOperatorName,
+        phone: activeChat.phone ?? ""
+      });
+    };
+
+    window.setTimeout(saveVisibleMessages, 900);
+    const intervalId = window.setInterval(saveVisibleMessages, 5000);
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
     };
   }, [activeChat?.id, activeChat?.phone, activeChat?.title, currentOperatorName]);
 
@@ -15762,6 +15808,10 @@ function getVisibleMessageMediaMarker(element: HTMLElement) {
   if (/document|file|документ|файл/i.test(text)) return "[Медиа: файл]";
   if (element.querySelector("img, video, audio, canvas, [data-icon*='document'], [data-icon*='image'], [data-icon*='video'], [data-icon*='audio']")) return "[Медиа]";
   return "";
+}
+
+function isDialogMediaMarker(value: string) {
+  return /^\[Медиа(?::\s*(?:видео|фото|аудио|файл))?\]$/i.test(value.trim());
 }
 
 function mergeDialogExportPayload(payload: WhatsAppDialogExportPayload, fallbackDialog: WhatsAppDialogExportItem | null): WhatsAppDialogExportPayload {

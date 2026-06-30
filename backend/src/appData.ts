@@ -5,6 +5,7 @@ const settings = db.collection<{ id: string; value: unknown; updatedAt: Date }>(
 const expenseCategories = db.collection<Record<string, unknown> & { id: string }>("expenseCategories");
 const expenseEntries = db.collection<Record<string, unknown> & { id: string }>("expenseEntries");
 const chatDrafts = db.collection<{ chatId: string; draft: unknown; updatedAt: Date }>("chatDrafts");
+const chatMessages = db.collection<Record<string, unknown> & { chatKey: string; messageKey: string; updatedAt: Date }>("chatMessages");
 const roomHolds = db.collection<Record<string, unknown> & { id: string; expiresAt: string }>("roomHolds");
 const activeDialogs = db.collection<Record<string, unknown> & { chatKey: string; clientId: string; expiresAt: string }>("activeDialogs");
 
@@ -81,6 +82,61 @@ export async function saveChatDraftData(chatId: string, draft: unknown) {
 
 export async function deleteChatDraftData(chatId: string) {
   await chatDrafts.deleteOne({ chatId });
+}
+
+export async function listChatMessages(chatKey: string, limit = 500) {
+  return chatMessages
+    .find({ chatKey })
+    .sort({ sortKey: 1, createdAt: 1, updatedAt: 1 })
+    .limit(Math.max(1, Math.min(limit, 2000)))
+    .toArray();
+}
+
+export async function saveChatMessagesData(chatKey: string, payload: Record<string, unknown>) {
+  const now = new Date();
+  const messages = Array.isArray(payload.messages) ? payload.messages : [];
+  const chatTitle = typeof payload.chatTitle === "string" ? payload.chatTitle : "";
+  const phone = typeof payload.phone === "string" ? payload.phone : "";
+  const clientId = typeof payload.clientId === "string" ? payload.clientId : "";
+  const operatorName = typeof payload.operatorName === "string" ? payload.operatorName : "";
+  const documents = messages
+    .filter((message): message is Record<string, unknown> => Boolean(message && typeof message === "object" && !Array.isArray(message)))
+    .map((message) => {
+      const text = typeof message.text === "string" ? message.text.trim() : "";
+      const messageKey = typeof message.id === "string" && message.id.trim()
+        ? message.id.trim()
+        : `${typeof message.timestamp === "string" ? message.timestamp : ""}:${message.fromMe ? "1" : "0"}:${text.slice(0, 160)}`;
+      return {
+        chatKey,
+        chatTitle,
+        phone,
+        clientId,
+        operatorName,
+        messageKey,
+        author: typeof message.author === "string" ? message.author : "",
+        fromMe: Boolean(message.fromMe),
+        text,
+        timestamp: typeof message.timestamp === "string" ? message.timestamp : "",
+        type: typeof message.type === "string" ? message.type : "visible",
+        sortKey: typeof message.sortKey === "string" ? message.sortKey : "",
+        updatedAt: now
+      };
+    })
+    .filter((message) => message.text && message.messageKey);
+
+  if (!documents.length) return { saved: 0 };
+
+  await Promise.all(documents.map((document) =>
+    chatMessages.updateOne(
+      { chatKey, messageKey: document.messageKey },
+      {
+        $set: document,
+        $setOnInsert: { createdAt: now }
+      },
+      { upsert: true }
+    )
+  ));
+  return { saved: documents.length };
 }
 
 export async function listRoomHolds() {

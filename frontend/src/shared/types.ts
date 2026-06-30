@@ -129,6 +129,16 @@ export interface ActiveDialog {
   expiresAt: string;
 }
 
+export interface ChatMessageLogItem {
+  author: string;
+  fromMe: boolean;
+  id: string;
+  sortKey?: string;
+  text: string;
+  timestamp: string;
+  type: string;
+}
+
 export interface PaymentSettings {
   paymentLink: string;
   paymentMethods: Record<string, string>;

@@ -5849,6 +5849,7 @@ export function BookingPanel() {
                 <div className="gpb-panel-object-list">
                   {catalogPanelRooms.map((room) => {
                     const roomIsReserved = !isHourlyBookingObject(room) && isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations);
+                    const roomReservationConflict = roomAvailabilityConflicts.find((conflict) => conflict.room.id === room.id && conflict.reservation)?.reservation;
                     return (
                     <button
                       className={[
@@ -5869,7 +5870,15 @@ export function BookingPanel() {
                         setSendState("idle");
                       }}
                     >
-                      <RoomCatalogThumb room={room} />
+                      <span className="gpb-panel-object-media">
+                        <RoomCatalogThumb room={room} />
+                        {roomIsReserved && roomReservationConflict && !getRoomHoldsForRoom(room.id).length ? (
+                          <span className="gpb-room-reserved-date-badges" aria-label={`Заезд ${formatShortDayMonth(roomReservationConflict.checkIn)}, выезд ${formatShortDayMonth(roomReservationConflict.checkOut)}`}>
+                            <span>Заезд {formatShortDayMonth(roomReservationConflict.checkIn)}</span>
+                            <span>Выезд {formatShortDayMonth(roomReservationConflict.checkOut)}</span>
+                          </span>
+                        ) : null}
+                      </span>
                       {extraInventoryByRoomId[room.id] ? (
                         <span className="gpb-card-extra-badge" onClick={(event) => event.stopPropagation()}>
                           {extraInventoryByRoomId[room.id].airBeds ? (
@@ -5944,9 +5953,6 @@ export function BookingPanel() {
                           <span>{getRoomHoldsForRoom(room.id).length > 1 ? `${getRoomHoldsForRoom(room.id).length} соглас.` : "На соглас."}</span>
                           {formatHoldCountdown(getRoomHoldsForRoom(room.id)[0]?.expiresAt ?? "", holdNowMs)}
                         </span>
-                      ) : null}
-                      {roomIsReserved && !getRoomHoldsForRoom(room.id).length ? (
-                        <span className="gpb-room-hold-badge is-other">Занят</span>
                       ) : null}
                       <span className="gpb-panel-object-info">
                         <strong>{getPanelObjectCapacityTitle(room)}</strong>

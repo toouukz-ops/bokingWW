@@ -11,6 +11,7 @@ import {
   deleteRoomHoldData,
   getChatDraftById,
   getChatDraftData,
+  listChatMessageDialogs,
   listChatMessages,
   getPaymentSettingsData,
   listActiveDialogs,
@@ -337,6 +338,12 @@ app.delete("/api/chat-drafts/:chatId", async (request, reply) => {
   await deleteChatDraftData(decodedChatId);
   broadcastRealtime("chat-drafts.changed", { action: "delete", chatId: decodedChatId });
   return reply.status(204).send();
+});
+
+app.get("/api/chat-messages", async (request) => {
+  const query = request.query as { limit?: string };
+  const limit = Number.parseInt(query.limit || "20000", 10);
+  return { dialogs: await listChatMessageDialogs(Number.isFinite(limit) ? limit : 20_000) };
 });
 
 app.get("/api/chat-messages/:chatKey", async (request) => {

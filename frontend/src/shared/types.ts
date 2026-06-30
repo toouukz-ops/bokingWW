@@ -131,12 +131,26 @@ export interface ActiveDialog {
 
 export interface ChatMessageLogItem {
   author: string;
+  chatKey?: string;
+  chatTitle?: string;
+  createdAt?: string;
   fromMe: boolean;
   id: string;
+  messageKey?: string;
+  operatorName?: string;
+  phone?: string;
   sortKey?: string;
   text: string;
   timestamp: string;
   type: string;
+  updatedAt?: string;
+}
+
+export interface ChatMessageDialog {
+  chatKey: string;
+  chatTitle: string;
+  phone: string;
+  messages: ChatMessageLogItem[];
 }
 
 export interface PaymentSettings {

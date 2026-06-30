@@ -5973,6 +5973,96 @@ body.gpb-booking-panel-open #app {
   display: none;
 }
 
+.gpb-settings-content.is-dialogs {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.gpb-settings-content.is-dialogs .gpb-settings-column {
+  display: none;
+}
+
+.gpb-dialogs-settings-panel {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.gpb-dialogs-settings-panel > .gpb-editor-title,
+.gpb-dialogs-settings-panel > .gpb-settings-note:first-of-type {
+  max-width: none;
+}
+
+.gpb-dialogs-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0;
+}
+
+.gpb-dialogs-settings-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.gpb-dialogs-log-list {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.gpb-dialog-log-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #d8dee5;
+  border-radius: 8px;
+  background: #f8fafb;
+  padding: 10px;
+}
+
+.gpb-dialog-log-card header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.gpb-dialog-log-card header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #16202a;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gpb-dialog-log-card header span {
+  color: #5c6670;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.gpb-dialog-log-card pre {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid #e2e7ec;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #25313d;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin: 0;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .gpb-payment-method-list {
   display: grid;
   gap: 7px;

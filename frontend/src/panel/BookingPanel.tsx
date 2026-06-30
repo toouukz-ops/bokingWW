@@ -57,6 +57,7 @@ import {
   getExpenseEntries,
   getGuestContacts,
   getHealth,
+  getChatMessageDialogs,
   getMediaUrl,
   getPaymentSettings,
   getRealtimeEventsUrl,
@@ -81,7 +82,7 @@ import {
   uploadRoomMedia
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
-import type { ActiveChat, ActiveDialog, ChatBookingDraft, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
+import type { ActiveChat, ActiveDialog, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -5760,28 +5761,6 @@ export function BookingPanel() {
           <button type="button" onClick={() => setIsAnalyticsOpen(true)} title="Статистика">
             <BarChart3 size={18} />
           </button>
-          <button
-            className={dialogExportState === "exporting" ? "gpb-dialog-export-button is-exporting" : "gpb-dialog-export-button"}
-            type="button"
-            onClick={() => void exportWhatsAppDialogsForAnalytics()}
-            disabled={dialogExportState === "exporting"}
-            style={dialogExportState === "exporting" ? { "--gpb-dialog-export-progress": `${dialogExportProgress.percent}%` } as CSSProperties : undefined}
-            title={
-              dialogExportState === "exporting"
-                ? `${dialogExportProgress.stage}: ${dialogExportProgress.percent}% | диалогов ${dialogExportProgress.dialogs} | строк ${dialogExportProgress.rows}`
-                : dialogExportState === "done"
-                ? "Диалоги экспортированы"
-                : dialogExportState === "error"
-                  ? "Не удалось экспортировать диалоги"
-                  : "Экспорт диалогов для аналитики отказов"
-            }
-          >
-            {dialogExportState === "exporting" ? (
-              <span>{dialogExportProgress.percent}%</span>
-            ) : (
-              <Download size={18} />
-            )}
-          </button>
           <button type="button" onClick={() => setIsReservationsOpen(true)} title="Брони">
             <CalendarDays size={18} />
           </button>
@@ -10739,6 +10718,9 @@ function SettingsModal({
   const backupInputRef = useRef<HTMLInputElement | null>(null);
   const [backupMessage, setBackupMessage] = useState("");
   const [backupStatus, setBackupStatus] = useState<"idle" | "busy" | "error">("idle");
+  const [savedChatDialogs, setSavedChatDialogs] = useState<ChatMessageDialog[]>([]);
+  const [savedChatDialogStatus, setSavedChatDialogStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
+  const [savedChatDialogActionState, setSavedChatDialogActionState] = useState<"idle" | "copied" | "exported" | "error">("idle");
   const objectGalleryPhotoInputRef = useRef<HTMLInputElement | null>(null);
   const objectGalleryVideoInputRef = useRef<HTMLInputElement | null>(null);
   const [backupOptions, setBackupOptions] = useState<BackupExportOptions>({
@@ -10752,7 +10734,7 @@ function SettingsModal({
     rooms: true
   });
   const [activeSettingsSection, setActiveSettingsSection] = useState<
-    "payment" | "company" | "links" | "gallery" | "menu" | "package" | "inventory" | "weather" | "backup" | "service" | "users"
+    "payment" | "company" | "links" | "gallery" | "menu" | "dialogs" | "package" | "inventory" | "weather" | "backup" | "service" | "users"
   >("payment");
   const [customFieldRequest, setCustomFieldRequest] = useState<{
     existingValues: Record<string, string>;
@@ -10769,6 +10751,7 @@ function SettingsModal({
     { id: "links", label: "Ссылки", icon: Send },
     { id: "gallery", label: "Галерея", icon: Image },
     { id: "menu", label: "Меню", icon: Utensils },
+    { id: "dialogs", label: "Диалоги", icon: Copy },
     { id: "package", label: "Прайс / пакет", icon: Hotel },
     { id: "inventory", label: "Инвентарь", icon: BedDouble },
     { id: "weather", label: "Погода и время", icon: CloudSun },
@@ -10780,6 +10763,13 @@ function SettingsModal({
   useEffect(() => {
     setLocalOperatorName(operatorName);
   }, [operatorName]);
+
+  useEffect(() => {
+    if (activeSettingsSection !== "dialogs") return;
+    if (savedChatDialogStatus === "idle") {
+      void loadSavedChatDialogs();
+    }
+  }, [activeSettingsSection, savedChatDialogStatus]);
 
   async function saveOperatorName() {
     setOperatorSaveState("saving");
@@ -10870,6 +10860,33 @@ function SettingsModal({
       includeAmenities: localPackageIncludeAmenities,
       minRooms: toNumber(localPackageMinRooms, packageMinRooms)
     });
+  }
+
+  async function loadSavedChatDialogs() {
+    setSavedChatDialogStatus("loading");
+    try {
+      const dialogs = await getChatMessageDialogs();
+      setSavedChatDialogs(dialogs);
+      setSavedChatDialogStatus(dialogs.length ? "ready" : "empty");
+    } catch {
+      setSavedChatDialogStatus("error");
+    }
+  }
+
+  async function copySavedChatDialogs() {
+    const text = buildSavedChatDialogsText(savedChatDialogs);
+    if (!text.trim()) return;
+    const copied = await copyTextToClipboard(text);
+    setSavedChatDialogActionState(copied ? "copied" : "error");
+    window.setTimeout(() => setSavedChatDialogActionState("idle"), 1800);
+  }
+
+  function exportSavedChatDialogs() {
+    const text = buildSavedChatDialogsText(savedChatDialogs);
+    if (!text.trim()) return;
+    downloadTextFile(`gpb-dialogs-${formatDateInput(new Date())}.txt`, text, "text/plain;charset=utf-8");
+    setSavedChatDialogActionState("exported");
+    window.setTimeout(() => setSavedChatDialogActionState("idle"), 1800);
   }
 
   async function exportBackupFile() {
@@ -10972,7 +10989,50 @@ function SettingsModal({
               );
             })}
           </nav>
-          <div className="gpb-settings-content">
+          <div className={`gpb-settings-content ${activeSettingsSection === "dialogs" ? "is-dialogs" : ""}`}>
+          <section className={`gpb-settings-panel gpb-dialogs-settings-panel ${activeSettingsSection === "dialogs" ? "" : "is-hidden"}`}>
+            <div className="gpb-editor-title">
+              <Copy size={20} />
+              <h2>Диалоги</h2>
+            </div>
+            <p className="gpb-settings-note">Сообщения автоматически складываются сюда из открытых чатов. Медиа не сохраняются.</p>
+            <div className="gpb-dialogs-settings-actions">
+              <button className="gpb-settings-add-button" type="button" onClick={loadSavedChatDialogs} disabled={savedChatDialogStatus === "loading"}>
+                <RefreshCw size={15} />
+                <span>{savedChatDialogStatus === "loading" ? "Обновляю" : "Обновить"}</span>
+              </button>
+              <button className="gpb-settings-add-button" type="button" onClick={copySavedChatDialogs} disabled={!savedChatDialogs.length}>
+                <Copy size={15} />
+                <span>Копировать все</span>
+              </button>
+              <button className="gpb-primary" type="button" onClick={exportSavedChatDialogs} disabled={!savedChatDialogs.length}>
+                <Download size={15} />
+                <span>Экспорт TXT</span>
+              </button>
+              {savedChatDialogActionState === "copied" ? <span className="gpb-settings-save-status">Скопировано</span> : null}
+              {savedChatDialogActionState === "exported" ? <span className="gpb-settings-save-status">Файл создан</span> : null}
+              {savedChatDialogActionState === "error" ? <span className="gpb-settings-save-status is-error">Ошибка</span> : null}
+            </div>
+            {savedChatDialogStatus === "loading" ? (
+              <p className="gpb-settings-note">Загружаю диалоги из базы...</p>
+            ) : savedChatDialogStatus === "error" ? (
+              <p className="gpb-settings-note">Не удалось загрузить диалоги.</p>
+            ) : savedChatDialogs.length ? (
+              <div className="gpb-dialogs-log-list">
+                {savedChatDialogs.map((dialog) => (
+                  <article className="gpb-dialog-log-card" key={dialog.chatKey}>
+                    <header>
+                      <strong>{getSavedChatDialogTitle(dialog)}</strong>
+                      <span>{dialog.messages.length} сообщений</span>
+                    </header>
+                    <pre>{buildSavedChatDialogBody(dialog)}</pre>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="gpb-settings-note">Диалогов пока нет. Они появятся здесь после открытия чатов в WhatsApp.</p>
+            )}
+          </section>
           <div className="gpb-settings-column gpb-settings-links-column">
             <section className={`gpb-settings-panel ${activeSettingsSection === "payment" ? "" : "is-hidden"}`}>
               <div className="gpb-editor-title">
@@ -15895,6 +15955,56 @@ function buildDialogExportText(payload: WhatsAppDialogExportPayload) {
       ""
     ])
   ].filter((line, index, lines) => line || lines[index - 1]).join("\n");
+}
+
+function buildSavedChatDialogsText(dialogs: ChatMessageDialog[]) {
+  return dialogs
+    .map((dialog) => [
+      getSavedChatDialogTitle(dialog),
+      buildSavedChatDialogBody(dialog)
+    ].filter(Boolean).join("\n"))
+    .filter(Boolean)
+    .join("\n\n-----\n\n");
+}
+
+function getSavedChatDialogTitle(dialog: ChatMessageDialog) {
+  return dialog.chatTitle || dialog.phone || dialog.chatKey || "Гость";
+}
+
+function buildSavedChatDialogBody(dialog: ChatMessageDialog) {
+  return normalizeSavedChatMessages(dialog.messages)
+    .map((message) => {
+      const side = message.fromMe ? "Оператор" : "Клиент";
+      const time = formatSavedChatMessageTime(message.timestamp || message.createdAt || "");
+      return `${time ? `[${time}] ` : ""}${side}: ${message.text}`;
+    })
+    .join("\n");
+}
+
+function normalizeSavedChatMessages(messages: ChatMessageLogItem[]) {
+  const seen = new Set<string>();
+  return messages
+    .filter((message) => message?.text)
+    .sort((left, right) => String(left.sortKey || left.timestamp || left.createdAt || "").localeCompare(String(right.sortKey || right.timestamp || right.createdAt || "")))
+    .filter((message) => {
+      const key = message.messageKey || message.id || `${message.timestamp}:${message.fromMe ? "1" : "0"}:${message.text}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function formatSavedChatMessageTime(value: string) {
+  if (!value) return "";
+  if (/^\d{1,2}:\d{2}$/.test(value)) return value;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit"
+  }).format(date);
 }
 
 function normalizeDialogMessageText(value: string) {

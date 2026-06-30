@@ -92,6 +92,28 @@ export async function listChatMessages(chatKey: string, limit = 500) {
     .toArray();
 }
 
+export async function listChatMessageDialogs(limit = 200) {
+  const documents = await chatMessages
+    .find({})
+    .sort({ chatTitle: 1, chatKey: 1, sortKey: 1, createdAt: 1, updatedAt: 1 })
+    .limit(Math.max(1, Math.min(limit, 20_000)))
+    .toArray();
+  const dialogs = new Map<string, Record<string, unknown> & { messages: Array<Record<string, unknown>> }>();
+  for (const document of documents) {
+    const existing = dialogs.get(document.chatKey) ?? {
+      chatKey: document.chatKey,
+      chatTitle: typeof document.chatTitle === "string" ? document.chatTitle : "",
+      phone: typeof document.phone === "string" ? document.phone : "",
+      messages: []
+    };
+    existing.messages.push(document);
+    dialogs.set(document.chatKey, existing);
+  }
+  return Array.from(dialogs.values()).sort((left, right) =>
+    String(left.chatTitle || left.phone || left.chatKey).localeCompare(String(right.chatTitle || right.phone || right.chatKey), "ru")
+  );
+}
+
 export async function saveChatMessagesData(chatKey: string, payload: Record<string, unknown>) {
   const now = new Date();
   const messages = Array.isArray(payload.messages) ? payload.messages : [];

@@ -21112,7 +21112,11 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
   const guestName = resolveGuestNameForPhone(reservation.guestFirstName, reservation.phone) || "Гость";
   const guestLabel = "Гость";
   const hourlyHours = Math.max(2, reservation.hourlyHours ?? 2);
-  const foodSummary = getReservationFoodSummary(nightlyRooms, reservation.breakfastIncluded !== false);
+  const foodSummary = getReservationFoodSummary(
+    nightlyRooms,
+    reservation.breakfastIncluded !== false,
+    getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {})
+  );
   const roomLines = reservationItems.map((item) => {
     const room = rooms.find((candidate) => candidate.id === item.roomId);
     if (!room || isHourlyBookingObject(room)) return "";
@@ -21224,22 +21228,23 @@ ${petLine ? petLine.trim() : ""}
 ${[roomLines, hourlyReservationLines].filter(Boolean).join("\n\n")}${extraBed}${extraInventory}${comment}${summaryLines ? `\n\n${summaryLines}` : ""}${payment}${bookingCondition ? `\n\n${bookingCondition}` : ""}`;
 }
 
-function getReservationFoodSummary(rooms: Room[], breakfastIncluded: boolean) {
+function getReservationFoodSummary(rooms: Room[], breakfastIncluded: boolean, extraInventoryCount = 0) {
   if (!breakfastIncluded) {
     return { header: "без завтрака", mode: "header" as const };
   }
 
+  const extraFoodSuffix = extraInventoryCount > 0 ? ` + ${extraInventoryCount}` : "";
   const foodLabels = rooms
     .map(formatReservationRoomFood)
     .filter(Boolean);
   const uniqueFoodLabels = Array.from(new Set(foodLabels));
 
   if (!uniqueFoodLabels.length) {
-    return { header: "завтрак включен", mode: "header" as const };
+    return { header: `завтрак включен${extraFoodSuffix}`, mode: "header" as const };
   }
 
   if (uniqueFoodLabels.length === 1 && foodLabels.length === rooms.length) {
-    return { header: uniqueFoodLabels[0], mode: "header" as const };
+    return { header: `${uniqueFoodLabels[0]}${extraFoodSuffix}`, mode: "header" as const };
   }
 
   return { header: "", mode: "per-room" as const };

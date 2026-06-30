@@ -1781,41 +1781,8 @@ export function BookingPanel() {
   }
 
   async function processNoShowReservations(sourceReservations: Reservation[]) {
-    const today = formatDateInput(new Date());
-    const processedReservations = sourceReservations.map((reservation) => {
-      if (reservation.isAddOnSale) {
-        if (reservation.status === "cancelled" && reservation.noShowAt) {
-          return {
-            ...reservation,
-            status: "booked" as const,
-            noShowAt: undefined
-          };
-        }
-        return reservation;
-      }
-
-      if (
-        reservation.status === "booked" &&
-        !reservation.checkedInAt &&
-        !reservation.noShowAt &&
-        reservation.checkIn < today
-      ) {
-        return {
-          ...reservation,
-          status: "cancelled" as const,
-          noShowAt: new Date().toISOString()
-        };
-      }
-
-      return reservation;
-    });
-
-    const hasChanges = processedReservations.some((reservation, index) => reservation !== sourceReservations[index]);
-    if (hasChanges) {
-      await Promise.all(processedReservations.map((reservation) => saveReservation(reservation)));
-    }
-
-    return processedReservations;
+    // No-show is a manual business decision. Auto-cancelling past check-ins can hide paid active bookings.
+    return sourceReservations;
   }
 
   async function processAutoCheckedOutReservations(sourceReservations: Reservation[]) {
@@ -4960,7 +4927,8 @@ export function BookingPanel() {
 
   async function updateReservation(reservation: Reservation) {
     const normalizedReservation = normalizeReservationPhoneIdentity(reservation);
-    const existingReservation = reservations.find((item) => item.id === normalizedReservation.id);
+    const existingReservation = reservations.find((item) => item.id === normalizedReservation.id)
+      ?? (lastReservation?.id === normalizedReservation.id ? lastReservation : undefined);
     const dateChanged = existingReservation ? !reservationDateFieldsEqual(existingReservation, normalizedReservation) : true;
     if ((normalizedReservation.status === "pending" || normalizedReservation.status === "booked") && !normalizedReservation.isAddOnSale && dateChanged && isReservationDateInPast(normalizedReservation)) {
       setBookingDateWarning(buildPastReservationWarning(normalizedReservation));

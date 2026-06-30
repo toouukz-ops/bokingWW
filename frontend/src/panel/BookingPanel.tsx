@@ -23551,7 +23551,8 @@ function getSelectedFood(value: string) {
 }
 
 function getSelectedAmenities(value: string) {
-  return parseAmenities(value).filter((item) => !FOOD_OPTIONS.includes(item));
+  const foodOptions = getFoodOptions();
+  return parseAmenities(value).filter((item) => !foodOptions.includes(item));
 }
 
 function getVisibleAmenities(room: Pick<Room, "amenities" | "objectType">) {

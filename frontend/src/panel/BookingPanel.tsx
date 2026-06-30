@@ -15682,13 +15682,7 @@ function normalizeDialogExportPayload(payload: WhatsAppDialogExportPayload | und
 function collectVisibleWhatsAppDialog(activeChat: ActiveChat | null): WhatsAppDialogExportItem | null {
   const main = document.querySelector<HTMLElement>("#main");
   if (!main) return null;
-  const messageSelector = ".message-in, .message-out, [data-id^='true_'], [data-id^='false_']";
-  const messageNodes = Array.from(main.querySelectorAll<HTMLElement>(messageSelector))
-    .filter((element) => {
-      if (!isVisibleElement(element) || element.closest("header, footer")) return false;
-      const nestedMessage = element.querySelector<HTMLElement>(messageSelector);
-      return !nestedMessage;
-    });
+  const messageNodes = getVisibleWhatsAppMessageNodes(main);
   const seenMessages = new Set<string>();
   const messages = messageNodes
     .map((element) => {
@@ -15720,6 +15714,23 @@ function collectVisibleWhatsAppDialog(activeChat: ActiveChat | null): WhatsAppDi
     phone: activeChat?.phone || extractPhoneFromActiveChat(),
     title: activeChat?.title || getActiveChatDisplayName() || "Открытый чат"
   };
+}
+
+function getVisibleWhatsAppMessageNodes(main: HTMLElement) {
+  const candidates = Array.from(main.querySelectorAll<HTMLElement>(".message-in, .message-out, [data-id]"));
+  const roots: HTMLElement[] = [];
+  const seen = new Set<HTMLElement>();
+  for (const element of candidates) {
+    if (!isVisibleElement(element) || element.closest("header, footer")) continue;
+    const root = element.closest<HTMLElement>(".message-in, .message-out") ?? element;
+    if (!main.contains(root) || seen.has(root) || !isVisibleElement(root)) continue;
+    const text = normalizeExtractedText(root.innerText || root.textContent || "");
+    const hasMessageIdentity = Boolean(root.getAttribute("data-id") || root.querySelector("[data-id]") || /message-(in|out)/.test(String(root.className)));
+    if (!hasMessageIdentity || !text && !getVisibleMessageMediaMarker(root)) continue;
+    seen.add(root);
+    roots.push(root);
+  }
+  return roots;
 }
 
 function isVisibleWhatsAppMessageFromMe(element: HTMLElement, rawText: string) {

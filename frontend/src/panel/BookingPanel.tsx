@@ -183,6 +183,7 @@ type WhatsAppDialogExportItem = {
 type WhatsAppDialogExportPayload = {
   dialogs: WhatsAppDialogExportItem[];
   exportedAt: string;
+  chatLimit?: number;
   messageLimit: number;
   source: string;
 };
@@ -5414,9 +5415,10 @@ export function BookingPanel() {
   async function exportWhatsAppDialogsForAnalytics() {
     setDialogExportState("exporting");
     try {
-      const storePayload = await requestWhatsAppDialogExport({ chatLimit: 80, messageLimit: 350 });
+      const storePayload = await requestWhatsAppDialogExport({ chatLimit: 500, messageLimit: 500 });
+      const walkedPayload = await walkWhatsAppChatListForDialogExport({ chatLimit: 500, messageLimit: 500 });
       const fallbackDialog = collectVisibleWhatsAppDialog(activeChat);
-      const payload = mergeDialogExportPayload(storePayload, fallbackDialog);
+      const payload = mergeDialogExportPayload(mergeDialogExportPayloads(storePayload, walkedPayload), fallbackDialog);
       if (!payload.dialogs.length) {
         setDialogExportState("error");
         window.setTimeout(() => setDialogExportState("idle"), 2200);
@@ -15451,13 +15453,14 @@ function normalizeDialogExportPayload(payload: WhatsAppDialogExportPayload | und
 function collectVisibleWhatsAppDialog(activeChat: ActiveChat | null): WhatsAppDialogExportItem | null {
   const main = document.querySelector<HTMLElement>("#main");
   if (!main) return null;
-  const messageNodes = Array.from(main.querySelectorAll<HTMLElement>("[data-id], .message-in, .message-out"))
+  const messageNodes = Array.from(main.querySelectorAll<HTMLElement>("[data-id], .message-in, .message-out, [role='row']"))
     .filter((element) => isVisibleElement(element) && !element.closest("header, footer"));
   const messages = messageNodes
     .map((element) => {
       const rawText = normalizeExtractedText(element.innerText || element.textContent || "");
       const timestamp = extractVisibleMessageTimestamp(rawText);
-      const text = normalizeDialogMessageText(rawText);
+      const mediaText = getVisibleMessageMediaMarker(element);
+      const text = normalizeDialogMessageText(rawText) || mediaText;
       if (!text || isLikelyWhatsAppSystemText(text)) return null;
       return {
         author: "",
@@ -15480,6 +15483,142 @@ function collectVisibleWhatsAppDialog(activeChat: ActiveChat | null): WhatsAppDi
   };
 }
 
+async function walkWhatsAppChatListForDialogExport(options: { chatLimit: number; messageLimit: number }): Promise<WhatsAppDialogExportPayload> {
+  const sidebar = document.querySelector<HTMLElement>("#side");
+  if (!sidebar) return createEmptyDialogExportPayload("chat-list-walk-unavailable", options.messageLimit);
+  const scroller = findWhatsAppChatListScroller(sidebar);
+  const initialScrollTop = scroller?.scrollTop ?? 0;
+  const dialogs: WhatsAppDialogExportItem[] = [];
+  const seenRows = new Set<string>();
+  const seenDialogs = new Set<string>();
+  let idleScrolls = 0;
+
+  try {
+    for (let iteration = 0; iteration < 160 && dialogs.length < options.chatLimit; iteration += 1) {
+      const rows = getDialogExportChatRows(sidebar);
+      let addedInView = 0;
+
+      for (const row of rows) {
+        if (dialogs.length >= options.chatLimit) break;
+        const rowKey = getDialogExportChatRowKey(row);
+        if (!rowKey || seenRows.has(rowKey)) continue;
+        seenRows.add(rowKey);
+
+        const clickable = row.closest<HTMLElement>("[role='listitem'], [role='button'], [tabindex], a") ?? row;
+        clickable.click();
+        await waitForDelay(650);
+        const detectedChat = await detectActiveWhatsAppChatAsync().catch(() => null);
+        const dialog = collectVisibleWhatsAppDialog(detectedChat);
+        if (!dialog?.messages.length) continue;
+        const dialogKey = getDialogExportDialogKey(dialog);
+        if (seenDialogs.has(dialogKey)) continue;
+        seenDialogs.add(dialogKey);
+        dialogs.push(limitDialogExportMessages(dialog, options.messageLimit));
+        addedInView += 1;
+      }
+
+      if (!scroller) break;
+      const previousTop = scroller.scrollTop;
+      scroller.scrollTo({ top: previousTop + Math.max(280, Math.floor(scroller.clientHeight * 0.82)), behavior: "auto" });
+      await waitForDelay(700);
+      const didMove = Math.abs(scroller.scrollTop - previousTop) > 8;
+      idleScrolls = didMove || addedInView ? 0 : idleScrolls + 1;
+      if (!didMove && idleScrolls >= 2) break;
+    }
+  } finally {
+    if (scroller) scroller.scrollTo({ top: initialScrollTop, behavior: "auto" });
+  }
+
+  return {
+    dialogs,
+    exportedAt: new Date().toISOString(),
+    chatLimit: options.chatLimit,
+    messageLimit: options.messageLimit,
+    source: "chat-list-walk"
+  };
+}
+
+function findWhatsAppChatListScroller(sidebar: HTMLElement) {
+  const candidates = [sidebar, ...Array.from(sidebar.querySelectorAll<HTMLElement>("div"))];
+  return candidates.find((element) => element.scrollHeight > element.clientHeight + 160) ?? sidebar;
+}
+
+function getDialogExportChatRows(sidebar: HTMLElement) {
+  const sidebarRect = sidebar.getBoundingClientRect();
+  const candidates = Array.from(sidebar.querySelectorAll<HTMLElement>("[role='listitem'], [role='button'], [tabindex], div"))
+    .filter((element) => {
+      if (!isVisibleElement(element)) return false;
+      const rect = element.getBoundingClientRect();
+      const text = normalizeExtractedText(element.innerText || element.textContent || "");
+      const inSidebar = rect.left >= sidebarRect.left - 8 && rect.right <= sidebarRect.right + 8;
+      const rowShape = rect.width >= sidebarRect.width * 0.55 && rect.height >= 42 && rect.height <= 140;
+      return inSidebar && rowShape && text && !isNonDialogExportChatRowText(text);
+    });
+  const rows: HTMLElement[] = [];
+  candidates.forEach((element) => {
+    const row = findDialogExportChatRowRoot(element, sidebar, sidebarRect);
+    if (row && !rows.includes(row)) rows.push(row);
+  });
+  return rows;
+}
+
+function findDialogExportChatRowRoot(element: HTMLElement, sidebar: HTMLElement, sidebarRect: DOMRect) {
+  let current: HTMLElement | null = element;
+  let best: HTMLElement | null = element;
+  while (current && current !== sidebar) {
+    const rect = current.getBoundingClientRect();
+    const text = normalizeExtractedText(current.innerText || current.textContent || "");
+    const inSidebar = rect.left >= sidebarRect.left - 8 && rect.right <= sidebarRect.right + 8;
+    const rowShape = rect.width >= sidebarRect.width * 0.62 && rect.height >= 44 && rect.height <= 140;
+    if (inSidebar && rowShape && text && !isNonDialogExportChatRowText(text)) best = current;
+    current = current.parentElement;
+  }
+  return best;
+}
+
+function getDialogExportChatRowKey(row: HTMLElement) {
+  return normalizeExtractedText([
+    row.getAttribute("data-id") || "",
+    row.getAttribute("aria-label") || "",
+    row.innerText || row.textContent || ""
+  ].join(" ")).slice(0, 220);
+}
+
+function isNonDialogExportChatRowText(value: string) {
+  return /поиск|search|архив|archive|новый чат|new chat|избранное|starred|группы|groups|статус|status|каналы|channels|сообщения и звонки защищены/i.test(value);
+}
+
+function getDialogExportDialogKey(dialog: WhatsAppDialogExportItem) {
+  return dialog.id || dialog.phone || dialog.title || dialog.messages[0]?.id || "";
+}
+
+function limitDialogExportMessages(dialog: WhatsAppDialogExportItem, messageLimit: number) {
+  return {
+    ...dialog,
+    messages: dialog.messages.slice(-messageLimit)
+  };
+}
+
+function getVisibleMessageMediaMarker(element: HTMLElement) {
+  const text = [
+    element.getAttribute("aria-label") || "",
+    element.getAttribute("title") || "",
+    ...Array.from(element.querySelectorAll<HTMLElement>("[aria-label], [title], [data-icon]")).map((child) =>
+      [
+        child.getAttribute("aria-label") || "",
+        child.getAttribute("title") || "",
+        child.getAttribute("data-icon") || ""
+      ].filter(Boolean).join(" ")
+    )
+  ].join(" ");
+  if (/video|видео/i.test(text)) return "[Медиа: видео]";
+  if (/image|photo|picture|фото|изображ/i.test(text)) return "[Медиа: фото]";
+  if (/audio|voice|ptt|голос|аудио/i.test(text)) return "[Медиа: аудио]";
+  if (/document|file|документ|файл/i.test(text)) return "[Медиа: файл]";
+  if (element.querySelector("img, video, audio, canvas, [data-icon*='document'], [data-icon*='image'], [data-icon*='video'], [data-icon*='audio']")) return "[Медиа]";
+  return "";
+}
+
 function mergeDialogExportPayload(payload: WhatsAppDialogExportPayload, fallbackDialog: WhatsAppDialogExportItem | null): WhatsAppDialogExportPayload {
   if (!fallbackDialog?.messages.length) return payload;
   const normalizedFallback = {
@@ -15496,6 +15635,47 @@ function mergeDialogExportPayload(payload: WhatsAppDialogExportPayload, fallback
     ...payload,
     dialogs: [normalizedFallback, ...payload.dialogs],
     source: payload.source === "timeout" ? "visible-chat" : `${payload.source}+visible-chat`
+  };
+}
+
+function mergeDialogExportPayloads(left: WhatsAppDialogExportPayload, right: WhatsAppDialogExportPayload): WhatsAppDialogExportPayload {
+  const dialogs = [...left.dialogs];
+  for (const dialog of right.dialogs) {
+    const existingIndex = dialogs.findIndex((item) =>
+      Boolean(dialog.id && item.id === dialog.id) ||
+      Boolean(dialog.phone && item.phone === dialog.phone) ||
+      Boolean(dialog.title && item.title === dialog.title)
+    );
+    if (existingIndex < 0) {
+      dialogs.push(dialog);
+      continue;
+    }
+    dialogs[existingIndex] = mergeDialogExportItems(dialogs[existingIndex], dialog);
+  }
+  return {
+    ...left,
+    dialogs,
+    exportedAt: new Date().toISOString(),
+    source: [left.source, right.source].filter(Boolean).join("+")
+  };
+}
+
+function mergeDialogExportItems(left: WhatsAppDialogExportItem, right: WhatsAppDialogExportItem): WhatsAppDialogExportItem {
+  const messages = [...left.messages];
+  const seenMessages = new Set(messages.map((message) => message.id || `${message.timestamp}:${message.fromMe}:${message.text}`));
+  for (const message of right.messages) {
+    const key = message.id || `${message.timestamp}:${message.fromMe}:${message.text}`;
+    if (seenMessages.has(key)) continue;
+    seenMessages.add(key);
+    messages.push(message);
+  }
+  return {
+    ...left,
+    id: left.id || right.id,
+    isActive: left.isActive || right.isActive,
+    phone: left.phone || right.phone,
+    title: left.title || right.title,
+    messages: messages.sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)))
   };
 }
 

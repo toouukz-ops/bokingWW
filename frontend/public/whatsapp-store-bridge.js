@@ -160,6 +160,18 @@
     return "";
   };
 
+  const readMessageMediaMarker = (message) => {
+    const type = cleanText(message?.type || message?.__x_type || message?.mediaData?.type || message?.__x_mediaData?.type || "");
+    const mime = cleanText(message?.mimetype || message?.__x_mimetype || message?.mediaData?.mimetype || message?.__x_mediaData?.mimetype || "");
+    const value = `${type} ${mime}`;
+    if (/video/i.test(value)) return "[Медиа: видео]";
+    if (/image|photo|sticker/i.test(value)) return "[Медиа: фото]";
+    if (/audio|ptt|voice/i.test(value)) return "[Медиа: аудио]";
+    if (/document|file|pdf|application\//i.test(value)) return "[Медиа: файл]";
+    if (message?.isMedia || message?.__x_isMedia || message?.mediaData || message?.__x_mediaData) return "[Медиа]";
+    return "";
+  };
+
   const readMessageText = (message) => cleanText(
     message?.body ||
     message?.__x_body ||
@@ -168,6 +180,7 @@
     message?.text ||
     message?.__x_text ||
     message?.message?.conversation ||
+    readMessageMediaMarker(message) ||
     ""
   );
 

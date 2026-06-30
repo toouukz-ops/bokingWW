@@ -205,6 +205,45 @@ body.gpb-booking-panel-open #app {
   cursor: pointer;
 }
 
+.gpb-header-actions .gpb-dialog-export-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.gpb-header-actions .gpb-dialog-export-button::before {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 3px;
+  width: var(--gpb-dialog-export-progress, 0%);
+  background: #0f6b57;
+  transition: width 0.2s ease;
+}
+
+.gpb-header-actions .gpb-dialog-export-button.is-exporting {
+  border-color: #0f6b57;
+  background: #eef8f4;
+  color: #0f6b57;
+  cursor: progress;
+}
+
+.gpb-header-actions .gpb-dialog-export-button.is-exporting::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 2px solid rgb(15 107 87 / 20%);
+  border-top-color: #0f6b57;
+  border-radius: 999px;
+  animation: gpb-spin 0.8s linear infinite;
+}
+
+.gpb-header-actions .gpb-dialog-export-button.is-exporting span {
+  position: relative;
+  z-index: 1;
+  font-size: 10px;
+  font-weight: 900;
+}
+
 .gpb-floating-button {
   position: fixed;
   top: 84px;

@@ -36,7 +36,7 @@ import {
   X
 } from "lucide-react";
 import { jsPDF } from "jspdf";
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import {
   clearBookingStatistics,
   claimActiveDialog,
@@ -186,6 +186,14 @@ type WhatsAppDialogExportPayload = {
   chatLimit?: number;
   messageLimit: number;
   source: string;
+};
+type DialogExportProgress = {
+  current: number;
+  dialogs: number;
+  percent: number;
+  rows: number;
+  stage: string;
+  total: number;
 };
 type IncludedCardTemplate = "hero-thumbs-description" | "photo-description";
 type IncludedCardPage = {
@@ -704,6 +712,14 @@ export function BookingPanel() {
   const [isGuestDatabaseOpen, setIsGuestDatabaseOpen] = useState(false);
   const [isExpensesOpen, setIsExpensesOpen] = useState(false);
   const [dialogExportState, setDialogExportState] = useState<"idle" | "exporting" | "done" | "error">("idle");
+  const [dialogExportProgress, setDialogExportProgress] = useState<DialogExportProgress>({
+    current: 0,
+    dialogs: 0,
+    percent: 0,
+    rows: 0,
+    stage: "",
+    total: 0
+  });
   const [startupCleanDone, setStartupCleanDone] = useState(false);
   const [activeBookingPanel, setActiveBookingPanel] = useState<"dates" | "catalog" | "booking" | "links" | null>(null);
   const [activeWorkflowBlock, setActiveWorkflowBlock] = useState<"flow" | "catalog" | "booking" | "links" | null>(null);
@@ -5382,9 +5398,27 @@ export function BookingPanel() {
 
   async function exportWhatsAppDialogsForAnalytics() {
     setDialogExportState("exporting");
+    setDialogExportProgress({
+      current: 0,
+      dialogs: 0,
+      percent: 1,
+      rows: 0,
+      stage: "Старт",
+      total: 500
+    });
     try {
+      setDialogExportProgress((current) => ({ ...current, percent: 3, stage: "Читаю WhatsApp" }));
       const storePayload = await requestWhatsAppDialogExport({ chatLimit: 500, messageLimit: 500 });
-      const walkedPayload = await walkWhatsAppChatListForDialogExport({ chatLimit: 500, messageLimit: 500 });
+      setDialogExportProgress((current) => ({
+        ...current,
+        dialogs: storePayload.dialogs.length,
+        percent: Math.max(current.percent, 8),
+        stage: "Обход списка"
+      }));
+      const walkedPayload = await walkWhatsAppChatListForDialogExport(
+        { chatLimit: 500, messageLimit: 500 },
+        (progress) => setDialogExportProgress(progress)
+      );
       const fallbackDialog = collectVisibleWhatsAppDialog(activeChat);
       const payload = mergeDialogExportPayload(mergeDialogExportPayloads(storePayload, walkedPayload), fallbackDialog);
       if (!payload.dialogs.length) {
@@ -5394,6 +5428,12 @@ export function BookingPanel() {
       }
 
       const exportedDate = formatDateInput(new Date());
+      setDialogExportProgress((current) => ({
+        ...current,
+        dialogs: payload.dialogs.length,
+        percent: 98,
+        stage: "Упаковка"
+      }));
       const jsonBlob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const textBlob = new Blob([buildDialogExportText(payload)], { type: "text/plain;charset=utf-8" });
       const zipBlob = await createZipBlob([
@@ -5402,12 +5442,19 @@ export function BookingPanel() {
       ]);
       downloadBlobFile(zipBlob, `whatsapp-dialogs-${exportedDate}.zip`);
       setDialogExportState("done");
+      setDialogExportProgress((current) => ({
+        ...current,
+        dialogs: payload.dialogs.length,
+        percent: 100,
+        stage: `Готово: ${payload.dialogs.length}`
+      }));
       window.setTimeout(() => setDialogExportState("idle"), 2200);
     } catch (error) {
       void sendDebugLog("whatsapp-dialog-export-failed", {
         message: error instanceof Error ? error.message : String(error)
       });
       setDialogExportState("error");
+      setDialogExportProgress((current) => ({ ...current, stage: "Ошибка" }));
       window.setTimeout(() => setDialogExportState("idle"), 2200);
     }
   }
@@ -5605,18 +5652,26 @@ export function BookingPanel() {
             <BarChart3 size={18} />
           </button>
           <button
+            className={dialogExportState === "exporting" ? "gpb-dialog-export-button is-exporting" : "gpb-dialog-export-button"}
             type="button"
             onClick={() => void exportWhatsAppDialogsForAnalytics()}
             disabled={dialogExportState === "exporting"}
+            style={dialogExportState === "exporting" ? { "--gpb-dialog-export-progress": `${dialogExportProgress.percent}%` } as CSSProperties : undefined}
             title={
-              dialogExportState === "done"
+              dialogExportState === "exporting"
+                ? `${dialogExportProgress.stage}: ${dialogExportProgress.percent}% | диалогов ${dialogExportProgress.dialogs} | строк ${dialogExportProgress.rows}`
+                : dialogExportState === "done"
                 ? "Диалоги экспортированы"
                 : dialogExportState === "error"
                   ? "Не удалось экспортировать диалоги"
                   : "Экспорт диалогов для аналитики отказов"
             }
           >
-            <Download size={18} />
+            {dialogExportState === "exporting" ? (
+              <span>{dialogExportProgress.percent}%</span>
+            ) : (
+              <Download size={18} />
+            )}
           </button>
           <button type="button" onClick={() => setIsReservationsOpen(true)} title="Брони">
             <CalendarDays size={18} />
@@ -15457,7 +15512,10 @@ function collectVisibleWhatsAppDialog(activeChat: ActiveChat | null): WhatsAppDi
   };
 }
 
-async function walkWhatsAppChatListForDialogExport(options: { chatLimit: number; messageLimit: number }): Promise<WhatsAppDialogExportPayload> {
+async function walkWhatsAppChatListForDialogExport(
+  options: { chatLimit: number; messageLimit: number },
+  onProgress?: (progress: DialogExportProgress) => void
+): Promise<WhatsAppDialogExportPayload> {
   const sidebar = document.querySelector<HTMLElement>("#side");
   if (!sidebar) return createEmptyDialogExportPayload("chat-list-walk-unavailable", options.messageLimit);
   const scroller = findWhatsAppChatListScroller(sidebar);
@@ -15466,10 +15524,27 @@ async function walkWhatsAppChatListForDialogExport(options: { chatLimit: number;
   const seenRows = new Set<string>();
   const seenDialogs = new Set<string>();
   let idleScrolls = 0;
+  const maxIterations = 220;
+
+  const reportProgress = (stage: string, iteration: number, rowsInView = 0) => {
+    const current = Math.max(dialogs.length, seenRows.size, iteration);
+    const percentByLimit = Math.floor((Math.min(options.chatLimit, current) / Math.max(1, options.chatLimit)) * 92);
+    const percentByScroll = Math.floor((Math.min(maxIterations, iteration) / maxIterations) * 92);
+    onProgress?.({
+      current,
+      dialogs: dialogs.length,
+      percent: Math.max(8, Math.min(96, Math.max(percentByLimit, percentByScroll))),
+      rows: Math.max(seenRows.size, rowsInView),
+      stage,
+      total: options.chatLimit
+    });
+  };
 
   try {
-    for (let iteration = 0; iteration < 160 && dialogs.length < options.chatLimit; iteration += 1) {
+    reportProgress("Обход списка", 0);
+    for (let iteration = 0; iteration < maxIterations && dialogs.length < options.chatLimit; iteration += 1) {
       const rows = getDialogExportChatRows(sidebar);
+      reportProgress("Сканирую чат-лист", iteration, rows.length);
       let addedInView = 0;
 
       for (const row of rows) {
@@ -15489,6 +15564,8 @@ async function walkWhatsAppChatListForDialogExport(options: { chatLimit: number;
         seenDialogs.add(dialogKey);
         dialogs.push(limitDialogExportMessages(dialog, options.messageLimit));
         addedInView += 1;
+        reportProgress("Извлекаю чаты", iteration, rows.length);
+        await waitForDelay(40);
       }
 
       if (!scroller) break;
@@ -15498,6 +15575,7 @@ async function walkWhatsAppChatListForDialogExport(options: { chatLimit: number;
       const didMove = Math.abs(scroller.scrollTop - previousTop) > 8;
       idleScrolls = didMove || addedInView ? 0 : idleScrolls + 1;
       if (!didMove && idleScrolls >= 2) break;
+      reportProgress("Листаю вниз", iteration + 1, rows.length);
     }
   } finally {
     if (scroller) scroller.scrollTo({ top: initialScrollTop, behavior: "auto" });

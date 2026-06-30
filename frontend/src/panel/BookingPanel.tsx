@@ -784,6 +784,7 @@ export function BookingPanel() {
   const [discountPercent, setDiscountPercent] = useState(0);
   const [packageDiscountEnabled, setPackageDiscountEnabled] = useState(false);
   const [periodDiscountEnabled, setPeriodDiscountEnabled] = useState(false);
+  const [pricePdfPeriodDiscountApplied, setPricePdfPeriodDiscountApplied] = useState(false);
   const [packageDiscountWasApplied, setPackageDiscountWasApplied] = useState(false);
   const [discountManualOverride, setDiscountManualOverride] = useState(false);
   const [breakfastIncluded, setBreakfastIncluded] = useState(true);
@@ -1117,6 +1118,7 @@ export function BookingPanel() {
   const packageDiscountSelectedRooms = proposalRooms.filter((room) => isStayBookingObject(room) && isRoomIncludedInBookingSummary(room)).length;
   const isPackageDiscountEligible = packageDiscountPercent > 0 && packageDiscountRequiredRooms > 0 && packageDiscountSelectedRooms >= packageDiscountRequiredRooms;
   const isPeriodDiscountEligible = packagePeriodDiscountPercent > 0 && isCheckInWithinDatePeriod(checkIn, packagePeriodDiscountFrom, packagePeriodDiscountTo);
+  const isPricePdfPeriodDiscountLocked = pricePdfPeriodDiscountApplied && isPeriodDiscountEligible;
   const activeAutoDiscountPercent = Math.max(
     packageDiscountEnabled && isPackageDiscountEligible ? packageDiscountPercent : 0,
     periodDiscountEnabled && isPeriodDiscountEligible ? packagePeriodDiscountPercent : 0
@@ -1623,6 +1625,9 @@ export function BookingPanel() {
     rollawayCount,
     breakfastIncluded,
     discountPercent,
+    packageDiscountEnabled,
+    periodDiscountEnabled,
+    pricePdfPeriodDiscountApplied,
     agreementSent,
     agreementEverSent,
     guestAdults,
@@ -2012,6 +2017,7 @@ export function BookingPanel() {
       discountPercent,
       packageDiscountEnabled,
       periodDiscountEnabled,
+      pricePdfPeriodDiscountApplied,
       breakfastIncluded,
       manualTotalAmount,
       manualSaleOpen,
@@ -2413,6 +2419,7 @@ export function BookingPanel() {
     setDiscountManualOverride(Boolean(restoredDiscountPercent && !draft.packageDiscountEnabled && !draft.periodDiscountEnabled));
     setPackageDiscountEnabled(draft.packageDiscountEnabled ?? false);
     setPeriodDiscountEnabled(draft.periodDiscountEnabled ?? false);
+    setPricePdfPeriodDiscountApplied(Boolean(draft.pricePdfPeriodDiscountApplied));
     setPackageDiscountWasApplied(false);
     setBreakfastIncluded(draft.breakfastIncluded ?? true);
     setManualTotalAmount(draft.manualTotalAmount ?? 0);
@@ -2514,6 +2521,7 @@ export function BookingPanel() {
     setDiscountManualOverride(false);
     setPackageDiscountEnabled(false);
     setPeriodDiscountEnabled(false);
+    setPricePdfPeriodDiscountApplied(false);
     setPackageDiscountWasApplied(false);
     setManualTotalAmount(0);
     setManualSaleOpen(false);
@@ -2552,6 +2560,7 @@ export function BookingPanel() {
         discountPercent: 0,
         packageDiscountEnabled: false,
         periodDiscountEnabled: false,
+        pricePdfPeriodDiscountApplied: false,
         manualTotalAmount: 0,
         manualSaleOpen: false,
         manualSaleAmount: 0,
@@ -2659,6 +2668,15 @@ export function BookingPanel() {
   const isContactRowLocked = isBookingLocked;
 
   useEffect(() => {
+    if (pricePdfPeriodDiscountApplied && !isPeriodDiscountEligible) {
+      setPricePdfPeriodDiscountApplied(false);
+      setPeriodDiscountEnabled(false);
+      setDiscountPercent((currentDiscount) => currentDiscount === packagePeriodDiscountPercent ? 0 : currentDiscount);
+      setPackageDiscountWasApplied(false);
+      setAgreementSent(false);
+      return;
+    }
+
     if (isBookingLocked || manualTotalAmount > 0 || discountManualOverride) return;
 
     if (activeAutoDiscountPercent > 0) {
@@ -2687,6 +2705,7 @@ export function BookingPanel() {
     manualTotalAmount,
     packageDiscountEnabled,
     periodDiscountEnabled,
+    pricePdfPeriodDiscountApplied,
     packageDiscountPercent,
     packagePeriodDiscountPercent,
     packagePeriodDiscountFrom,
@@ -3615,6 +3634,7 @@ export function BookingPanel() {
   }
 
   function updateDiscountPercent(nextDiscountPercent: number) {
+    if (isPricePdfPeriodDiscountLocked) return;
     setDiscountPercent(clampNumber(nextDiscountPercent, 0, 100));
     setDiscountManualOverride(true);
     setPackageDiscountWasApplied(false);
@@ -3624,6 +3644,7 @@ export function BookingPanel() {
   }
 
   function togglePackageDiscount(enabled: boolean) {
+    if (isPricePdfPeriodDiscountLocked) return;
     setDiscountManualOverride(false);
     setPackageDiscountEnabled(enabled);
     if (enabled && isPackageDiscountEligible && manualTotalAmount <= 0) {
@@ -3639,6 +3660,7 @@ export function BookingPanel() {
   }
 
   function togglePeriodDiscount(enabled: boolean) {
+    if (isPricePdfPeriodDiscountLocked) return;
     setDiscountManualOverride(false);
     setPeriodDiscountEnabled(enabled);
     if (enabled && isPeriodDiscountEligible && manualTotalAmount <= 0) {
@@ -3654,6 +3676,7 @@ export function BookingPanel() {
   }
 
   function updateManualTotalAmount(nextAmount: number) {
+    if (isPricePdfPeriodDiscountLocked) return;
     const safeAmount = Math.max(0, nextAmount);
     setManualTotalAmount(safeAmount);
     if (safeAmount > 0 && bookingTotals.subtotal > 0) {
@@ -4019,6 +4042,13 @@ export function BookingPanel() {
     periodDiscountFrom: string;
     periodDiscountTo: string;
   }>) {
+    if (pricePdfPeriodDiscountApplied) {
+      setPricePdfPeriodDiscountApplied(false);
+      setPeriodDiscountEnabled(false);
+      setDiscountPercent((currentDiscount) => currentDiscount === packagePeriodDiscountPercent ? 0 : currentDiscount);
+      setPackageDiscountWasApplied(false);
+      setAgreementSent(false);
+    }
     const nextPercent = clampNumber(patch.periodDiscountPercent ?? packagePeriodDiscountPercent, 0, 100);
     const nextFrom = patch.periodDiscountFrom ?? packagePeriodDiscountFrom;
     const nextTo = patch.periodDiscountTo ?? packagePeriodDiscountTo;
@@ -4030,6 +4060,27 @@ export function BookingPanel() {
       packagePeriodDiscountFrom: nextFrom,
       packagePeriodDiscountTo: nextTo
     }));
+  }
+
+  function applyPricePdfPeriodDiscountToBooking() {
+    if (!isPeriodDiscountEligible || packagePeriodDiscountPercent <= 0 || isBookingLocked) return;
+    setDiscountManualOverride(false);
+    setPackageDiscountEnabled(false);
+    setPeriodDiscountEnabled(true);
+    setPricePdfPeriodDiscountApplied(true);
+    setDiscountPercent(packagePeriodDiscountPercent);
+    setPackageDiscountWasApplied(true);
+    setManualTotalAmount(0);
+    setLastReservation(null);
+    setAgreementSent(false);
+    void saveCurrentChatDraft({
+      discountPercent: packagePeriodDiscountPercent,
+      packageDiscountEnabled: false,
+      periodDiscountEnabled: true,
+      pricePdfPeriodDiscountApplied: true,
+      manualTotalAmount: 0,
+      agreementSent: false
+    });
   }
 
   async function handlePackageCustomFieldChange(fieldId: string, value: string) {
@@ -6278,7 +6329,7 @@ export function BookingPanel() {
                   <label className="gpb-total-amount-input">
                     <input
                       aria-label="Итоговая сумма"
-                      disabled={isBookingLocked}
+                      disabled={isBookingLocked || isPricePdfPeriodDiscountLocked}
                       inputMode="numeric"
                       value={getPriceInputValue(effectiveBookingTotals.total, isManualTotalFocused)}
                       onBlur={() => setIsManualTotalFocused(false)}
@@ -6291,12 +6342,12 @@ export function BookingPanel() {
                   </label>
                   <div className="gpb-discount-label">
                     <div className="gpb-discount-stepper">
-                      <button type="button" onClick={() => updateDiscountPercent(discountPercent - 1)} disabled={isBookingLocked || discountPercent <= 0}>
+                      <button type="button" onClick={() => updateDiscountPercent(discountPercent - 1)} disabled={isBookingLocked || isPricePdfPeriodDiscountLocked || discountPercent <= 0}>
                         -
                       </button>
                       <input
                         aria-label="Скидка в процентах"
-                        disabled={isBookingLocked}
+                        disabled={isBookingLocked || isPricePdfPeriodDiscountLocked}
                         inputMode="numeric"
                         type="text"
                         value={`${effectiveBookingTotals.discountPercent}%`}
@@ -6307,7 +6358,7 @@ export function BookingPanel() {
                           event.currentTarget.select();
                         }}
                       />
-                      <button type="button" onClick={() => updateDiscountPercent(discountPercent + 1)} disabled={isBookingLocked || discountPercent >= 100}>
+                      <button type="button" onClick={() => updateDiscountPercent(discountPercent + 1)} disabled={isBookingLocked || isPricePdfPeriodDiscountLocked || discountPercent >= 100}>
                         +
                       </button>
                     </div>
@@ -6318,7 +6369,7 @@ export function BookingPanel() {
                     <label className={`gpb-package-discount-toggle ${packageDiscountEnabled && isPackageDiscountEligible ? "is-active" : ""}`}>
                       <input
                         checked={packageDiscountEnabled}
-                        disabled={isBookingLocked}
+                        disabled={isBookingLocked || isPricePdfPeriodDiscountLocked}
                         type="checkbox"
                         onChange={(event) => togglePackageDiscount(event.target.checked)}
                       />
@@ -6329,7 +6380,7 @@ export function BookingPanel() {
                     <label className={`gpb-package-discount-toggle ${periodDiscountEnabled && isPeriodDiscountEligible ? "is-active" : ""}`}>
                       <input
                         checked={periodDiscountEnabled}
-                        disabled={isBookingLocked || !isPeriodDiscountEligible}
+                        disabled={isBookingLocked || isPricePdfPeriodDiscountLocked || !isPeriodDiscountEligible}
                         type="checkbox"
                         onChange={(event) => togglePeriodDiscount(event.target.checked)}
                       />
@@ -6880,6 +6931,7 @@ export function BookingPanel() {
           onDropRoom={movePricePdfRoom}
           onGroupPeriodTotalsChange={handlePricePdfGroupPeriodTotalsChange}
           onIncludeGalleryChange={handlePricePdfIncludeGalleryChange}
+          onApplyPeriodDiscount={applyPricePdfPeriodDiscountToBooking}
           onPeriodDiscountChange={(patch) => void handlePricePdfPeriodDiscountChange(patch)}
           onCopyLink={copyPricePdfLink}
           onDownloadStory={pricePdfMode === "external" ? () => void downloadSocialPriceImagesFromPdfSelection() : undefined}
@@ -9652,6 +9704,7 @@ function PricePdfOptionsModal({
   onDropRoom,
   onGroupPeriodTotalsChange,
   onIncludeGalleryChange,
+  onApplyPeriodDiscount,
   onPeriodDiscountChange,
   onCopyLink,
   onDownloadStory,
@@ -9694,6 +9747,7 @@ function PricePdfOptionsModal({
   onDropRoom: (roomId: string) => void;
   onGroupPeriodTotalsChange: (value: boolean) => void;
   onIncludeGalleryChange: (value: boolean) => void;
+  onApplyPeriodDiscount: () => void;
   onPeriodDiscountChange: (patch: Partial<{ periodDiscountPercent: number; periodDiscountFrom: string; periodDiscountTo: string }>) => void;
   onCopyLink: (value: string) => void | Promise<void>;
   onDownloadStory?: () => void;
@@ -9721,6 +9775,7 @@ function PricePdfOptionsModal({
   const unselectedRooms = rooms.filter((room) => !selectedSet.has(room.id));
   const displayRooms = orderedRooms.concat(unselectedRooms);
   const configuredLinks = linkMethods.filter((method) => method.value.trim());
+  const canApplyPeriodDiscount = periodDiscountPercent > 0 && isCheckInWithinDatePeriod(checkIn, periodDiscountFrom, periodDiscountTo);
   const previewKey = [
     checkIn,
     checkOut,
@@ -10065,6 +10120,14 @@ function PricePdfOptionsModal({
                 />
               </label>
             </div>
+            <button
+              className="gpb-price-period-discount-apply"
+              type="button"
+              disabled={!canApplyPeriodDiscount}
+              onClick={onApplyPeriodDiscount}
+            >
+              Применить
+            </button>
             <small>Если нужна скидка на один день, поставьте одинаковую дату.</small>
           </div>
           <label className="gpb-price-pdf-option">

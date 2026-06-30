@@ -262,6 +262,7 @@ export interface ChatBookingDraft {
   discountPercent: number;
   packageDiscountEnabled?: boolean;
   periodDiscountEnabled?: boolean;
+  pricePdfPeriodDiscountApplied?: boolean;
   breakfastIncluded?: boolean;
   manualTotalAmount: number;
   manualSaleOpen?: boolean;

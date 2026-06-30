@@ -4230,6 +4230,24 @@ body.gpb-booking-panel-open #app {
   font-weight: 900;
 }
 
+.gpb-price-period-discount-apply {
+  min-height: 38px;
+  border: 1px solid #0f6b57;
+  border-radius: 8px;
+  background: #0f6b57;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+}
+
+.gpb-price-period-discount-apply:disabled {
+  border-color: #d0dbe4;
+  background: #eef2f5;
+  color: #8a96a3;
+  cursor: not-allowed;
+}
+
 .gpb-price-period-discount > small {
   color: #64707d;
   font-size: 11px;

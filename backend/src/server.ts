@@ -7,7 +7,6 @@ import { stat } from "node:fs/promises";
 import {
   claimActiveDialogData,
   deleteReservationData,
-  deleteAllChatMessagesData,
   deleteChatDraftData,
   deleteRoomHoldData,
   getChatDraftById,
@@ -345,15 +344,6 @@ app.get("/api/chat-messages", async (request) => {
   const query = request.query as { limit?: string };
   const limit = Number.parseInt(query.limit || "20000", 10);
   return { dialogs: await listChatMessageDialogs(Number.isFinite(limit) ? limit : 20_000) };
-});
-
-app.delete("/api/chat-messages", async (request, reply) => {
-  const query = request.query as { confirm?: string };
-  if (query.confirm !== "clear-chat-messages") {
-    return reply.status(400).send({ error: "Confirmation is required" });
-  }
-
-  return deleteAllChatMessagesData();
 });
 
 app.get("/api/chat-messages/:chatKey", async (request) => {

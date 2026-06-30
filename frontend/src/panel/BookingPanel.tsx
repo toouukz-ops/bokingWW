@@ -82,8 +82,8 @@ import {
 import type { BackupExportOptions } from "../shared/api";
 import type { ActiveChat, ActiveDialog, ChatBookingDraft, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
-const MIN_WIDTH = 560;
-const MAX_WIDTH = 960;
+const MIN_WIDTH = 760;
+const MAX_WIDTH = 1160;
 const DEFAULT_CHECK_IN_TIME = "15:00";
 const DEFAULT_CHECK_OUT_TIME = "12:00";
 const PENDING_CONTACT_SAVE_KEY = "gpb-pending-contact-save";
@@ -431,7 +431,7 @@ function getMaxPanelWidth() {
 }
 
 function getDefaultPanelWidth() {
-  return Math.min(getMaxPanelWidth(), Math.max(MIN_WIDTH, Math.round(window.innerWidth * PANEL_WIDTH_RATIO)));
+  return Math.min(getMaxPanelWidth(), Math.max(MIN_WIDTH, Math.round(window.innerWidth * PANEL_WIDTH_RATIO) + 200));
 }
 
 function getDefaultCheckInDate() {
@@ -5928,9 +5928,9 @@ export function BookingPanel() {
                       <span className="gpb-panel-object-media">
                         <RoomCatalogThumb room={room} />
                         {roomIsReserved && roomReservationConflict && !getRoomHoldsForRoom(room.id).length ? (
-                          <span className="gpb-room-reserved-date-badges" aria-label={`Заезд ${formatShortDayMonth(roomReservationConflict.checkIn)}, выезд ${formatShortDayMonth(roomReservationConflict.checkOut)}`}>
-                            <span>Заезд {formatShortDayMonth(roomReservationConflict.checkIn)}</span>
-                            <span>Выезд {formatShortDayMonth(roomReservationConflict.checkOut)}</span>
+                          <span className="gpb-room-reserved-date-badges" aria-label={`Заезд ${formatNumericDayMonth(roomReservationConflict.checkIn)}, выезд ${formatNumericDayMonth(roomReservationConflict.checkOut)}`}>
+                            <span>Заезд {formatNumericDayMonth(roomReservationConflict.checkIn)}</span>
+                            <span>Выезд {formatNumericDayMonth(roomReservationConflict.checkOut)}</span>
                           </span>
                         ) : null}
                       </span>
@@ -20135,6 +20135,13 @@ function formatShortDayMonth(date: string) {
   return new Intl.DateTimeFormat("ru-RU", {
     day: "numeric",
     month: "long"
+  }).format(parseDateInput(date));
+}
+
+function formatNumericDayMonth(date: string) {
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit"
   }).format(parseDateInput(date));
 }
 

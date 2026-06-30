@@ -87,16 +87,17 @@ export async function saveChatMessages(chatKey: string, payload: {
   messages: ChatMessageLogItem[];
   operatorName: string;
   phone: string;
-}): Promise<void> {
-  if (!chatKey || !payload.messages.length) return;
+}): Promise<boolean> {
+  if (!chatKey || !payload.messages.length) return false;
   try {
-    await fetch(`${API_BASE_URL}/api/chat-messages/${encodeURIComponent(chatKey)}`, {
+    const response = await fetch(`${API_BASE_URL}/api/chat-messages/${encodeURIComponent(chatKey)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
+    return response.ok;
   } catch {
-    return;
+    return false;
   }
 }
 

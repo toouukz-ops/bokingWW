@@ -97,6 +97,11 @@ const CUSTOM_FOOD_OPTIONS_STORAGE_KEY = "gpb-custom-food-options";
 const ROOM_HOLDS_STORAGE_KEY = "gpb-room-holds";
 const SYNC_CLIENT_ID_STORAGE_KEY = "gpb-sync-client-id";
 const OPERATOR_NAME_STORAGE_KEY = "gpb-operator-name";
+const CHAT_MESSAGE_KEYS_STORAGE_KEY = "gpb-chat-message-keys";
+const CHAT_MESSAGE_PENDING_STORAGE_KEY = "gpb-chat-message-pending";
+const CHAT_MESSAGE_VISIBLE_TAIL_LIMIT = 45;
+const CHAT_MESSAGE_SAVED_KEYS_LIMIT = 400;
+const CHAT_MESSAGE_PENDING_LIMIT = 120;
 const DEFAULT_ROOM_HOLD_MINUTES = 30;
 const TIMELINE_ALTERNATE_ROW_COLOR_KEY = "gpb-timeline-alternate-row-color";
 const DEFAULT_TIMELINE_ALTERNATE_ROW_COLOR = "#f7f9fc";
@@ -620,6 +625,105 @@ function saveStoredOperatorName(name: string) {
   }
 }
 
+function readStoredChatMessageKeys(): Record<string, string[]> {
+  try {
+    return normalizeStoredChatMessageKeys(JSON.parse(window.localStorage.getItem(CHAT_MESSAGE_KEYS_STORAGE_KEY) || "{}"));
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredChatMessageKeys(value: Record<string, string[]>) {
+  try {
+    window.localStorage.setItem(CHAT_MESSAGE_KEYS_STORAGE_KEY, JSON.stringify(normalizeStoredChatMessageKeys(value)));
+  } catch {
+    return;
+  }
+}
+
+function normalizeStoredChatMessageKeys(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, string[]>>((acc, [chatKey, keys]) => {
+    if (!chatKey || !Array.isArray(keys)) return acc;
+    const normalizedKeys = keys
+      .map((key) => String(key || "").trim())
+      .filter(Boolean)
+      .slice(-CHAT_MESSAGE_SAVED_KEYS_LIMIT);
+    if (normalizedKeys.length) acc[chatKey] = normalizedKeys;
+    return acc;
+  }, {});
+}
+
+function readStoredPendingChatMessages(): Record<string, ChatMessageLogItem[]> {
+  try {
+    return normalizeStoredPendingChatMessages(JSON.parse(window.localStorage.getItem(CHAT_MESSAGE_PENDING_STORAGE_KEY) || "{}"));
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredPendingChatMessages(value: Record<string, ChatMessageLogItem[]>) {
+  try {
+    window.localStorage.setItem(CHAT_MESSAGE_PENDING_STORAGE_KEY, JSON.stringify(normalizeStoredPendingChatMessages(value)));
+  } catch {
+    return;
+  }
+}
+
+function normalizeStoredPendingChatMessages(value: unknown): Record<string, ChatMessageLogItem[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, ChatMessageLogItem[]>>((acc, [chatKey, messages]) => {
+    if (!chatKey || !Array.isArray(messages)) return acc;
+    const normalizedMessages = messages
+      .map((message) => normalizePendingChatMessage(message))
+      .filter((message): message is ChatMessageLogItem => Boolean(message))
+      .slice(-CHAT_MESSAGE_PENDING_LIMIT);
+    if (normalizedMessages.length) acc[chatKey] = normalizedMessages;
+    return acc;
+  }, {});
+}
+
+function normalizePendingChatMessage(value: unknown): ChatMessageLogItem | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<ChatMessageLogItem>;
+  const text = normalizeDialogMessageText(String(item.text || ""));
+  if (!text) return null;
+  const timestamp = String(item.timestamp || "");
+  const fromMe = Boolean(item.fromMe);
+  const id = String(item.messageKey || item.id || buildDialogMessageDedupeKey({ fromMe, text, timestamp }));
+  return {
+    author: normalizeExtractedText(String(item.author || "")),
+    fromMe,
+    id,
+    messageKey: String(item.messageKey || id),
+    sortKey: String(item.sortKey || timestamp || id),
+    text,
+    timestamp,
+    type: String(item.type || "visible")
+  };
+}
+
+function getChatMessageLocalKey(message: Pick<ChatMessageLogItem, "fromMe" | "id" | "messageKey" | "text" | "timestamp">) {
+  return String(
+    message.messageKey ||
+    message.id ||
+    buildDialogMessageDedupeKey({
+      fromMe: Boolean(message.fromMe),
+      text: message.text || "",
+      timestamp: message.timestamp || ""
+    })
+  ).trim();
+}
+
+function mergeChatMessageQueue(existingMessages: ChatMessageLogItem[], nextMessages: ChatMessageLogItem[]) {
+  const indexed = new Map<string, ChatMessageLogItem>();
+  [...existingMessages, ...nextMessages].forEach((message) => {
+    const key = getChatMessageLocalKey(message);
+    if (key) indexed.set(key, message);
+  });
+  return Array.from(indexed.values()).slice(-CHAT_MESSAGE_PENDING_LIMIT);
+}
+
 function safeParseRealtimeEvent(event: Event): Record<string, unknown> | null {
   const message = event as MessageEvent<string>;
   try {
@@ -913,7 +1017,9 @@ export function BookingPanel() {
   const draftRestoreVersionRef = useRef(0);
   const activeChatBeforeRestoreRef = useRef<ActiveChat | null>(null);
   const claimedActiveDialogKeyRef = useRef("");
-  const lastSavedChatMessagesSignatureRef = useRef<Record<string, string>>({});
+  const chatMessageKeysRef = useRef<Record<string, string[]>>({});
+  const chatMessagePendingRef = useRef<Record<string, ChatMessageLogItem[]>>({});
+  const chatMessageStateLoadedRef = useRef(false);
   const saveAdminCommentTimerRef = useRef<number | null>(null);
   const quickPhraseSendingRef = useRef(false);
   const syncClientIdRef = useRef(getOrCreateSyncClientId());
@@ -1478,6 +1584,13 @@ export function BookingPanel() {
   }, [activeChat?.id, activeChat?.phone, activeChat?.title]);
 
   useEffect(() => {
+    if (chatMessageStateLoadedRef.current) return;
+    chatMessageKeysRef.current = readStoredChatMessageKeys();
+    chatMessagePendingRef.current = readStoredPendingChatMessages();
+    chatMessageStateLoadedRef.current = true;
+  }, []);
+
+  useEffect(() => {
     const previousKey = claimedActiveDialogKeyRef.current;
     const nextKey = activeChat?.id ?? "";
     if (previousKey && previousKey !== nextKey) {
@@ -1519,43 +1632,108 @@ export function BookingPanel() {
     if (!activeChat) return;
 
     let isCancelled = false;
-    const saveVisibleMessages = () => {
-      if (isCancelled) return;
-      const dialog = collectVisibleWhatsAppDialog(activeChat);
-      const messages = dialog?.messages
-        .filter((message) => message.text && !isDialogMediaMarker(message.text))
-        .slice(-120)
-        .map((message) => ({
-          author: message.author,
-          fromMe: message.fromMe,
-          id: message.id,
-          sortKey: message.timestamp || message.id,
-          text: message.text,
-          timestamp: message.timestamp,
-          type: message.type
-        } satisfies ChatMessageLogItem)) ?? [];
-      if (!messages.length) return;
+    let isSaving = false;
 
-      const signature = messages.map((message) =>
-        [message.id, message.timestamp, message.fromMe ? "1" : "0", message.text].join("|")
-      ).join("\n");
-      if (lastSavedChatMessagesSignatureRef.current[activeChat.id] === signature) return;
-      lastSavedChatMessagesSignatureRef.current[activeChat.id] = signature;
+    const createPayload = (messages: ChatMessageLogItem[]) => ({
+      chatTitle: activeChat.title,
+      clientId: syncClientIdRef.current,
+      messages,
+      operatorName: currentOperatorName,
+      phone: activeChat.phone ?? ""
+    });
 
-      void saveChatMessages(activeChat.id, {
-        chatTitle: activeChat.title,
-        clientId: syncClientIdRef.current,
-        messages,
-        operatorName: currentOperatorName,
-        phone: activeChat.phone ?? ""
+    const markMessagesSaved = (messages: ChatMessageLogItem[]) => {
+      const nextKeys = new Set(chatMessageKeysRef.current[activeChat.id] ?? []);
+      messages.forEach((message) => {
+        const key = getChatMessageLocalKey(message);
+        if (key) nextKeys.add(key);
       });
+      chatMessageKeysRef.current = {
+        ...chatMessageKeysRef.current,
+        [activeChat.id]: Array.from(nextKeys).slice(-CHAT_MESSAGE_SAVED_KEYS_LIMIT)
+      };
+      writeStoredChatMessageKeys(chatMessageKeysRef.current);
     };
 
-    window.setTimeout(saveVisibleMessages, 900);
-    const intervalId = window.setInterval(saveVisibleMessages, 5000);
+    const clearPendingMessages = (messages: ChatMessageLogItem[]) => {
+      const sentKeys = new Set(messages.map(getChatMessageLocalKey).filter(Boolean));
+      const remaining = (chatMessagePendingRef.current[activeChat.id] ?? [])
+        .filter((message) => !sentKeys.has(getChatMessageLocalKey(message)));
+      chatMessagePendingRef.current = {
+        ...chatMessagePendingRef.current,
+        [activeChat.id]: remaining
+      };
+      if (!remaining.length) delete chatMessagePendingRef.current[activeChat.id];
+      writeStoredPendingChatMessages(chatMessagePendingRef.current);
+    };
+
+    const flushPendingMessages = async () => {
+      const pendingMessages = chatMessagePendingRef.current[activeChat.id] ?? [];
+      if (!pendingMessages.length) return true;
+      const isSaved = await saveChatMessages(activeChat.id, createPayload(pendingMessages));
+      if (!isSaved || isCancelled) return false;
+      markMessagesSaved(pendingMessages);
+      clearPendingMessages(pendingMessages);
+      return true;
+    };
+
+    const saveVisibleMessages = async () => {
+      if (isCancelled || isSaving || !chatMessageStateLoadedRef.current) return;
+      isSaving = true;
+      try {
+        await flushPendingMessages();
+        if (isCancelled) return;
+
+        const dialog = collectVisibleWhatsAppDialog(activeChat);
+        const messages = dialog?.messages
+          .filter((message) => message.text && !isDialogMediaMarker(message.text))
+          .slice(-CHAT_MESSAGE_VISIBLE_TAIL_LIMIT)
+          .map((message) => ({
+            author: message.author,
+            fromMe: message.fromMe,
+            id: message.id,
+            messageKey: message.id,
+            sortKey: message.timestamp || message.id,
+            text: message.text,
+            timestamp: message.timestamp,
+            type: message.type
+          } satisfies ChatMessageLogItem)) ?? [];
+        if (!messages.length) return;
+
+        const savedKeys = new Set(chatMessageKeysRef.current[activeChat.id] ?? []);
+        const pendingKeys = new Set((chatMessagePendingRef.current[activeChat.id] ?? []).map(getChatMessageLocalKey));
+        const newMessages = messages.filter((message) => {
+          const key = getChatMessageLocalKey(message);
+          return key && !savedKeys.has(key) && !pendingKeys.has(key);
+        });
+        if (!newMessages.length) return;
+
+        const isSaved = await saveChatMessages(activeChat.id, createPayload(newMessages));
+        if (isCancelled) return;
+        if (isSaved) {
+          markMessagesSaved(newMessages);
+          return;
+        }
+
+        chatMessagePendingRef.current = {
+          ...chatMessagePendingRef.current,
+          [activeChat.id]: mergeChatMessageQueue(chatMessagePendingRef.current[activeChat.id] ?? [], newMessages)
+        };
+        writeStoredPendingChatMessages(chatMessagePendingRef.current);
+      } finally {
+        isSaving = false;
+      }
+    };
+
+    const timeoutId = window.setTimeout(() => void saveVisibleMessages(), 1000);
+    const intervalId = window.setInterval(() => void saveVisibleMessages(), 8000);
+    const handleFocus = () => void saveVisibleMessages();
+    window.addEventListener("focus", handleFocus);
     return () => {
       isCancelled = true;
+      window.clearTimeout(timeoutId);
       window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
     };
   }, [activeChat?.id, activeChat?.phone, activeChat?.title, currentOperatorName]);
 

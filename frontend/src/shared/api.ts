@@ -48,7 +48,7 @@ export async function getActiveDialogs(): Promise<ActiveDialog[]> {
   return response.json();
 }
 
-export async function claimActiveDialog(dialog: Pick<ActiveDialog, "chatKey" | "chatTitle" | "clientId" | "operatorName" | "phone">): Promise<ActiveDialog> {
+export async function claimActiveDialog(dialog: Pick<ActiveDialog, "chatKey" | "chatTitle" | "clientId" | "operatorName" | "phone"> & { force?: boolean }): Promise<ActiveDialog> {
   const response = await fetch(`${API_BASE_URL}/api/active-dialogs/${encodeURIComponent(dialog.chatKey)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

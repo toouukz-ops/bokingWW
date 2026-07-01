@@ -1050,6 +1050,7 @@ export function BookingPanel() {
     [activeChat?.id, activeDialogs, holdNowMs]
   );
   const isCurrentChatOwnedByOther = Boolean(currentActiveDialog && currentActiveDialog.clientId !== syncClientIdRef.current);
+  const activeDialogOwnerName = currentActiveDialog?.operatorName?.trim() || "другим оператором";
   const currentOperatorName = operatorName.trim() || "Оператор";
   const agreementHoldDurationMs = useMemo(
     () => Math.max(1, Math.round(agreementHoldMinutes || DEFAULT_ROOM_HOLD_MINUTES)) * 60 * 1000,
@@ -1656,6 +1657,25 @@ export function BookingPanel() {
       void releaseActiveDialog(activeChat.id, syncClientIdRef.current).catch(() => undefined);
     };
   }, [activeChat?.id, activeChat?.phone, activeChat?.title, currentOperatorName]);
+
+  async function takeOverActiveDialog() {
+    if (!activeChat) return;
+    const dialog = await claimActiveDialog({
+      chatKey: activeChat.id,
+      chatTitle: activeChat.title,
+      clientId: syncClientIdRef.current,
+      operatorName: currentOperatorName,
+      phone: activeChat.phone ?? "",
+      force: true
+    });
+    claimedActiveDialogKeyRef.current = dialog.chatKey;
+    setActiveDialogs((currentDialogs) => filterActiveDialogs(currentDialogs.filter((item) => item.chatKey !== dialog.chatKey).concat(dialog)));
+    void sendDebugLog("active-dialog-taken-over", {
+      chatId: activeChat.id,
+      chatTitle: activeChat.title,
+      operatorName: currentOperatorName
+    });
+  }
 
   useEffect(() => {
     if (!activeChat) return;
@@ -2301,8 +2321,37 @@ export function BookingPanel() {
     await saveChatDraftForChat(activeChat, patch);
   }
 
+  function isChatWriteBlocked(chat: ActiveChat | null | undefined) {
+    if (!chat) return false;
+    const dialog = activeDialogs.find((item) => item.chatKey === chat.id && new Date(item.expiresAt).getTime() > Date.now());
+    return Boolean(dialog && dialog.clientId !== syncClientIdRef.current);
+  }
+
+  function blockIfCurrentDialogOwnedByOther(action: string) {
+    if (!isCurrentChatOwnedByOther) return false;
+    setBookingDateWarning(`Диалог сейчас у ${activeDialogOwnerName}. Чтобы менять бронь, нажмите «Переключить на меня».`);
+    void sendDebugLog("booking-write-blocked-dialog-owned-by-other", {
+      action,
+      activeChatId: activeChat?.id ?? "",
+      activeChatTitle: activeChat?.title ?? "",
+      owner: activeDialogOwnerName,
+      operatorName: currentOperatorName
+    });
+    return true;
+  }
+
   async function saveChatDraftForChat(chat: ActiveChat, patch: Partial<ChatBookingDraft> = {}) {
     if (isRestoringChatDraftRef.current) return;
+    if (isChatWriteBlocked(chat)) {
+      void sendDebugLog("chat-draft-save-blocked-dialog-owned-by-other", {
+        chatId: chat.id,
+        chatTitle: chat.title,
+        owner: activeDialogOwnerName,
+        operatorName: currentOperatorName,
+        patchKeys: Object.keys(patch)
+      });
+      return;
+    }
     const draft = reconcileDraftReservationDates({ ...buildChatDraft(), ...patch, updatedAt: new Date().toISOString() });
     const normalizedPhone = formatPhoneDigits(draft.phone);
     const chatPhone = formatPhoneDigits(chat.phone || "");
@@ -2935,7 +2984,7 @@ export function BookingPanel() {
   const canConfirmAgreement = Boolean(currentReservationDraft && currentReservationDraft.status !== "cancelled" && !hasSelectedHourlyConflict && !currentReservationHasPastDate);
   const isBookingConfirmed = isBookingPanelActiveReservation(lastReservation);
   const cancelableReservation = isBookingConfirmed ? lastReservation : phoneMatchedActiveReservation;
-  const isBookingLocked = isBookingConfirmed;
+  const isBookingLocked = isBookingConfirmed || isCurrentChatOwnedByOther;
   const contactMatchesActiveChatName = Boolean(
     activeChat?.title &&
     guestFirstName.trim() &&
@@ -5312,6 +5361,7 @@ export function BookingPanel() {
   }
 
   async function updateReservation(reservation: Reservation) {
+    if (blockIfCurrentDialogOwnedByOther("reservation-save")) return;
     const normalizedReservation = normalizeReservationPhoneIdentity(reservation);
     const existingReservation = reservations.find((item) => item.id === normalizedReservation.id)
       ?? (lastReservation?.id === normalizedReservation.id ? lastReservation : undefined);
@@ -5473,6 +5523,7 @@ export function BookingPanel() {
 
   async function saveAddOnSale() {
     if (!lastReservation || !addOnSaleServiceRoom) return;
+    if (blockIfCurrentDialogOwnedByOther("addon-sale-save")) return;
     if (addOnSaleConflicts.length) return;
     if (isDateBeforeToday(addOnSaleDate)) {
       setBookingDateWarning(`Нельзя добавить доп продажу в прошлом: ${formatKazakhDate(addOnSaleDate)}.`);
@@ -5544,6 +5595,7 @@ export function BookingPanel() {
 
   async function saveKitchenSale() {
     if (!lastReservation || !selectedKitchenMenuItem) return;
+    if (blockIfCurrentDialogOwnedByOther("kitchen-sale-save")) return;
     if (isDateBeforeToday(addOnSaleDate)) {
       setBookingDateWarning(`Нельзя добавить кухню в прошлом: ${formatKazakhDate(addOnSaleDate)}.`);
       setKitchenSaleState("error");
@@ -6165,6 +6217,11 @@ export function BookingPanel() {
                     ? `Диалог с ${currentActiveDialog.clientId === syncClientIdRef.current ? "вами" : currentActiveDialog.operatorName}`
                     : `Диалог с ${currentOperatorName}`}
                 </span>
+                {isCurrentChatOwnedByOther ? (
+                  <button type="button" onClick={() => void takeOverActiveDialog()}>
+                    Переключить на меня
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -6721,7 +6778,7 @@ export function BookingPanel() {
                             setAgreementSent(false);
                           }
                         }}
-                        disabled={Boolean(lastReservation?.noShowAt || lastReservation?.status === "cancelled")}
+                        disabled={isCurrentChatOwnedByOther || Boolean(lastReservation?.noShowAt || lastReservation?.status === "cancelled")}
                       >
                         <span>{method.label}</span>
                       </button>
@@ -6736,7 +6793,7 @@ export function BookingPanel() {
                       const reservation = lastReservation ?? currentReservationDraft;
                       if (reservation) void togglePrepaymentPaid(reservation);
                     }}
-                    disabled={Boolean(lastReservation?.noShowAt || lastReservation?.status === "cancelled") || (!lastReservation && !currentReservationDraft)}
+                    disabled={isCurrentChatOwnedByOther || Boolean(lastReservation?.noShowAt || lastReservation?.status === "cancelled") || (!lastReservation && !currentReservationDraft)}
                   >
                     <Check size={15} />
                     <span>{lastReservation?.prepaymentReceivedAt ? "Предоплата получена" : "Внести предоплату"}</span>
@@ -6745,7 +6802,7 @@ export function BookingPanel() {
                     className={`gpb-payment-mark-button ${lastReservation?.balancePaidAt ? "is-done" : ""}`}
                     type="button"
                     onClick={() => lastReservation && toggleBalancePaid(lastReservation)}
-                    disabled={!lastReservation || lastReservation.status === "cancelled" || Boolean(lastReservation.noShowAt)}
+                    disabled={isCurrentChatOwnedByOther || !lastReservation || lastReservation.status === "cancelled" || Boolean(lastReservation.noShowAt)}
                   >
                     <Check size={15} />
                     <span>Доплата получена</span>
@@ -6754,7 +6811,7 @@ export function BookingPanel() {
                     className={`gpb-payment-mark-button ${lastReservation?.checkedInAt ? "is-done" : ""}`}
                     type="button"
                     onClick={() => lastReservation && toggleCheckedIn(lastReservation)}
-                    disabled={!lastReservation || lastReservation.status === "cancelled" || Boolean(lastReservation.noShowAt)}
+                    disabled={isCurrentChatOwnedByOther || !lastReservation || lastReservation.status === "cancelled" || Boolean(lastReservation.noShowAt)}
                   >
                     <Check size={15} />
                     <span>Гость въехал</span>
@@ -6763,7 +6820,7 @@ export function BookingPanel() {
                     className="gpb-payment-mark-button"
                     type="button"
                     onClick={() => lastReservation && setExtendReservationTarget(lastReservation)}
-                    disabled={!lastReservation || lastReservation.status === "cancelled" || Boolean(lastReservation.noShowAt)}
+                    disabled={isCurrentChatOwnedByOther || !lastReservation || lastReservation.status === "cancelled" || Boolean(lastReservation.noShowAt)}
                   >
                     <Plus size={15} />
                     <span>Продлить</span>

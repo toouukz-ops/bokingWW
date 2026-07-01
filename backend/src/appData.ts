@@ -199,15 +199,17 @@ export async function listActiveDialogs() {
 
 export async function claimActiveDialogData(chatKey: string, dialog: Record<string, unknown>) {
   await deleteExpiredActiveDialogs();
+  const force = dialog.force === true;
   const existing = await activeDialogs.findOne({ chatKey, expiresAt: { $gt: new Date().toISOString() } });
-  if (existing && existing.clientId !== dialog.clientId) {
+  if (existing && existing.clientId !== dialog.clientId && !force) {
     return existing;
   }
   const now = new Date();
   const nowIso = now.toISOString();
   const expiresAt = new Date(now.getTime() + 90_000).toISOString();
+  const { force: _force, ...dialogData } = dialog;
   const document = {
-    ...dialog,
+    ...dialogData,
     chatKey,
     startedAt: typeof dialog.startedAt === "string" ? dialog.startedAt : nowIso,
     updatedAt: nowIso,

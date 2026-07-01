@@ -2529,6 +2529,20 @@ body.gpb-booking-panel-open #app {
   color: #9a5b00;
 }
 
+.gpb-active-dialog-status button {
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: #ffffff;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 4px 8px;
+}
+
+.gpb-active-dialog-status button:hover {
+  background: rgba(255, 255, 255, 0.72);
+}
+
 .gpb-field-with-button > input:first-child:last-of-type {
   grid-column: 1 / 3;
 }

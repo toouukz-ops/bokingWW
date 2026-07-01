@@ -21790,20 +21790,53 @@ function getReservationFoodSummary(rooms: Room[], breakfastIncluded: boolean, ex
   }
 
   const extraFoodSuffix = extraInventoryCount > 0 ? ` + ${extraInventoryCount}` : "";
+  const breakfastCount = rooms.reduce((sum, room) => sum + getRoomBreakfastCount(room), 0);
+  const totalBreakfastCount = breakfastCount + Math.max(0, extraInventoryCount);
+  const breakfastCountSuffix = totalBreakfastCount > 0 ? ` = ${totalBreakfastCount} ${getBreakfastWord(totalBreakfastCount)}` : "";
   const foodLabels = rooms
     .map(formatReservationRoomFood)
     .filter(Boolean);
   const uniqueFoodLabels = Array.from(new Set(foodLabels));
 
   if (!uniqueFoodLabels.length) {
-    return { header: `завтрак включен${extraFoodSuffix}`, mode: "header" as const };
+    return { header: `завтрак включен${extraFoodSuffix}${breakfastCountSuffix}`, mode: "header" as const };
   }
 
   if (uniqueFoodLabels.length === 1 && foodLabels.length === rooms.length) {
-    return { header: `${uniqueFoodLabels[0]}${extraFoodSuffix}`, mode: "header" as const };
+    return { header: `${uniqueFoodLabels[0]}${extraFoodSuffix}${breakfastCountSuffix}`, mode: "header" as const };
   }
 
   return { header: "", mode: "per-room" as const };
+}
+
+function getRoomBreakfastCount(room: Room) {
+  const breakfastLabels = getSelectedFood(room.amenities).filter((item) => /завтрак/i.test(item));
+  if (!breakfastLabels.length) return 0;
+  const parsedCount = breakfastLabels.reduce((sum, label) => sum + parseBreakfastCountFromLabel(label), 0);
+  return parsedCount || calculateRoomSleepingPlacesTotal(room);
+}
+
+function parseBreakfastCountFromLabel(label: string) {
+  const normalized = normalizeExtractedText(label).toLowerCase();
+  const numericMatch = normalized.match(/(?:на\s*)?(\d+)\s*(?:завтрак|чел|мест|персон)?/);
+  if (numericMatch) return Math.max(0, Number(numericMatch[1]) || 0);
+  if (/одного|одну|один|1/.test(normalized)) return 1;
+  if (/двоих|двух|двое|2/.test(normalized)) return 2;
+  if (/троих|трех|трёх|трое|3/.test(normalized)) return 3;
+  if (/четверых|четырех|четырёх|четверо|4/.test(normalized)) return 4;
+  if (/пятерых|пяти|пятеро|5/.test(normalized)) return 5;
+  if (/шестерых|шести|шестеро|6/.test(normalized)) return 6;
+  return 0;
+}
+
+function getBreakfastWord(count: number) {
+  const absCount = Math.abs(count);
+  const lastTwo = absCount % 100;
+  const last = absCount % 10;
+  if (lastTwo >= 11 && lastTwo <= 14) return "завтраков";
+  if (last === 1) return "завтрак";
+  if (last >= 2 && last <= 4) return "завтрака";
+  return "завтраков";
 }
 
 function formatReservationRoomFoodLine(room: Room) {

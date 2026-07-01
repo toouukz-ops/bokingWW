@@ -1090,9 +1090,10 @@ body.gpb-booking-panel-open #app {
   bottom: calc(100% + 6px);
   z-index: 20;
   display: grid;
-  gap: 6px;
-  min-width: 260px;
-  max-width: 320px;
+  grid-template-columns: minmax(120px, 1fr) minmax(118px, auto);
+  gap: 8px;
+  min-width: 300px;
+  max-width: 360px;
   max-height: 360px;
   overflow: auto;
   border: 1px solid #cbd6df;
@@ -1102,25 +1103,16 @@ body.gpb-booking-panel-open #app {
   padding: 6px;
 }
 
-.gpb-card-extra-menu-group {
-  display: grid;
-  grid-template-columns: minmax(92px, 1fr) minmax(96px, auto);
-  align-items: start;
-  gap: 8px;
-  border-radius: 6px;
-  padding: 4px;
-}
-
-.gpb-card-extra-menu-group b {
-  color: #0f6b57;
-  font-size: 13px;
-  line-height: 1.2;
-  text-align: left;
-}
-
+.gpb-card-extra-items-list,
 .gpb-card-extra-guest-list {
   display: grid;
-  gap: 3px;
+  align-content: start;
+  gap: 4px;
+}
+
+.gpb-card-extra-items-list {
+  border-right: 1px solid #e3e9ef;
+  padding-right: 6px;
 }
 
 .gpb-card-extra-menu button {
@@ -1136,12 +1128,23 @@ body.gpb-booking-panel-open #app {
   text-align: left;
 }
 
-.gpb-card-extra-menu button:hover {
+.gpb-card-extra-menu button:hover,
+.gpb-card-extra-menu button.is-active {
   background: #e9f7f2;
   color: #0f6b57;
 }
 
+.gpb-card-extra-items-list button {
+  color: #0f6b57;
+  font-size: 13px;
+}
+
+.gpb-card-extra-guest-list button {
+  font-size: 12px;
+}
+
 .gpb-card-extra-empty {
+  grid-column: 1 / -1;
   color: #6b7683;
   font-size: 12px;
   font-weight: 800;

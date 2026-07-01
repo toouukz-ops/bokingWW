@@ -875,6 +875,7 @@ export function BookingPanel() {
   const [extraInventoryChargeEnabled, setExtraInventoryChargeEnabled] = useState(false);
   const [extraInventoryManual, setExtraInventoryManual] = useState(false);
   const [extraInventoryPickerRoomId, setExtraInventoryPickerRoomId] = useState("");
+  const [extraInventoryPickerItemId, setExtraInventoryPickerItemId] = useState("");
   const [extraInventoryByRoomId, setExtraInventoryByRoomId] = useState<Record<string, ExtraInventoryItem>>({});
   const [hourlyHours, setHourlyHours] = useState(2);
   const [addOnSaleDate, setAddOnSaleDate] = useState(() => formatDateInput(new Date()));
@@ -1245,6 +1246,7 @@ export function BookingPanel() {
   const extraInventoryPricingEnabled = extraInventoryCount > 0;
   const availableExtraGuestTypes = getAvailableExtraGuestTypes(guestAdults, guestTeenagers, guestChildren);
   const extraInventoryCatalogItems = useMemo(() => buildExtraInventoryCatalogItems(inventoryCustomFields), [inventoryCustomFields]);
+  const activeExtraInventoryCatalogItem = extraInventoryCatalogItems.find((item) => item.id === extraInventoryPickerItemId) ?? extraInventoryCatalogItems[0] ?? null;
   const bookingTotals = calculateBookingTotalsWithRoomDates(
     proposalRooms,
     checkIn,
@@ -1290,6 +1292,7 @@ export function BookingPanel() {
       if (!target) return;
       if (target.closest(".gpb-card-extra-menu") || target.closest("[data-gpb-extra-picker-toggle='true']")) return;
       setExtraInventoryPickerRoomId("");
+      setExtraInventoryPickerItemId("");
     }
     document.addEventListener("pointerdown", closeExtraInventoryPicker, true);
     document.addEventListener("mousedown", closeExtraInventoryPicker, true);
@@ -1298,6 +1301,19 @@ export function BookingPanel() {
       document.removeEventListener("mousedown", closeExtraInventoryPicker, true);
     };
   }, [extraInventoryPickerRoomId]);
+
+  useEffect(() => {
+    if (!extraInventoryPickerRoomId) return;
+    if (!extraInventoryCatalogItems.length) {
+      setExtraInventoryPickerItemId("");
+      return;
+    }
+    setExtraInventoryPickerItemId((currentId) =>
+      currentId && extraInventoryCatalogItems.some((item) => item.id === currentId)
+        ? currentId
+        : extraInventoryCatalogItems[0].id
+    );
+  }, [extraInventoryCatalogItems, extraInventoryPickerRoomId]);
 
   useEffect(() => {
     adminCommentValueRef.current = adminComment;
@@ -6378,7 +6394,11 @@ export function BookingPanel() {
                           type="button"
                           onClick={(event) => {
                             event.stopPropagation();
-                            setExtraInventoryPickerRoomId((currentId) => currentId === room.id ? "" : room.id);
+                            setExtraInventoryPickerRoomId((currentId) => {
+                              const nextId = currentId === room.id ? "" : room.id;
+                              setExtraInventoryPickerItemId(nextId ? extraInventoryCatalogItems[0]?.id ?? "" : "");
+                              return nextId;
+                            });
                           }}
                         >
                           <Plus size={17} />
@@ -6411,18 +6431,29 @@ export function BookingPanel() {
                         </button>
                         {extraInventoryPickerRoomId === room.id ? (
                           <span className="gpb-card-extra-menu" onClick={(event) => event.stopPropagation()}>
-                            {availableExtraGuestTypes.length && extraInventoryCatalogItems.length ? extraInventoryCatalogItems.map((item) => (
-                              <span className="gpb-card-extra-menu-group" key={item.id}>
-                                <b>{item.label}</b>
+                            {availableExtraGuestTypes.length && extraInventoryCatalogItems.length && activeExtraInventoryCatalogItem ? (
+                              <>
+                                <span className="gpb-card-extra-items-list">
+                                  {extraInventoryCatalogItems.map((item) => (
+                                    <button
+                                      className={item.id === activeExtraInventoryCatalogItem.id ? "is-active" : ""}
+                                      type="button"
+                                      key={item.id}
+                                      onClick={() => setExtraInventoryPickerItemId(item.id)}
+                                    >
+                                      {item.label}
+                                    </button>
+                                  ))}
+                                </span>
                                 <span className="gpb-card-extra-guest-list">
                                   {availableExtraGuestTypes.map((guestType) => (
-                                    <button type="button" key={`${item.id}-${guestType}`} onClick={() => addExtraInventoryFromCard(room.id, item, guestType)}>
+                                    <button type="button" key={`${activeExtraInventoryCatalogItem.id}-${guestType}`} onClick={() => addExtraInventoryFromCard(room.id, activeExtraInventoryCatalogItem, guestType)}>
                                       {getExtraGuestTypeLabel(guestType)}
                                     </button>
                                   ))}
                                 </span>
-                              </span>
-                            )) : (
+                              </>
+                            ) : (
                               <span className="gpb-card-extra-empty">{availableExtraGuestTypes.length ? "Создайте допместа в настройках" : "Сначала укажите гостей"}</span>
                             )}
                           </span>

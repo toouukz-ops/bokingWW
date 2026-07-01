@@ -1032,9 +1032,9 @@ body.gpb-booking-panel-open #app {
 
 .gpb-card-extra-badge-popover {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% - 1px);
   left: 0;
-  display: none;
+  display: grid;
   gap: 3px;
   width: max-content;
   max-width: min(190px, calc(100vw - 48px));
@@ -1044,12 +1044,24 @@ body.gpb-booking-panel-open #app {
   background: rgba(15, 107, 87, 0.96);
   color: #ffffff;
   box-shadow: 0 6px 16px rgba(15, 32, 43, 0.24);
+  opacity: 0;
   padding: 5px;
+  pointer-events: none;
+  transform: translateY(3px);
+  transition:
+    opacity 120ms ease 260ms,
+    transform 120ms ease 260ms,
+    visibility 0s linear 380ms;
+  visibility: hidden;
 }
 
 .gpb-card-extra-badge:hover .gpb-card-extra-badge-popover,
 .gpb-card-extra-badge:focus-within .gpb-card-extra-badge-popover {
-  display: grid;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition-delay: 0s;
+  visibility: visible;
 }
 
 .gpb-card-date-badge {

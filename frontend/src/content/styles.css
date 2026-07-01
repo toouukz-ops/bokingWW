@@ -1009,7 +1009,7 @@ body.gpb-booking-panel-open #app {
   position: absolute;
   top: 6px;
   left: 6px;
-  z-index: 8;
+  z-index: 3;
   display: inline-flex;
   align-items: flex-start;
   max-width: calc(100% - 12px);
@@ -1852,7 +1852,7 @@ body.gpb-booking-panel-open #app {
   pointer-events: none;
   text-shadow: 0 1px 1px rgb(0 0 0 / 22%);
   box-shadow: 0 5px 14px rgb(0 0 0 / 24%);
-  z-index: 2;
+  z-index: 7;
 }
 
 .gpb-room-hold-badge.is-other {
@@ -1869,7 +1869,7 @@ body.gpb-booking-panel-open #app {
   justify-content: space-between;
   gap: 6px;
   pointer-events: none;
-  z-index: 2;
+  z-index: 7;
 }
 
 .gpb-room-reserved-date-badges span {

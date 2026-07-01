@@ -2846,7 +2846,7 @@ export function BookingPanel() {
   }
 
   useEffect(() => {
-    setSelectedRoomId((currentId) => rooms.some((room) => room.id === currentId) ? currentId : availableRooms[0]?.id || "");
+    setSelectedRoomId((currentId) => rooms.some((room) => room.id === currentId) ? currentId : "");
     setSelectedBookingRoomIds((currentIds) => currentIds.filter((roomId) => rooms.some((room) => room.id === roomId)));
   }, [availableRooms, rooms]);
 
@@ -2856,7 +2856,7 @@ export function BookingPanel() {
     setSelectedRoomId((currentId) =>
       visibleIds.has(currentId) || activeReservationRoomIds.has(currentId)
         ? currentId
-        : catalogPanelRooms[0]?.id || ""
+        : ""
     );
     setSelectedBookingRoomIds((currentIds) => currentIds.filter((roomId) => visibleIds.has(roomId) || activeReservationRoomIds.has(roomId)));
   }, [catalogPanelRooms, lastReservation]);

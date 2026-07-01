@@ -21654,8 +21654,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
       ...(hasCustomDates ? [
       `| Заезд: ${formatKazakhDate(item.checkIn)} ${item.checkInTime || reservation.checkInTime}`,
         `| Выезд: ${formatKazakhDate(item.checkOut)} ${item.checkOutTime || reservation.checkOutTime}`
-      ] : []),
-      `| Сутки: ${getNightsCount(item.checkIn, item.checkOut)}`
+      ] : [])
     ];
     return [
       `*${roomTitleParts.join(" | ")}*`,
@@ -21714,7 +21713,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     hourlyRoomTotal > 0 ? `| Сауна с бассейном: ${formatPrice(hourlyRoomTotal)}` : "",
     `| Сумма: ${formatPrice(reservation.subtotal)}`,
     reservation.discountPercent && reservation.discountAmount > 0 ? `| Скидка: ${reservation.discountPercent}% (${formatPrice(reservation.discountAmount)})` : "",
-    `*| Сумма со скидкой: ${formatPrice(reservation.total)}*`,
+    reservation.discountPercent && reservation.discountAmount > 0 ? `*| Сумма со скидкой: ${formatPrice(reservation.total)}*` : "",
     averagePerPersonLine
   ].filter(Boolean).join("\n");
   const extraBed = reservation.extraBed && !extraInventoryTotalCount ? "\nДоп. кровать: по согласованию включена" : "";
@@ -21799,7 +21798,7 @@ function formatReservationRoomDailyPriceLine(room: Room, item: ReservationItem) 
       })
       .filter(Boolean);
 
-    return `| Цена за сутки: ${compactGroups.join(" / ")}`;
+    return `| Цена за сутки:\n${compactGroups.join(" / ")}`;
   }
 
   const { checkIn, checkOut } = item;
@@ -21835,7 +21834,7 @@ function formatReservationRoomDailyPriceLine(room: Room, item: ReservationItem) 
     })
     .filter(Boolean);
 
-  return `| Цена за сутки: ${compactGroups.join(" / ")}`;
+  return `| Цена за сутки:\n${compactGroups.join(" / ")}`;
 }
 
 function buildReservationTotalMessage(reservation: Reservation, rooms: Room[]) {
@@ -21864,7 +21863,7 @@ function buildReservationTotalMessage(reservation: Reservation, rooms: Room[]) {
     ...(sleepingPlaceTotal > 0 ? [`| Спальных мест: ${sleepingPlaceTotal}`] : []),
     `| Сумма: ${formatPrice(reservation.subtotal)}`,
     ...(discountLine ? [discountLine] : []),
-    `*| Сумма со скидкой: ${formatPrice(reservation.total)}*`,
+    ...(discountLine ? [`*| Сумма со скидкой: ${formatPrice(reservation.total)}*`] : []),
     ...(averagePerPersonLine ? [averagePerPersonLine] : []),
     "",
     `*${fullPaymentMode ? "К оплате 100%" : "Предоплата 50%"}: ${formatPrice(reservation.prepayment)}*`,

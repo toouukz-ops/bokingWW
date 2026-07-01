@@ -2666,9 +2666,6 @@ export function BookingPanel() {
     setExtraInventoryManual(Boolean(draft.extraInventoryManual));
     setExtraInventoryByRoomId(draft.extraInventoryByRoomId ?? buildExtraInventoryMapFromDraft(draft));
     if (typeof draft.inventoryExtraPlacePrice === "number") setInventoryExtraPlacePrice(draft.inventoryExtraPlacePrice);
-    if (typeof draft.inventoryExtraPlaceAdultPercent === "number") setInventoryExtraPlaceAdultPercent(draft.inventoryExtraPlaceAdultPercent);
-    if (typeof draft.inventoryExtraPlaceTeenPercent === "number") setInventoryExtraPlaceTeenPercent(draft.inventoryExtraPlaceTeenPercent);
-    if (typeof draft.inventoryExtraPlaceChildPercent === "number") setInventoryExtraPlaceChildPercent(draft.inventoryExtraPlaceChildPercent);
     setHourlyHours(Math.max(2, draft.hourlyHours ?? 2));
     const isLegacyAutoPeriodDiscount = draft.periodDiscountEnabled === undefined &&
       !draft.packageDiscountEnabled &&
@@ -4247,22 +4244,16 @@ export function BookingPanel() {
     }));
   }
 
-  async function handleInventorySettingsChange(nextSettings: { airBedPrice: number; airBeds: number; extraPlaceAdultPercent: number; extraPlaceTeenPercent: number; extraPlaceChildPercent: number; rollawayPrice: number; rollaways: number }) {
+  async function handleInventorySettingsChange(nextSettings: { airBedPrice: number; airBeds: number; rollawayPrice: number; rollaways: number }) {
     setInventoryAirBeds(nextSettings.airBeds);
     setInventoryRollaways(nextSettings.rollaways);
     setInventoryAirBedPrice(nextSettings.airBedPrice);
     setInventoryRollawayPrice(nextSettings.rollawayPrice);
-    setInventoryExtraPlaceAdultPercent(nextSettings.extraPlaceAdultPercent);
-    setInventoryExtraPlaceTeenPercent(nextSettings.extraPlaceTeenPercent);
-    setInventoryExtraPlaceChildPercent(nextSettings.extraPlaceChildPercent);
     await savePaymentSettings(buildPaymentSettingsPatch({
       inventoryAirBeds: nextSettings.airBeds,
       inventoryRollaways: nextSettings.rollaways,
       inventoryAirBedPrice: nextSettings.airBedPrice,
-      inventoryRollawayPrice: nextSettings.rollawayPrice,
-      inventoryExtraPlaceAdultPercent: nextSettings.extraPlaceAdultPercent,
-      inventoryExtraPlaceTeenPercent: nextSettings.extraPlaceTeenPercent,
-      inventoryExtraPlaceChildPercent: nextSettings.extraPlaceChildPercent
+      inventoryRollawayPrice: nextSettings.rollawayPrice
     }));
   }
 
@@ -10922,7 +10913,7 @@ function SettingsModal({
   onPaymentMethodDelete: (methodId: string) => void;
   onPaymentSettingsSave: () => void;
   onWeatherSettingsChange: (settings: { name: string; latitude: number; longitude: number }) => void;
-  onInventorySettingsChange: (settings: { airBedPrice: number; airBeds: number; extraPlaceAdultPercent: number; extraPlaceTeenPercent: number; extraPlaceChildPercent: number; rollawayPrice: number; rollaways: number }) => void;
+  onInventorySettingsChange: (settings: { airBedPrice: number; airBeds: number; rollawayPrice: number; rollaways: number }) => void;
   onIncludedCardPagesChange: (pages: IncludedCardPage[]) => void;
   onInventoryCustomFieldChange: (fieldId: string, value: string) => void;
   onInventoryCustomFieldDelete: (fieldId: string) => void;
@@ -11017,6 +11008,18 @@ function SettingsModal({
   }, [operatorName]);
 
   useEffect(() => {
+    setLocalExtraPlaceAdultPercent(String(inventoryExtraPlaceAdultPercent));
+  }, [inventoryExtraPlaceAdultPercent]);
+
+  useEffect(() => {
+    setLocalExtraPlaceTeenPercent(String(inventoryExtraPlaceTeenPercent));
+  }, [inventoryExtraPlaceTeenPercent]);
+
+  useEffect(() => {
+    setLocalExtraPlaceChildPercent(String(inventoryExtraPlaceChildPercent));
+  }, [inventoryExtraPlaceChildPercent]);
+
+  useEffect(() => {
     if (activeSettingsSection !== "dialogs") return;
     if (savedChatDialogStatus === "idle") {
       void loadSavedChatDialogs();
@@ -11095,10 +11098,7 @@ function SettingsModal({
       airBeds: toNumber(localAirBeds, inventoryAirBeds),
       rollaways: toNumber(localRollaways, inventoryRollaways),
       airBedPrice: parsePriceInput(localAirBedPrice),
-      rollawayPrice: parsePriceInput(localRollawayPrice),
-      extraPlaceAdultPercent: clampNumber(toNumber(localExtraPlaceAdultPercent, inventoryExtraPlaceAdultPercent), 0, 300),
-      extraPlaceTeenPercent: clampNumber(toNumber(localExtraPlaceTeenPercent, inventoryExtraPlaceTeenPercent), 0, 300),
-      extraPlaceChildPercent: clampNumber(toNumber(localExtraPlaceChildPercent, inventoryExtraPlaceChildPercent), 0, 300)
+      rollawayPrice: parsePriceInput(localRollawayPrice)
     });
   }
 
@@ -20872,6 +20872,10 @@ function isReservationActiveOccupancy(reservation: Pick<Reservation, "status" | 
   return reservation.status === "booked" && !isReservationCheckedOut(reservation);
 }
 
+function isReservationBlockingExtraInventory(reservation: Pick<Reservation, "status" | "checkedInAt" | "checkedOutAt" | "checkOut" | "checkOutTime">) {
+  return (reservation.status === "booked" || reservation.status === "pending") && !isReservationCheckedOut(reservation);
+}
+
 function isBookingPanelActiveReservation(reservation: Pick<Reservation, "status" | "checkedInAt" | "checkedOutAt" | "checkOut" | "checkOutTime"> | null | undefined) {
   return Boolean(reservation?.status === "booked" && !isReservationCheckedOut(reservation) && !isReservationPastStay(reservation));
 }
@@ -21056,7 +21060,7 @@ function getAvailableExtraInventory(
   const configured = getConfiguredRoomInventoryCounts(rooms);
   const used = reservations
     .filter((reservation) =>
-      isReservationActiveOccupancy(reservation) &&
+      isReservationBlockingExtraInventory(reservation) &&
       dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
     )
     .reduce((sum, reservation) => {

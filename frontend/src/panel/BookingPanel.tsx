@@ -261,8 +261,7 @@ const DEFAULT_PRICE_PDF_SUMMARY_OPTIONS: PricePdfSummaryOptionKey[] = [
 
 const DEFAULT_EXTRA_INVENTORY_TYPES: ExtraInventoryCatalogItem[] = [
   { id: "air-bed", label: "Надувной матрас" },
-  { id: "rollaway", label: "Раскладушка" },
-  { id: "sofa", label: "Диван" }
+  { id: "rollaway", label: "Раскладушка" }
 ];
 
 function isPricePdfSummaryOptionKey(value: string): value is PricePdfSummaryOptionKey {
@@ -1246,7 +1245,7 @@ export function BookingPanel() {
   );
   const hasHourlyBookingObject = proposalRooms.some(isHourlyBookingObject);
   const extraInventoryCount = getExtraInventoryTotalCount(extraInventoryByRoomId);
-  const extraInventoryCatalogItems = useMemo(() => buildExtraInventoryCatalogItems(inventoryCustomFields), [inventoryCustomFields]);
+  const availableExtraGuestTypes = getAvailableExtraGuestTypes(guestAdults, guestTeenagers, guestChildren);
   const bookingTotals = calculateBookingTotalsWithRoomDates(
     proposalRooms,
     checkIn,
@@ -1284,6 +1283,22 @@ export function BookingPanel() {
       stopAutoSendGuard();
     };
   }, []);
+
+  useEffect(() => {
+    if (!extraInventoryPickerRoomId) return;
+    function closeExtraInventoryPicker(event: PointerEvent | MouseEvent) {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target) return;
+      if (target.closest(".gpb-card-extra-menu") || target.closest("[data-gpb-extra-picker-toggle='true']")) return;
+      setExtraInventoryPickerRoomId("");
+    }
+    document.addEventListener("pointerdown", closeExtraInventoryPicker, true);
+    document.addEventListener("mousedown", closeExtraInventoryPicker, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeExtraInventoryPicker, true);
+      document.removeEventListener("mousedown", closeExtraInventoryPicker, true);
+    };
+  }, [extraInventoryPickerRoomId]);
 
   useEffect(() => {
     adminCommentValueRef.current = adminComment;
@@ -6231,6 +6246,7 @@ export function BookingPanel() {
                   {catalogPanelRooms.map((room) => {
                     const roomIsReserved = !isHourlyBookingObject(room) && isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations);
                     const roomReservationConflict = findRoomReservedReservation(room, checkIn, checkOut, reservations);
+                    const roomExtraInventoryCatalogItems = buildRoomExtraInventoryCatalogItems(room);
                     return (
                     <button
                       className={[
@@ -6351,6 +6367,7 @@ export function BookingPanel() {
                           aria-label="Добавить допместо"
                           disabled={isBookingLocked}
                           title="Добавить допместо"
+                          data-gpb-extra-picker-toggle="true"
                           type="button"
                           onClick={(event) => {
                             event.stopPropagation();
@@ -6387,16 +6404,20 @@ export function BookingPanel() {
                         </button>
                         {extraInventoryPickerRoomId === room.id ? (
                           <span className="gpb-card-extra-menu" onClick={(event) => event.stopPropagation()}>
-                            {extraInventoryCatalogItems.map((item) => (
+                            {availableExtraGuestTypes.length ? roomExtraInventoryCatalogItems.map((item) => (
                               <span className="gpb-card-extra-menu-group" key={item.id}>
                                 <b>{item.label}</b>
-                                {(["adult", "teen", "child"] as ExtraGuestType[]).map((guestType) => (
-                                  <button type="button" key={`${item.id}-${guestType}`} onClick={() => addExtraInventoryFromCard(room.id, item, guestType)}>
-                                    {getExtraGuestTypeLabel(guestType)}
-                                  </button>
-                                ))}
+                                <span className="gpb-card-extra-guest-list">
+                                  {availableExtraGuestTypes.map((guestType) => (
+                                    <button type="button" key={`${item.id}-${guestType}`} onClick={() => addExtraInventoryFromCard(room.id, item, guestType)}>
+                                      {getExtraGuestTypeLabel(guestType)}
+                                    </button>
+                                  ))}
+                                </span>
                               </span>
-                            ))}
+                            )) : (
+                              <span className="gpb-card-extra-empty">Сначала укажите гостей</span>
+                            )}
                           </span>
                         ) : null}
                       </span>
@@ -11646,7 +11667,7 @@ function SettingsModal({
                   <BedDouble size={20} />
                   <h2>Доп. инвентарь</h2>
                 </div>
-                <p className="gpb-settings-note">Матрас, раскладушка, диван и другие предметы - это только что поставить в номер. Стоимость считается за дополнительного гостя.</p>
+                <p className="gpb-settings-note">Матрас и раскладушка - общий переносной склад. Диван, софа или тахта задаются в настройках конкретного номера как неосновное спальное место.</p>
                 <div className="gpb-default-time-settings">
                   <label>
                     Надувные матрасы
@@ -11669,16 +11690,9 @@ function SettingsModal({
                     <input min="0" type="number" value={localExtraPlaceChildPercent} onChange={(event) => setLocalExtraPlaceChildPercent(event.target.value)} />
                   </label>
                 </div>
-                <p className="gpb-settings-note">Кнопка «Создать новое поле» добавляет новый тип допместа: диван, софа, тахта и т.д.</p>
-                <EditableSettingsFields
-                  fields={inventoryCustomFields}
-                  onChange={onInventoryCustomFieldChange}
-                  onDelete={onInventoryCustomFieldDelete}
-                />
+                <p className="gpb-settings-note">Стоимость допместа считается по категории гостя: взрослый, подросток или ребенок. Сам предмет только показывает, что поставить в номер.</p>
+                <p className="gpb-settings-note">Если в номере есть диван или другое место, добавьте его в настройках этого номера. В карточке брони оно появится только для этого номера.</p>
                 <div className="gpb-settings-panel-actions">
-                  <button className="gpb-settings-add-button" type="button" onClick={addInventoryField}>
-                    Создать новое поле
-                  </button>
                   <button className="gpb-primary" type="button" onClick={saveInventorySettings}>Сохранить инвентарь</button>
                 </div>
               </section>
@@ -18899,17 +18913,46 @@ function getExtraInventoryPlacements(item?: ExtraInventoryItem): ExtraInventoryP
   ];
 }
 
-function buildExtraInventoryCatalogItems(customFields: Record<string, string>): ExtraInventoryCatalogItem[] {
-  const customItems = Object.entries(customFields)
-    .map(([id, value]) => ({ id, label: normalizeExtractedText(value || id) }))
-    .filter((item) => item.id && item.label);
+function buildRoomExtraInventoryCatalogItems(room: Room): ExtraInventoryCatalogItem[] {
   const byId = new Map<string, ExtraInventoryCatalogItem>();
-  DEFAULT_EXTRA_INVENTORY_TYPES.concat(customItems).forEach((item) => byId.set(item.id, item));
+  DEFAULT_EXTRA_INVENTORY_TYPES.forEach((item) => byId.set(item.id, item));
+  getRoomSpecificExtraInventoryItems(room).forEach((item) => byId.set(item.id, item));
   return Array.from(byId.values());
 }
 
 function getExtraInventoryTypeLabel(typeId: string) {
   return DEFAULT_EXTRA_INVENTORY_TYPES.find((item) => item.id === typeId)?.label || "";
+}
+
+function getRoomSpecificExtraInventoryItems(room: Room): ExtraInventoryCatalogItem[] {
+  const items: ExtraInventoryCatalogItem[] = [];
+  room.sleepingPlaces.forEach((place) => {
+    if (!isRoomSpecificExtraInventoryPlace(place)) return;
+    const label = getSleepingPlaceTitle(place);
+    if (!label) return;
+    items.push({
+      id: `room-${room.id}-${place.id}`,
+      label
+    });
+  });
+  return items;
+}
+
+function isRoomSpecificExtraInventoryPlace(place: SleepingPlace) {
+  if (place.count <= 0) return false;
+  if (place.isMain) return false;
+  const title = normalizeExtractedText(getSleepingPlaceTitle(place)).toLowerCase();
+  const isSofaLike = place.type === "sofa" || place.type === "sofa-bed" || place.type === "fixed-sofa" || /диван|софа|тахта|кушет|канап/.test(title);
+  const isCustomExtra = place.type === "custom" && /доп|диван|софа|тахта|кушет|канап/.test(title);
+  return isSofaLike || isCustomExtra;
+}
+
+function getAvailableExtraGuestTypes(adults: number, teenagers: number, children: number): ExtraGuestType[] {
+  const types: ExtraGuestType[] = [];
+  if (adults > 0) types.push("adult");
+  if (teenagers > 0) types.push("teen");
+  if (children > 0) types.push("child");
+  return types;
 }
 
 function getExtraGuestTypeLabel(type: ExtraGuestType) {

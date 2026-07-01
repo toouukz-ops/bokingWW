@@ -6423,7 +6423,7 @@ export function BookingPanel() {
                                 <span className="gpb-card-extra-items-list">
                                   {extraInventoryCatalogItems.map((item) => (
                                     <button
-                                      className={item.id === activeExtraInventoryCatalogItem.id ? "is-active" : ""}
+                                      className={item.id === extraInventoryPickerItemId ? "is-active" : ""}
                                       type="button"
                                       key={item.id}
                                       onClick={() => setExtraInventoryPickerItemId(item.id)}

@@ -494,6 +494,13 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
       const inventoryCustomFields = settings?.inventoryCustomFields && typeof settings.inventoryCustomFields === "object" && !Array.isArray(settings.inventoryCustomFields)
         ? settings.inventoryCustomFields
         : {};
+      const inventoryCustomCounts = settings?.inventoryCustomCounts && typeof settings.inventoryCustomCounts === "object" && !Array.isArray(settings.inventoryCustomCounts)
+        ? Object.fromEntries(
+          Object.entries(settings.inventoryCustomCounts)
+            .map(([key, value]) => [key, typeof value === "number" ? Math.max(0, Math.round(value)) : Number.parseInt(String(value), 10)])
+            .filter((entry): entry is [string, number] => typeof entry[0] === "string" && Number.isFinite(entry[1]) && entry[1] >= 0)
+        )
+        : {};
       const packageCustomFields = settings?.packageCustomFields && typeof settings.packageCustomFields === "object" && !Array.isArray(settings.packageCustomFields)
         ? settings.packageCustomFields
         : {};
@@ -580,6 +587,7 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
         inventoryExtraPlaceTeenPercent: typeof settings?.inventoryExtraPlaceTeenPercent === "number" ? settings.inventoryExtraPlaceTeenPercent : 50,
         inventoryExtraPlaceChildPercent: typeof settings?.inventoryExtraPlaceChildPercent === "number" ? settings.inventoryExtraPlaceChildPercent : 0,
         inventoryCustomFields,
+        inventoryCustomCounts,
         packageDiscountPercent: typeof settings?.packageDiscountPercent === "number" ? settings.packageDiscountPercent : 0,
         packagePeriodDiscountPercent: typeof settings?.packagePeriodDiscountPercent === "number" ? settings.packagePeriodDiscountPercent : 0,
         packagePeriodDiscountFrom: typeof settings?.packagePeriodDiscountFrom === "string" ? settings.packagePeriodDiscountFrom : "",
@@ -903,6 +911,7 @@ function mergeSettings(currentValue: unknown, incomingValue: unknown) {
     customHolidayDates: mergeStringArrays(currentValue.customHolidayDates, incomingValue.customHolidayDates),
     customSleepingPlaceOptions: mergeStringArrays(currentValue.customSleepingPlaceOptions, incomingValue.customSleepingPlaceOptions),
     inventoryCustomFields: mergeRecords(currentValue.inventoryCustomFields, incomingValue.inventoryCustomFields),
+    inventoryCustomCounts: mergeRecords(currentValue.inventoryCustomCounts, incomingValue.inventoryCustomCounts),
     linkMethods: mergeRecords(currentValue.linkMethods, incomingValue.linkMethods),
     objectGalleryPhotoDescriptions: mergeRecords(currentValue.objectGalleryPhotoDescriptions, incomingValue.objectGalleryPhotoDescriptions),
     objectGalleryPhotoPaths: mergeStringArrays(currentValue.objectGalleryPhotoPaths, incomingValue.objectGalleryPhotoPaths),

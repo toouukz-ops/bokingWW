@@ -1037,7 +1037,9 @@ body.gpb-booking-panel-open #app {
   display: none;
   gap: 3px;
   width: max-content;
-  max-width: min(230px, calc(100vw - 48px));
+  max-width: min(190px, calc(100vw - 48px));
+  max-height: 92px;
+  overflow: auto;
   border-radius: 8px;
   background: rgba(15, 107, 87, 0.96);
   color: #ffffff;
@@ -1088,12 +1090,13 @@ body.gpb-booking-panel-open #app {
   grid-template-columns: minmax(0, 1fr) 18px;
   align-items: center;
   gap: 4px;
+  width: 100%;
   min-width: 0;
 }
 
 .gpb-card-extra-badge-row span {
   overflow: hidden;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 900;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -6161,6 +6164,10 @@ body.gpb-booking-panel-open #app {
 
 .gpb-payment-method-row.has-actions {
   grid-template-columns: minmax(0, 1fr) 38px;
+}
+
+.gpb-payment-method-row.has-actions.has-count {
+  grid-template-columns: minmax(0, 1.35fr) minmax(92px, 0.65fr) 38px;
 }
 
 .gpb-payment-method-row span {

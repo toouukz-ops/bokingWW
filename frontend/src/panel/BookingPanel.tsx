@@ -945,6 +945,7 @@ export function BookingPanel() {
   const [inventoryExtraPlaceTeenPercent, setInventoryExtraPlaceTeenPercent] = useState(50);
   const [inventoryExtraPlaceChildPercent, setInventoryExtraPlaceChildPercent] = useState(0);
   const [inventoryCustomFields, setInventoryCustomFields] = useState<Record<string, string>>({});
+  const [inventoryCustomCounts, setInventoryCustomCounts] = useState<Record<string, number>>({});
   const [packageDiscountPercent, setPackageDiscountPercent] = useState(0);
   const [packagePeriodDiscountPercent, setPackagePeriodDiscountPercent] = useState(0);
   const [packagePeriodDiscountFrom, setPackagePeriodDiscountFrom] = useState("");
@@ -1066,8 +1067,8 @@ export function BookingPanel() {
     [checkIn, checkOut, checkInTime, checkOutTime, pricedRooms, reservations]
   );
   const availableExtraInventory = useMemo(
-    () => getAvailableExtraInventory(reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms),
-    [checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms, reservations]
+    () => getAvailableExtraInventory(reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms, inventoryCustomCounts),
+    [checkIn, checkOut, inventoryAirBeds, inventoryCustomCounts, inventoryRollaways, pricedRooms, reservations]
   );
   const visibleAvailableRooms = useMemo(
     () => availableRooms,
@@ -2165,6 +2166,7 @@ export function BookingPanel() {
     setInventoryExtraPlaceTeenPercent(settings.inventoryExtraPlaceTeenPercent);
     setInventoryExtraPlaceChildPercent(settings.inventoryExtraPlaceChildPercent);
     setInventoryCustomFields(settings.inventoryCustomFields);
+    setInventoryCustomCounts(settings.inventoryCustomCounts);
     setPackageDiscountPercent(settings.packageDiscountPercent);
     setPackagePeriodDiscountPercent(settings.packagePeriodDiscountPercent);
     setPackagePeriodDiscountFrom(settings.packagePeriodDiscountFrom);
@@ -2217,6 +2219,7 @@ export function BookingPanel() {
       inventoryExtraPlaceTeenPercent,
       inventoryExtraPlaceChildPercent,
       inventoryCustomFields,
+      inventoryCustomCounts,
       packageDiscountPercent,
       packagePeriodDiscountPercent,
       packagePeriodDiscountFrom,
@@ -3842,13 +3845,11 @@ export function BookingPanel() {
   }
 
   function addExtraInventoryFromCard(roomId: string, catalogItem: ExtraInventoryCatalogItem, guestType: ExtraGuestType) {
-    if (catalogItem.id === "air-bed" || catalogItem.id === "rollaway") {
-      const availableCount = catalogItem.id === "rollaway" ? availableExtraInventory.rollaways : availableExtraInventory.airBeds;
-      const currentCount = catalogItem.id === "rollaway" ? rollawayCount : airMattressCount;
-      if (currentCount >= availableCount) {
-        setExtraInventoryPickerRoomId("");
-        return;
-      }
+    const availableCount = getAvailableExtraInventoryCount(availableExtraInventory, catalogItem.id);
+    const currentCount = Object.values(extraInventoryByRoomId).flatMap((item) => getExtraInventoryPlacements(item)).filter((item) => item.typeId === catalogItem.id).length;
+    if (currentCount >= availableCount) {
+      setExtraInventoryPickerRoomId("");
+      return;
     }
 
     if (!canAddExtraPlaceToRoom(roomId, extraInventoryByRoomId, pricedRooms)) {
@@ -4270,10 +4271,18 @@ export function BookingPanel() {
     await savePaymentSettings(buildPaymentSettingsPatch({ inventoryCustomFields: nextFields }));
   }
 
+  async function handleInventoryCustomCountChange(fieldId: string, value: number) {
+    const nextCounts = { ...inventoryCustomCounts, [fieldId]: Math.max(0, Math.round(value)) };
+    setInventoryCustomCounts(nextCounts);
+    await savePaymentSettings(buildPaymentSettingsPatch({ inventoryCustomCounts: nextCounts }));
+  }
+
   async function handleInventoryCustomFieldDelete(fieldId: string) {
     const nextFields = removeRecordKey(inventoryCustomFields, fieldId);
+    const nextCounts = removeRecordKey(inventoryCustomCounts, fieldId);
     setInventoryCustomFields(nextFields);
-    await savePaymentSettings(buildPaymentSettingsPatch({ inventoryCustomFields: nextFields }));
+    setInventoryCustomCounts(nextCounts);
+    await savePaymentSettings(buildPaymentSettingsPatch({ inventoryCustomFields: nextFields, inventoryCustomCounts: nextCounts }));
   }
 
   async function handlePackageSettingsChange(nextSettings: {
@@ -7379,6 +7388,7 @@ export function BookingPanel() {
           inventoryExtraPlaceTeenPercent={inventoryExtraPlaceTeenPercent}
           inventoryExtraPlaceChildPercent={inventoryExtraPlaceChildPercent}
           inventoryCustomFields={inventoryCustomFields}
+          inventoryCustomCounts={inventoryCustomCounts}
           packageDiscountPercent={packageDiscountPercent}
           packagePeriodDiscountPercent={packagePeriodDiscountPercent}
           packagePeriodDiscountFrom={packagePeriodDiscountFrom}
@@ -7422,6 +7432,7 @@ export function BookingPanel() {
           onInventorySettingsChange={handleInventorySettingsChange}
           onIncludedCardPagesChange={(pages) => void handleIncludedCardPagesChange(pages)}
           onInventoryCustomFieldChange={handleInventoryCustomFieldChange}
+          onInventoryCustomCountChange={handleInventoryCustomCountChange}
           onInventoryCustomFieldDelete={handleInventoryCustomFieldDelete}
           onPackageSettingsChange={handlePackageSettingsChange}
           onPackageCustomFieldChange={handlePackageCustomFieldChange}
@@ -10805,6 +10816,7 @@ function SettingsModal({
   inventoryExtraPlaceTeenPercent,
   inventoryExtraPlaceChildPercent,
   inventoryCustomFields,
+  inventoryCustomCounts,
   packageDiscountPercent,
   packagePeriodDiscountPercent,
   packagePeriodDiscountFrom,
@@ -10848,6 +10860,7 @@ function SettingsModal({
   onInventorySettingsChange,
   onIncludedCardPagesChange,
   onInventoryCustomFieldChange,
+  onInventoryCustomCountChange,
   onInventoryCustomFieldDelete,
   onPackageSettingsChange,
   onPackageCustomFieldChange,
@@ -10880,6 +10893,7 @@ function SettingsModal({
   inventoryExtraPlaceTeenPercent: number;
   inventoryExtraPlaceChildPercent: number;
   inventoryCustomFields: Record<string, string>;
+  inventoryCustomCounts: Record<string, number>;
   packageDiscountPercent: number;
   packagePeriodDiscountPercent: number;
   packagePeriodDiscountFrom: string;
@@ -10923,6 +10937,7 @@ function SettingsModal({
   onInventorySettingsChange: (settings: { airBedPrice: number; airBeds: number; rollawayPrice: number; rollaways: number }) => void;
   onIncludedCardPagesChange: (pages: IncludedCardPage[]) => void;
   onInventoryCustomFieldChange: (fieldId: string, value: string) => void;
+  onInventoryCustomCountChange: (fieldId: string, value: number) => void;
   onInventoryCustomFieldDelete: (fieldId: string) => void;
   onPackageSettingsChange: (settings: {
     discountPercent: number;
@@ -11708,7 +11723,9 @@ function SettingsModal({
                 <p className="gpb-settings-note">Создайте здесь позиции, которые оператор выбирает в карточке номера по кнопке «+»: диван, матрас, раскладушка, софа и т.д.</p>
                 <EditableSettingsFields
                   fields={inventoryCustomFields}
+                  counts={inventoryCustomCounts}
                   onChange={onInventoryCustomFieldChange}
+                  onCountChange={onInventoryCustomCountChange}
                   onDelete={onInventoryCustomFieldDelete}
                 />
                 <p className="gpb-settings-note">Стоимость включается автоматически, когда допместо добавлено в бронь. Проценты расчета задаются в разделе «Прайс / пакет».</p>
@@ -11926,12 +11943,16 @@ function CreateCustomFieldOverlay({
 }
 
 function EditableSettingsFields({
+  counts,
   fields,
   onChange,
+  onCountChange,
   onDelete
 }: {
+  counts?: Record<string, number>;
   fields: Record<string, string>;
   onChange: (fieldId: string, value: string) => void;
+  onCountChange?: (fieldId: string, value: number) => void;
   onDelete: (fieldId: string) => void;
 }) {
   const entries = Object.entries(fields);
@@ -11940,13 +11961,23 @@ function EditableSettingsFields({
   return (
     <div className="gpb-custom-settings-fields">
       {entries.map(([fieldId, value]) => (
-        <label className="gpb-payment-method-row has-actions" key={fieldId}>
+        <label className={`gpb-payment-method-row has-actions ${onCountChange ? "has-count" : ""}`} key={fieldId}>
           <span>{fieldId}</span>
           <input
             placeholder="Значение"
             value={value}
             onChange={(event) => onChange(fieldId, event.target.value)}
           />
+          {onCountChange ? (
+            <input
+              inputMode="numeric"
+              min="0"
+              placeholder="Количество"
+              type="number"
+              value={counts?.[fieldId] ?? 0}
+              onChange={(event) => onCountChange(fieldId, toNumber(event.target.value, 0))}
+            />
+          ) : null}
           <div className="gpb-settings-row-actions">
             <button type="button" onClick={() => onDelete(fieldId)} title="Удалить поле">
               <Trash2 size={15} />
@@ -21062,7 +21093,8 @@ function getAvailableExtraInventory(
   checkOut: string,
   inventoryAirBeds: number,
   inventoryRollaways: number,
-  rooms: Room[] = []
+  rooms: Room[] = [],
+  inventoryCustomCounts: Record<string, number> = {}
 ) {
   const configured = getConfiguredRoomInventoryCounts(rooms);
   const used = reservations
@@ -21077,11 +21109,44 @@ function getAvailableExtraInventory(
         rollaways: sum.rollaways + counts.rollaways
       };
     }, { airBeds: 0, rollaways: 0 });
+  const usedCustomCounts = reservations
+    .filter((reservation) =>
+      isReservationBlockingExtraInventory(reservation) &&
+      dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
+    )
+    .reduce((sum, reservation) => mergeExtraInventoryPlacementCounts(sum, getReservationExtraInventoryPlacementCounts(reservation)), {} as Record<string, number>);
+  const custom = Object.fromEntries(Object.entries(inventoryCustomCounts).map(([typeId, count]) => [
+    typeId,
+    Math.max(0, Math.round(count || 0) - (usedCustomCounts[typeId] || 0))
+  ]));
 
   return {
     airBeds: Math.max(0, inventoryAirBeds - configured.airBeds - used.airBeds),
-    rollaways: Math.max(0, inventoryRollaways - configured.rollaways - used.rollaways)
+    rollaways: Math.max(0, inventoryRollaways - configured.rollaways - used.rollaways),
+    custom
   };
+}
+
+function getAvailableExtraInventoryCount(available: { airBeds: number; rollaways: number; custom?: Record<string, number> }, typeId: string) {
+  if (typeId === "air-bed") return available.airBeds;
+  if (typeId === "rollaway") return available.rollaways;
+  return Math.max(0, available.custom?.[typeId] ?? 0);
+}
+
+function getReservationExtraInventoryPlacementCounts(reservation: Pick<Reservation, "airMattressCount" | "extraBed" | "extraBedType" | "extraInventoryByRoomId" | "rollawayCount">) {
+  const counts: Record<string, number> = {};
+  Object.values(reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation)).flatMap((item) => getExtraInventoryPlacements(item)).forEach((placement) => {
+    counts[placement.typeId] = (counts[placement.typeId] || 0) + 1;
+  });
+  return counts;
+}
+
+function mergeExtraInventoryPlacementCounts(left: Record<string, number>, right: Record<string, number>) {
+  const next = { ...left };
+  Object.entries(right).forEach(([key, value]) => {
+    next[key] = (next[key] || 0) + Math.max(0, value || 0);
+  });
+  return next;
 }
 
 function getConfiguredRoomInventoryCounts(rooms: Room[]) {

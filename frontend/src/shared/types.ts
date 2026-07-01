@@ -206,6 +206,7 @@ export interface PaymentSettings {
   inventoryExtraPlaceTeenPercent: number;
   inventoryExtraPlaceChildPercent: number;
   inventoryCustomFields: Record<string, string>;
+  inventoryCustomCounts: Record<string, number>;
   packageDiscountPercent: number;
   packagePeriodDiscountPercent: number;
   packagePeriodDiscountFrom: string;

@@ -82,7 +82,7 @@ import {
   uploadRoomMedia
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
-import type { ActiveChat, ActiveDialog, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
+import type { ActiveChat, ActiveDialog, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -148,7 +148,7 @@ type WeatherDayPart = {
 };
 type ExtraBedType = "air-bed" | "rollaway";
 type ExtraInventoryType = ExtraBedType | "extra-place";
-type ExtraInventoryItem = { airBeds: number; rollaways: number; extraPlaces?: number };
+type ExtraInventoryCatalogItem = { id: string; label: string };
 type SettingMethod = { id: string; label: string };
 type AvailabilityConflict = {
   busyFrom?: string;
@@ -257,6 +257,12 @@ const DEFAULT_PRICE_PDF_SUMMARY_OPTIONS: PricePdfSummaryOptionKey[] = [
   "total",
   "prepayment",
   "conditions"
+];
+
+const DEFAULT_EXTRA_INVENTORY_TYPES: ExtraInventoryCatalogItem[] = [
+  { id: "air-bed", label: "Надувной матрас" },
+  { id: "rollaway", label: "Раскладушка" },
+  { id: "sofa", label: "Диван" }
 ];
 
 function isPricePdfSummaryOptionKey(value: string): value is PricePdfSummaryOptionKey {
@@ -856,6 +862,7 @@ export function BookingPanel() {
   const [bookingComment, setBookingComment] = useState("");
   const [adminComment, setAdminComment] = useState("");
   const [guestAdults, setGuestAdults] = useState(0);
+  const [guestTeenagers, setGuestTeenagers] = useState(0);
   const [guestChildren, setGuestChildren] = useState(0);
   const [adminCommentVoiceState, setAdminCommentVoiceState] = useState<"idle" | "listening" | "unsupported">("idle");
   const [defaultCheckInTime, setDefaultCheckInTime] = useState(DEFAULT_CHECK_IN_TIME);
@@ -938,7 +945,8 @@ export function BookingPanel() {
   const [inventoryRollawayPrice, setInventoryRollawayPrice] = useState(0);
   const [inventoryExtraPlacePrice, setInventoryExtraPlacePrice] = useState(0);
   const [inventoryExtraPlaceAdultPercent, setInventoryExtraPlaceAdultPercent] = useState(100);
-  const [inventoryExtraPlaceChildPercent, setInventoryExtraPlaceChildPercent] = useState(50);
+  const [inventoryExtraPlaceTeenPercent, setInventoryExtraPlaceTeenPercent] = useState(50);
+  const [inventoryExtraPlaceChildPercent, setInventoryExtraPlaceChildPercent] = useState(0);
   const [inventoryCustomFields, setInventoryCustomFields] = useState<Record<string, string>>({});
   const [packageDiscountPercent, setPackageDiscountPercent] = useState(0);
   const [packagePeriodDiscountPercent, setPackagePeriodDiscountPercent] = useState(0);
@@ -1238,6 +1246,7 @@ export function BookingPanel() {
   );
   const hasHourlyBookingObject = proposalRooms.some(isHourlyBookingObject);
   const extraInventoryCount = getExtraInventoryTotalCount(extraInventoryByRoomId);
+  const extraInventoryCatalogItems = useMemo(() => buildExtraInventoryCatalogItems(inventoryCustomFields), [inventoryCustomFields]);
   const bookingTotals = calculateBookingTotalsWithRoomDates(
     proposalRooms,
     checkIn,
@@ -1254,8 +1263,10 @@ export function BookingPanel() {
     inventoryAirBedPrice,
     inventoryRollawayPrice,
     inventoryExtraPlaceAdultPercent,
+    inventoryExtraPlaceTeenPercent,
     inventoryExtraPlaceChildPercent,
     guestAdults,
+    guestTeenagers,
     guestChildren
   );
   const effectiveBookingTotals = getEffectiveBookingTotals(bookingTotals, manualTotalAmount, discountPercent);
@@ -2134,6 +2145,7 @@ export function BookingPanel() {
     setInventoryRollawayPrice(settings.inventoryRollawayPrice);
     setInventoryExtraPlacePrice(settings.inventoryExtraPlacePrice);
     setInventoryExtraPlaceAdultPercent(settings.inventoryExtraPlaceAdultPercent);
+    setInventoryExtraPlaceTeenPercent(settings.inventoryExtraPlaceTeenPercent);
     setInventoryExtraPlaceChildPercent(settings.inventoryExtraPlaceChildPercent);
     setInventoryCustomFields(settings.inventoryCustomFields);
     setPackageDiscountPercent(settings.packageDiscountPercent);
@@ -2185,6 +2197,7 @@ export function BookingPanel() {
       inventoryRollawayPrice,
       inventoryExtraPlacePrice,
       inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceTeenPercent,
       inventoryExtraPlaceChildPercent,
       inventoryCustomFields,
       packageDiscountPercent,
@@ -2224,6 +2237,7 @@ export function BookingPanel() {
       guestFirstName: draftGuestName,
       phone,
       adults: guestAdults,
+      teenagers: guestTeenagers,
       children: guestChildren,
       hasPet,
       extraBed: needsExtraBed,
@@ -2236,6 +2250,7 @@ export function BookingPanel() {
       inventoryRollawayPrice,
       inventoryExtraPlacePrice,
       inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceTeenPercent,
       inventoryExtraPlaceChildPercent,
       extraInventoryManual,
       hourlyHours,
@@ -2378,10 +2393,12 @@ export function BookingPanel() {
     return draftCacheLoadPromiseRef.current;
   }
 
-  function updateGuestCount(type: "adults" | "children", value: number) {
+  function updateGuestCount(type: "adults" | "teenagers" | "children", value: number) {
     const nextValue = clampNumber(Math.round(value), 0, 99);
     if (type === "adults") {
       setGuestAdults(nextValue);
+    } else if (type === "teenagers") {
+      setGuestTeenagers(nextValue);
     } else {
       setGuestChildren(nextValue);
     }
@@ -2617,6 +2634,7 @@ export function BookingPanel() {
     setBookingComment(draft.comment ?? "");
     setAdminComment(draft.adminComment ?? draft.lastReservation?.adminComment ?? "");
     setGuestAdults(clampNumber(Math.round(draft.adults ?? draft.lastReservation?.adults ?? 0), 0, 99));
+    setGuestTeenagers(clampNumber(Math.round(draft.teenagers ?? draft.lastReservation?.teenagers ?? 0), 0, 99));
     setGuestChildren(clampNumber(Math.round(draft.children ?? draft.lastReservation?.children ?? 0), 0, 99));
     if (!shouldKeepCurrentContact) setGuestFirstName(resolveGuestNameForPhone(draft.guestFirstName, draft.phone));
     setGuestPhonePrefix(phoneParts.prefix);
@@ -2632,6 +2650,7 @@ export function BookingPanel() {
     setExtraInventoryByRoomId(draft.extraInventoryByRoomId ?? buildExtraInventoryMapFromDraft(draft));
     if (typeof draft.inventoryExtraPlacePrice === "number") setInventoryExtraPlacePrice(draft.inventoryExtraPlacePrice);
     if (typeof draft.inventoryExtraPlaceAdultPercent === "number") setInventoryExtraPlaceAdultPercent(draft.inventoryExtraPlaceAdultPercent);
+    if (typeof draft.inventoryExtraPlaceTeenPercent === "number") setInventoryExtraPlaceTeenPercent(draft.inventoryExtraPlaceTeenPercent);
     if (typeof draft.inventoryExtraPlaceChildPercent === "number") setInventoryExtraPlaceChildPercent(draft.inventoryExtraPlaceChildPercent);
     setHourlyHours(Math.max(2, draft.hourlyHours ?? 2));
     const isLegacyAutoPeriodDiscount = draft.periodDiscountEnabled === undefined &&
@@ -2677,6 +2696,7 @@ export function BookingPanel() {
     setBookingComment("");
     setAdminComment("");
     setGuestAdults(0);
+    setGuestTeenagers(0);
     setGuestChildren(0);
     if (!options.preserveContact) {
       setGuestFirstName("");
@@ -2733,6 +2753,7 @@ export function BookingPanel() {
     setBookingComment("");
     setAdminComment("");
     setGuestAdults(0);
+    setGuestTeenagers(0);
     setGuestChildren(0);
     setHasPet(false);
     setNeedsExtraBed(false);
@@ -2772,6 +2793,7 @@ export function BookingPanel() {
         guestFirstName,
         phone: buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone,
         adults: 0,
+        teenagers: 0,
         children: 0,
         hasPet: false,
         extraBed: false,
@@ -3790,46 +3812,56 @@ export function BookingPanel() {
   }
 
   function updateExtraInventoryTotals(nextMap: Record<string, ExtraInventoryItem>) {
-    const nextAirBeds = Object.values(nextMap).reduce((sum, item) => sum + Math.max(0, item.airBeds || 0), 0);
-    const nextRollaways = Object.values(nextMap).reduce((sum, item) => sum + Math.max(0, item.rollaways || 0), 0);
-    const nextExtraPlaces = Object.values(nextMap).reduce((sum, item) => sum + Math.max(0, item.extraPlaces || 0), 0);
-    const nextTotal = nextAirBeds + nextRollaways + nextExtraPlaces;
+    const placements = Object.values(nextMap).flatMap((item) => getExtraInventoryPlacements(item));
+    const nextAirBeds = placements.filter((item) => item.typeId === "air-bed").length;
+    const nextRollaways = placements.filter((item) => item.typeId === "rollaway").length;
+    const nextTotal = placements.length;
     setAirMattressCount(nextAirBeds);
     setRollawayCount(nextRollaways);
     setExtraBedType(nextRollaways > 0 && nextAirBeds === 0 ? "rollaway" : "air-bed");
     setNeedsExtraBed(nextTotal > 0);
     setExtraInventoryManual(nextTotal > 0);
+    setExtraInventoryChargeEnabled(nextTotal > 0);
     setManualTotalAmount(0);
     setLastReservation(null);
     setAgreementSent(false);
   }
 
-  function addExtraInventoryFromCard(roomId: string, nextType: ExtraInventoryType) {
-    if (nextType !== "extra-place") {
-      const availableCount = nextType === "rollaway" ? availableExtraInventory.rollaways : availableExtraInventory.airBeds;
-      const currentCount = nextType === "rollaway" ? rollawayCount : airMattressCount;
+  function addExtraInventoryFromCard(roomId: string, catalogItem: ExtraInventoryCatalogItem, guestType: ExtraGuestType) {
+    if (catalogItem.id === "air-bed" || catalogItem.id === "rollaway") {
+      const availableCount = catalogItem.id === "rollaway" ? availableExtraInventory.rollaways : availableExtraInventory.airBeds;
+      const currentCount = catalogItem.id === "rollaway" ? rollawayCount : airMattressCount;
       if (currentCount >= availableCount) {
         setExtraInventoryPickerRoomId("");
         return;
       }
     }
 
-    if (nextType === "extra-place" && !canAddExtraPlaceToRoom(roomId, extraInventoryByRoomId, pricedRooms)) {
+    if (!canAddExtraPlaceToRoom(roomId, extraInventoryByRoomId, pricedRooms)) {
       setExtraInventoryPickerRoomId("");
       return;
     }
 
     setSelectedBookingRoomIds((currentIds) => currentIds.includes(roomId) ? currentIds : currentIds.concat(roomId));
     setSelectedRoomId(roomId);
-    if (nextType === "extra-place") setExtraInventoryChargeEnabled(true);
+    setExtraInventoryChargeEnabled(true);
     setExtraInventoryByRoomId((currentMap) => {
-      const currentRoomItem = currentMap[roomId] ?? { airBeds: 0, rollaways: 0, extraPlaces: 0 };
+      const currentRoomItem = currentMap[roomId] ?? { airBeds: 0, rollaways: 0, extraPlaces: 0, items: [] };
+      const currentItems = getExtraInventoryPlacements(currentRoomItem);
+      const nextPlacement: ExtraInventoryPlacement = {
+        id: `extra-${roomId}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        typeId: catalogItem.id,
+        label: catalogItem.label,
+        guestType
+      };
+      const nextItems = currentItems.concat(nextPlacement);
       const nextMap = {
         ...currentMap,
         [roomId]: {
-          airBeds: currentRoomItem.airBeds + (nextType === "air-bed" ? 1 : 0),
-          rollaways: currentRoomItem.rollaways + (nextType === "rollaway" ? 1 : 0),
-          extraPlaces: Math.max(0, currentRoomItem.extraPlaces || 0) + (nextType === "extra-place" ? 1 : 0)
+          airBeds: nextItems.filter((item) => item.typeId === "air-bed").length,
+          rollaways: nextItems.filter((item) => item.typeId === "rollaway").length,
+          extraPlaces: nextItems.filter((item) => item.typeId !== "air-bed" && item.typeId !== "rollaway").length,
+          items: nextItems
         }
       };
       updateExtraInventoryTotals(nextMap);
@@ -3838,17 +3870,19 @@ export function BookingPanel() {
     setExtraInventoryPickerRoomId("");
   }
 
-  function removeExtraInventoryTypeFromCard(roomId: string, type: ExtraInventoryType) {
+  function removeExtraInventoryPlacementFromCard(roomId: string, placementId: string) {
     const currentItem = extraInventoryByRoomId[roomId];
     if (!currentItem) return;
 
-    const nextItem = {
-      airBeds: type === "air-bed" ? 0 : currentItem.airBeds,
-      rollaways: type === "rollaway" ? 0 : currentItem.rollaways,
-      extraPlaces: type === "extra-place" ? 0 : currentItem.extraPlaces
+    const nextItems = getExtraInventoryPlacements(currentItem).filter((item) => item.id !== placementId);
+    const nextItem: ExtraInventoryItem = {
+      airBeds: nextItems.filter((item) => item.typeId === "air-bed").length,
+      rollaways: nextItems.filter((item) => item.typeId === "rollaway").length,
+      extraPlaces: nextItems.filter((item) => item.typeId !== "air-bed" && item.typeId !== "rollaway").length,
+      items: nextItems
     };
     const nextMap = { ...extraInventoryByRoomId };
-    if (nextItem.airBeds || nextItem.rollaways || nextItem.extraPlaces) {
+    if (nextItems.length) {
       nextMap[roomId] = nextItem;
     } else {
       delete nextMap[roomId];
@@ -4196,12 +4230,13 @@ export function BookingPanel() {
     }));
   }
 
-  async function handleInventorySettingsChange(nextSettings: { airBedPrice: number; airBeds: number; extraPlaceAdultPercent: number; extraPlaceChildPercent: number; rollawayPrice: number; rollaways: number }) {
+  async function handleInventorySettingsChange(nextSettings: { airBedPrice: number; airBeds: number; extraPlaceAdultPercent: number; extraPlaceTeenPercent: number; extraPlaceChildPercent: number; rollawayPrice: number; rollaways: number }) {
     setInventoryAirBeds(nextSettings.airBeds);
     setInventoryRollaways(nextSettings.rollaways);
     setInventoryAirBedPrice(nextSettings.airBedPrice);
     setInventoryRollawayPrice(nextSettings.rollawayPrice);
     setInventoryExtraPlaceAdultPercent(nextSettings.extraPlaceAdultPercent);
+    setInventoryExtraPlaceTeenPercent(nextSettings.extraPlaceTeenPercent);
     setInventoryExtraPlaceChildPercent(nextSettings.extraPlaceChildPercent);
     await savePaymentSettings(buildPaymentSettingsPatch({
       inventoryAirBeds: nextSettings.airBeds,
@@ -4209,6 +4244,7 @@ export function BookingPanel() {
       inventoryAirBedPrice: nextSettings.airBedPrice,
       inventoryRollawayPrice: nextSettings.rollawayPrice,
       inventoryExtraPlaceAdultPercent: nextSettings.extraPlaceAdultPercent,
+      inventoryExtraPlaceTeenPercent: nextSettings.extraPlaceTeenPercent,
       inventoryExtraPlaceChildPercent: nextSettings.extraPlaceChildPercent
     }));
   }
@@ -4939,8 +4975,10 @@ export function BookingPanel() {
       inventoryAirBedPrice,
       inventoryRollawayPrice,
       inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceTeenPercent,
       inventoryExtraPlaceChildPercent,
       guestAdults,
+      guestTeenagers,
       guestChildren,
       lastReservation?.items ?? []
     );
@@ -4959,6 +4997,7 @@ export function BookingPanel() {
       comment: bookingComment,
       adminComment,
       adults: guestAdults,
+      teenagers: guestTeenagers,
       children: guestChildren,
       hasPet,
       extraBed: needsExtraBed,
@@ -4971,6 +5010,7 @@ export function BookingPanel() {
       inventoryRollawayPrice,
       inventoryExtraPlacePrice,
       inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceTeenPercent,
       inventoryExtraPlaceChildPercent,
       extraInventoryManual,
       hourlyHours,
@@ -5087,13 +5127,15 @@ export function BookingPanel() {
         effectiveBookingTotals.discountAmount,
         effectiveBookingTotals.total,
         extraInventoryChargeEnabled,
-        inventoryAirBedPrice,
-        inventoryRollawayPrice,
-        inventoryExtraPlaceAdultPercent,
-        inventoryExtraPlaceChildPercent,
-        guestAdults,
-        guestChildren,
-        []
+      inventoryAirBedPrice,
+      inventoryRollawayPrice,
+      inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceTeenPercent,
+      inventoryExtraPlaceChildPercent,
+      guestAdults,
+      guestTeenagers,
+      guestChildren,
+      []
       ).map((item) => ({
         ...item,
         paidAmount: item.total,
@@ -5116,6 +5158,7 @@ export function BookingPanel() {
       comment: manualComment,
       adminComment,
       adults: guestAdults,
+      teenagers: guestTeenagers,
       children: guestChildren,
       hasPet,
       extraBed: needsExtraBed,
@@ -5128,6 +5171,7 @@ export function BookingPanel() {
       inventoryRollawayPrice,
       inventoryExtraPlacePrice,
       inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceTeenPercent,
       inventoryExtraPlaceChildPercent,
       extraInventoryManual,
       hourlyHours,
@@ -5417,6 +5461,7 @@ export function BookingPanel() {
       comment: `Доп продажа к брони ${lastReservation.id}: ${addOnSaleServiceRoom.title}`,
       adminComment: lastReservation.adminComment,
       adults: lastReservation.adults ?? 0,
+      teenagers: lastReservation.teenagers ?? 0,
       children: lastReservation.children ?? 0,
       hasPet: false,
       extraBed: false,
@@ -5487,6 +5532,7 @@ export function BookingPanel() {
       comment: `Кухня: ${selectedKitchenMenuItem.title} × ${portions}`,
       adminComment: lastReservation.adminComment,
       adults: lastReservation.adults ?? 0,
+      teenagers: lastReservation.teenagers ?? 0,
       children: lastReservation.children ?? 0,
       hasPet: false,
       extraBed: false,
@@ -6104,7 +6150,21 @@ export function BookingPanel() {
             <button type="button" onClick={() => updateGuestCount("adults", guestAdults + 1)} disabled={isBookingLocked}>+</button>
           </label>
           <label>
-            <span>Дети</span>
+            <span>Подростки <small>6-18</small></span>
+            <button type="button" onClick={() => updateGuestCount("teenagers", guestTeenagers - 1)} disabled={isBookingLocked || guestTeenagers <= 0}>-</button>
+            <input
+              aria-label="Количество подростков"
+              disabled={isBookingLocked}
+              min="0"
+              type="number"
+              value={guestTeenagers}
+              onFocus={(event) => event.currentTarget.select()}
+              onChange={(event) => updateGuestCount("teenagers", toNumber(event.target.value, 0))}
+            />
+            <button type="button" onClick={() => updateGuestCount("teenagers", guestTeenagers + 1)} disabled={isBookingLocked}>+</button>
+          </label>
+          <label>
+            <span>Дети <small>1-6</small></span>
             <button type="button" onClick={() => updateGuestCount("children", guestChildren - 1)} disabled={isBookingLocked || guestChildren <= 0}>-</button>
             <input
               aria-label="Количество детей"
@@ -6119,7 +6179,7 @@ export function BookingPanel() {
           </label>
           <div className="gpb-guest-count-total">
             <span>Итого</span>
-            <strong>{guestAdults + guestChildren}</strong>
+            <strong>{guestAdults + guestTeenagers + guestChildren}</strong>
           </div>
         </div>
       </section>
@@ -6202,51 +6262,21 @@ export function BookingPanel() {
                       </span>
                       {extraInventoryByRoomId[room.id] ? (
                         <span className="gpb-card-extra-badge" onClick={(event) => event.stopPropagation()}>
-                          {extraInventoryByRoomId[room.id].airBeds ? (
-                            <span className="gpb-card-extra-badge-row">
-                              <span>Матрас +{extraInventoryByRoomId[room.id].airBeds}</span>
+                          {getExtraInventoryPlacements(extraInventoryByRoomId[room.id]).map((placement) => (
+                            <span className="gpb-card-extra-badge-row" key={placement.id}>
+                              <span>{placement.label} - {getExtraGuestTypeLabel(placement.guestType)}</span>
                               <button
-                                aria-label="Удалить матрас"
+                                aria-label={`Удалить ${placement.label}`}
                                 type="button"
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  removeExtraInventoryTypeFromCard(room.id, "air-bed");
+                                  removeExtraInventoryPlacementFromCard(room.id, placement.id);
                                 }}
                               >
                                 <X size={11} />
                               </button>
                             </span>
-                          ) : null}
-                          {extraInventoryByRoomId[room.id].rollaways ? (
-                            <span className="gpb-card-extra-badge-row">
-                              <span>Раскладушка +{extraInventoryByRoomId[room.id].rollaways}</span>
-                              <button
-                                aria-label="Удалить раскладушку"
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  removeExtraInventoryTypeFromCard(room.id, "rollaway");
-                                }}
-                              >
-                                <X size={11} />
-                              </button>
-                            </span>
-                          ) : null}
-                          {extraInventoryByRoomId[room.id].extraPlaces ? (
-                            <span className="gpb-card-extra-badge-row">
-                              <span>Доп.место +{extraInventoryByRoomId[room.id].extraPlaces}</span>
-                              <button
-                                aria-label="Удалить допместо"
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  removeExtraInventoryTypeFromCard(room.id, "extra-place");
-                                }}
-                              >
-                                <X size={11} />
-                              </button>
-                            </span>
-                          ) : null}
+                          ))}
                         </span>
                       ) : null}
                       {getActiveRoomDateOverride(room.id, checkIn, checkOut, roomDateOverrides) ? (
@@ -6357,15 +6387,16 @@ export function BookingPanel() {
                         </button>
                         {extraInventoryPickerRoomId === room.id ? (
                           <span className="gpb-card-extra-menu" onClick={(event) => event.stopPropagation()}>
-                            <button type="button" onClick={() => addExtraInventoryFromCard(room.id, "air-bed")}>
-                              Надувной матрас
-                            </button>
-                            <button type="button" onClick={() => addExtraInventoryFromCard(room.id, "rollaway")}>
-                              Раскладушка
-                            </button>
-                            <button type="button" onClick={() => addExtraInventoryFromCard(room.id, "extra-place")}>
-                              Доп.место
-                            </button>
+                            {extraInventoryCatalogItems.map((item) => (
+                              <span className="gpb-card-extra-menu-group" key={item.id}>
+                                <b>{item.label}</b>
+                                {(["adult", "teen", "child"] as ExtraGuestType[]).map((guestType) => (
+                                  <button type="button" key={`${item.id}-${guestType}`} onClick={() => addExtraInventoryFromCard(room.id, item, guestType)}>
+                                    {getExtraGuestTypeLabel(guestType)}
+                                  </button>
+                                ))}
+                              </span>
+                            ))}
                           </span>
                         ) : null}
                       </span>
@@ -7313,6 +7344,7 @@ export function BookingPanel() {
           inventoryRollawayPrice={inventoryRollawayPrice}
           inventoryExtraPlacePrice={inventoryExtraPlacePrice}
           inventoryExtraPlaceAdultPercent={inventoryExtraPlaceAdultPercent}
+          inventoryExtraPlaceTeenPercent={inventoryExtraPlaceTeenPercent}
           inventoryExtraPlaceChildPercent={inventoryExtraPlaceChildPercent}
           inventoryCustomFields={inventoryCustomFields}
           packageDiscountPercent={packageDiscountPercent}
@@ -9005,6 +9037,7 @@ async function syncGuestDatabaseAddOnSales(
       comment: parentReservation ? `Корректировка доп продаж к брони ${parentReservation.id}` : "Корректировка доп продаж из базы гостей",
       adminComment: parentReservation?.adminComment,
       adults: parentReservation?.adults ?? 0,
+      teenagers: parentReservation?.teenagers ?? 0,
       children: parentReservation?.children ?? 0,
       hasPet: false,
       extraBed: false,
@@ -10737,6 +10770,7 @@ function SettingsModal({
   inventoryRollawayPrice,
   inventoryExtraPlacePrice,
   inventoryExtraPlaceAdultPercent,
+  inventoryExtraPlaceTeenPercent,
   inventoryExtraPlaceChildPercent,
   inventoryCustomFields,
   packageDiscountPercent,
@@ -10811,6 +10845,7 @@ function SettingsModal({
   inventoryRollawayPrice: number;
   inventoryExtraPlacePrice: number;
   inventoryExtraPlaceAdultPercent: number;
+  inventoryExtraPlaceTeenPercent: number;
   inventoryExtraPlaceChildPercent: number;
   inventoryCustomFields: Record<string, string>;
   packageDiscountPercent: number;
@@ -10853,7 +10888,7 @@ function SettingsModal({
   onPaymentMethodDelete: (methodId: string) => void;
   onPaymentSettingsSave: () => void;
   onWeatherSettingsChange: (settings: { name: string; latitude: number; longitude: number }) => void;
-  onInventorySettingsChange: (settings: { airBedPrice: number; airBeds: number; extraPlaceAdultPercent: number; extraPlaceChildPercent: number; rollawayPrice: number; rollaways: number }) => void;
+  onInventorySettingsChange: (settings: { airBedPrice: number; airBeds: number; extraPlaceAdultPercent: number; extraPlaceTeenPercent: number; extraPlaceChildPercent: number; rollawayPrice: number; rollaways: number }) => void;
   onIncludedCardPagesChange: (pages: IncludedCardPage[]) => void;
   onInventoryCustomFieldChange: (fieldId: string, value: string) => void;
   onInventoryCustomFieldDelete: (fieldId: string) => void;
@@ -10881,6 +10916,7 @@ function SettingsModal({
   const [localAirBedPrice, setLocalAirBedPrice] = useState(String(inventoryAirBedPrice));
   const [localRollawayPrice, setLocalRollawayPrice] = useState(String(inventoryRollawayPrice));
   const [localExtraPlaceAdultPercent, setLocalExtraPlaceAdultPercent] = useState(String(inventoryExtraPlaceAdultPercent));
+  const [localExtraPlaceTeenPercent, setLocalExtraPlaceTeenPercent] = useState(String(inventoryExtraPlaceTeenPercent));
   const [localExtraPlaceChildPercent, setLocalExtraPlaceChildPercent] = useState(String(inventoryExtraPlaceChildPercent));
   const [localPackageDiscount, setLocalPackageDiscount] = useState(String(packageDiscountPercent));
   const [localPackagePeriodDiscount, setLocalPackagePeriodDiscount] = useState(String(packagePeriodDiscountPercent));
@@ -11024,6 +11060,7 @@ function SettingsModal({
       airBedPrice: parsePriceInput(localAirBedPrice),
       rollawayPrice: parsePriceInput(localRollawayPrice),
       extraPlaceAdultPercent: clampNumber(toNumber(localExtraPlaceAdultPercent, inventoryExtraPlaceAdultPercent), 0, 300),
+      extraPlaceTeenPercent: clampNumber(toNumber(localExtraPlaceTeenPercent, inventoryExtraPlaceTeenPercent), 0, 300),
       extraPlaceChildPercent: clampNumber(toNumber(localExtraPlaceChildPercent, inventoryExtraPlaceChildPercent), 0, 300)
     });
   }
@@ -11609,33 +11646,30 @@ function SettingsModal({
                   <BedDouble size={20} />
                   <h2>Доп. инвентарь</h2>
                 </div>
-                <p className="gpb-settings-note">Общий склад переносных матрасов и раскладушек, доступных для комплектации брони.</p>
+                <p className="gpb-settings-note">Матрас, раскладушка, диван и другие предметы - это только что поставить в номер. Стоимость считается за дополнительного гостя.</p>
                 <div className="gpb-default-time-settings">
                   <label>
                     Надувные матрасы
                     <input min="0" type="number" value={localAirBeds} onChange={(event) => setLocalAirBeds(event.target.value)} />
                   </label>
                   <label>
-                    Цена матраса, тг / сутки
-                    <input inputMode="numeric" value={formatExpenseAmountInput(localAirBedPrice)} onChange={(event) => setLocalAirBedPrice(String(parsePriceInput(event.target.value)))} />
-                  </label>
-                  <label>
                     Раскладушки
                     <input min="0" type="number" value={localRollaways} onChange={(event) => setLocalRollaways(event.target.value)} />
                   </label>
                   <label>
-                    Цена раскладушки, тг / сутки
-                    <input inputMode="numeric" value={formatExpenseAmountInput(localRollawayPrice)} onChange={(event) => setLocalRollawayPrice(String(parsePriceInput(event.target.value)))} />
-                  </label>
-                  <label>
-                    Доп.место взрослый, %
+                    Взрослый / допместо, %
                     <input min="0" type="number" value={localExtraPlaceAdultPercent} onChange={(event) => setLocalExtraPlaceAdultPercent(event.target.value)} />
                   </label>
                   <label>
-                    Доп.место детский, %
+                    Подросток 6-18, %
+                    <input min="0" type="number" value={localExtraPlaceTeenPercent} onChange={(event) => setLocalExtraPlaceTeenPercent(event.target.value)} />
+                  </label>
+                  <label>
+                    Ребенок 1-6, %
                     <input min="0" type="number" value={localExtraPlaceChildPercent} onChange={(event) => setLocalExtraPlaceChildPercent(event.target.value)} />
                   </label>
                 </div>
+                <p className="gpb-settings-note">Кнопка «Создать новое поле» добавляет новый тип допместа: диван, софа, тахта и т.д.</p>
                 <EditableSettingsFields
                   fields={inventoryCustomFields}
                   onChange={onInventoryCustomFieldChange}
@@ -18354,8 +18388,10 @@ function calculateBookingTotals(
   inventoryAirBedPrice = 0,
   inventoryRollawayPrice = 0,
   inventoryExtraPlaceAdultPercent = 100,
-  inventoryExtraPlaceChildPercent = 50,
+  inventoryExtraPlaceTeenPercent = 50,
+  inventoryExtraPlaceChildPercent = 0,
   adults = 0,
+  teenagers = 0,
   children = 0,
   extraInventoryByRoomId: Record<string, ExtraInventoryItem> = {}
 ) {
@@ -18365,11 +18401,11 @@ function calculateBookingTotals(
     ? rooms.reduce((sum, room) => sum + (room.extraBedEnabled ? room.extraBedPrice * nights : 0), 0)
     : 0;
   const extraInventoryTotal = extraInventoryChargeEnabled
-    ? calculateExtraInventoryChargeTotal(rooms, extraInventoryByRoomId, checkIn, checkOut, inventoryAirBedPrice, inventoryRollawayPrice, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceChildPercent, adults, children)
+    ? calculateExtraInventoryChargeTotal(rooms, extraInventoryByRoomId, checkIn, checkOut, inventoryAirBedPrice, inventoryRollawayPrice, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceTeenPercent, inventoryExtraPlaceChildPercent, adults, teenagers, children)
     : 0;
   const breakfastDiscountAmount = breakfastIncluded
     ? 0
-    : calculateBreakfastDiscountAmount(rooms, nights, extraInventoryCount, breakfastPricePerPerson);
+    : calculateBreakfastDiscountAmount(rooms, nights, getExtraInventoryMealCount(extraInventoryByRoomId), breakfastPricePerPerson);
   const subtotal = Math.max(0, roomTotal + extraBedTotal + extraInventoryTotal - breakfastDiscountAmount);
   const discountAmount = Math.round(subtotal * clampNumber(discountPercent, 0, 100) / 100);
   const total = Math.max(0, subtotal - discountAmount);
@@ -18454,8 +18490,10 @@ function buildReservationItemsFromRooms(
   inventoryAirBedPrice = 0,
   inventoryRollawayPrice = 0,
   inventoryExtraPlaceAdultPercent = 100,
-  inventoryExtraPlaceChildPercent = 50,
+  inventoryExtraPlaceTeenPercent = 50,
+  inventoryExtraPlaceChildPercent = 0,
   adults = 0,
+  teenagers = 0,
   children = 0,
   existingItems: ReservationItem[] = []
 ) {
@@ -18467,7 +18505,7 @@ function buildReservationItemsFromRooms(
     const roomInventory = extraInventoryByRoomId[room.id];
     const roomSubtotal = calculateRoomStayPrice(room, dateRange.checkIn, dateRange.checkOut, hourlyHours);
     const extraInventoryTotal = extraInventoryChargeEnabled
-      ? calculateExtraInventoryItemCharge(roomInventory, nights, inventoryAirBedPrice, inventoryRollawayPrice, getRoomExtraPlaceDailyPrice(room, dateRange.checkIn, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceChildPercent, adults, children))
+      ? calculateExtraInventoryItemCharge(roomInventory, room, dateRange.checkIn, nights, inventoryAirBedPrice, inventoryRollawayPrice, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceTeenPercent, inventoryExtraPlaceChildPercent, adults, teenagers, children)
       : 0;
     const subtotal = roomSubtotal + extraInventoryTotal;
     const existing = existingByRoomId.get(room.id);
@@ -18619,8 +18657,10 @@ function calculateBookingTotalsWithRoomDates(
   inventoryAirBedPrice = 0,
   inventoryRollawayPrice = 0,
   inventoryExtraPlaceAdultPercent = 100,
-  inventoryExtraPlaceChildPercent = 50,
+  inventoryExtraPlaceTeenPercent = 50,
+  inventoryExtraPlaceChildPercent = 0,
   adults = 0,
+  teenagers = 0,
   children = 0
 ) {
   const hasOverrides = Object.keys(roomDateOverrides).length > 0;
@@ -18639,8 +18679,10 @@ function calculateBookingTotalsWithRoomDates(
       inventoryAirBedPrice,
       inventoryRollawayPrice,
       inventoryExtraPlaceAdultPercent,
+      inventoryExtraPlaceTeenPercent,
       inventoryExtraPlaceChildPercent,
       adults,
+      teenagers,
       children,
       extraInventoryByRoomId
     );
@@ -18660,13 +18702,13 @@ function calculateBookingTotalsWithRoomDates(
     const range = getRoomDateRange(room.id, checkIn, checkOut, roomDateOverrides);
     const inventory = extraInventoryByRoomId[room.id];
     return sum + (extraInventoryChargeEnabled
-      ? calculateExtraInventoryItemCharge(inventory, getNightsCount(range.checkIn, range.checkOut), inventoryAirBedPrice, inventoryRollawayPrice, getRoomExtraPlaceDailyPrice(room, range.checkIn, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceChildPercent, adults, children))
+      ? calculateExtraInventoryItemCharge(inventory, room, range.checkIn, getNightsCount(range.checkIn, range.checkOut), inventoryAirBedPrice, inventoryRollawayPrice, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceTeenPercent, inventoryExtraPlaceChildPercent, adults, teenagers, children)
       : 0);
   }, 0);
   const fallbackNights = getNightsCount(checkIn, checkOut);
   const breakfastDiscountAmount = breakfastIncluded
     ? 0
-    : calculateBreakfastDiscountAmount(rooms, fallbackNights, extraInventoryCount, breakfastPricePerPerson);
+    : calculateBreakfastDiscountAmount(rooms, fallbackNights, getExtraInventoryMealCount(extraInventoryByRoomId), breakfastPricePerPerson);
   const subtotal = Math.max(0, roomTotal + extraBedTotal + extraInventoryTotal - breakfastDiscountAmount);
   const discountAmount = Math.round(subtotal * clampNumber(discountPercent, 0, 100) / 100);
   const total = Math.max(0, subtotal - discountAmount);
@@ -18833,32 +18875,81 @@ function calculateBreakfastDiscountAmount(rooms: Room[], nights: number, extraIn
   return sleepingPlaces * nights * price;
 }
 
-function getExtraPlaceUnitPrice(rooms: Room[]) {
-  const pricedRoom = rooms.find((room) => isStayBookingObject(room) && Number.isFinite(room.extraBedPrice));
-  return pricedRoom ? Math.max(0, pricedRoom.extraBedPrice) : AIR_MATTRESS_PRICE;
-}
-
 function getExtraInventoryTotalCount(extraInventoryByRoomId: Record<string, ExtraInventoryItem>) {
   return Object.values(extraInventoryByRoomId).reduce((sum, item) =>
-    sum + Math.max(0, item.airBeds || 0) + Math.max(0, item.rollaways || 0) + Math.max(0, item.extraPlaces || 0), 0);
+    sum + getExtraInventoryPlacements(item).length, 0);
 }
 
-function getRoomExtraPlaceDailyPrice(room: Room, date: string, adultPercent = 100, childPercent = 50, adults = 0, children = 0) {
+function getExtraInventoryMealCount(extraInventoryByRoomId: Record<string, ExtraInventoryItem>) {
+  return Object.values(extraInventoryByRoomId).reduce((sum, item) =>
+    sum + getExtraInventoryPlacements(item).filter((placement) => placement.guestType !== "child").length, 0);
+}
+
+function getExtraInventoryPlacements(item?: ExtraInventoryItem): ExtraInventoryPlacement[] {
+  if (!item) return [];
+  if (Array.isArray(item.items) && item.items.length) {
+    return item.items
+      .map((placement, index) => normalizeExtraInventoryPlacement(placement, index))
+      .filter((placement): placement is ExtraInventoryPlacement => Boolean(placement));
+  }
+  return [
+    ...Array.from({ length: Math.max(0, item.airBeds || 0) }, (_, index) => createLegacyExtraInventoryPlacement("air-bed", "Надувной матрас", index)),
+    ...Array.from({ length: Math.max(0, item.rollaways || 0) }, (_, index) => createLegacyExtraInventoryPlacement("rollaway", "Раскладушка", index)),
+    ...Array.from({ length: Math.max(0, item.extraPlaces || 0) }, (_, index) => createLegacyExtraInventoryPlacement("extra-place", "Доп.место", index))
+  ];
+}
+
+function buildExtraInventoryCatalogItems(customFields: Record<string, string>): ExtraInventoryCatalogItem[] {
+  const customItems = Object.entries(customFields)
+    .map(([id, value]) => ({ id, label: normalizeExtractedText(value || id) }))
+    .filter((item) => item.id && item.label);
+  const byId = new Map<string, ExtraInventoryCatalogItem>();
+  DEFAULT_EXTRA_INVENTORY_TYPES.concat(customItems).forEach((item) => byId.set(item.id, item));
+  return Array.from(byId.values());
+}
+
+function getExtraInventoryTypeLabel(typeId: string) {
+  return DEFAULT_EXTRA_INVENTORY_TYPES.find((item) => item.id === typeId)?.label || "";
+}
+
+function getExtraGuestTypeLabel(type: ExtraGuestType) {
+  if (type === "teen") return "подросток";
+  if (type === "child") return "ребенок";
+  return "взрослый";
+}
+
+function normalizeExtraInventoryPlacement(placement: Partial<ExtraInventoryPlacement>, index: number): ExtraInventoryPlacement | null {
+  const label = String(placement.label || getExtraInventoryTypeLabel(placement.typeId || "") || "Доп.место").trim();
+  if (!label) return null;
+  const guestType: ExtraGuestType = placement.guestType === "teen" || placement.guestType === "child" ? placement.guestType : "adult";
+  return {
+    id: String(placement.id || `extra-${Date.now()}-${index}`).trim(),
+    typeId: String(placement.typeId || createCustomSettingFieldId(label, {})).trim() || "custom",
+    label,
+    guestType
+  };
+}
+
+function createLegacyExtraInventoryPlacement(typeId: string, label: string, index: number): ExtraInventoryPlacement {
+  return {
+    id: `legacy-${typeId}-${index}`,
+    typeId,
+    label,
+    guestType: "adult"
+  };
+}
+
+function getRoomExtraPlaceDailyPrice(room: Room, date: string, guestType: ExtraGuestType, adultPercent = 100, teenPercent = 50, childPercent = 0) {
   const roomPrice = Math.max(0, getRoomPriceForDate(room, date));
-  const percent = isNextExtraPlaceForChild(room, adults, children) ? childPercent : adultPercent;
-  return Math.round(roomPrice * clampNumber(percent, 0, 300) / 100);
-}
-
-function isNextExtraPlaceForChild(room: Room, adults = 0, children = 0) {
-  if (children <= 0) return false;
-  const baseCapacity = Math.max(1, calculateRoomSleepingPlacesTotal(room));
-  return adults <= baseCapacity;
+  const basePlaces = Math.max(1, calculateRoomSleepingPlacesTotal(room));
+  const percent = guestType === "child" ? childPercent : guestType === "teen" ? teenPercent : adultPercent;
+  return Math.round(roomPrice / basePlaces * clampNumber(percent, 0, 300) / 100);
 }
 
 function canAddExtraPlaceToRoom(roomId: string, currentMap: Record<string, ExtraInventoryItem>, rooms: Room[]) {
   const room = rooms.find((item) => item.id === roomId);
   if (!room || !isStayBookingObject(room)) return false;
-  const currentExtraPlaces = Math.max(0, currentMap[roomId]?.extraPlaces || 0);
+  const currentExtraPlaces = getExtraInventoryPlacements(currentMap[roomId]).length;
   return currentExtraPlaces < Math.max(0, room.extraBeds || 99);
 }
 
@@ -18876,45 +18967,43 @@ function calculateRoomExtraPlacesCharge(
   room: Room,
   checkIn: string,
   checkOut: string,
-  reservation: Pick<Reservation, "adults" | "children" | "inventoryExtraPlaceAdultPercent" | "inventoryExtraPlaceChildPercent">
+  reservation: Pick<Reservation, "inventoryExtraPlaceAdultPercent" | "inventoryExtraPlaceTeenPercent" | "inventoryExtraPlaceChildPercent">
 ) {
-  const count = Math.max(0, item?.extraPlaces || 0);
-  if (!count) return 0;
+  const placements = getExtraInventoryPlacements(item);
+  if (!placements.length) return 0;
   const nights = getNightsCount(checkIn, checkOut);
-  const dailyPrice = getRoomExtraPlaceDailyPrice(
+  return placements.reduce((sum, placement) => sum + getRoomExtraPlaceDailyPrice(
     room,
     checkIn,
+    placement.guestType,
     reservation.inventoryExtraPlaceAdultPercent ?? 100,
-    reservation.inventoryExtraPlaceChildPercent ?? 50,
-    reservation.adults,
-    reservation.children
-  );
-  return count * nights * dailyPrice;
+    reservation.inventoryExtraPlaceTeenPercent ?? 50,
+    reservation.inventoryExtraPlaceChildPercent ?? 0
+  ) * nights, 0);
 }
 
 function calculateExtraInventoryItemCharge(
   inventory: ExtraInventoryItem | undefined,
+  room: Room,
+  checkIn: string,
   nights: number,
-  airBedPrice: number,
-  rollawayPrice: number,
-  extraPlaceDailyPrice = 0
+  _airBedPrice: number,
+  _rollawayPrice: number,
+  extraPlaceAdultPercent = 100,
+  extraPlaceTeenPercent = 50,
+  extraPlaceChildPercent = 0,
+  _adults = 0,
+  _teenagers = 0,
+  _children = 0
 ) {
   const safeNights = Math.max(0, nights);
-  return (
-    Math.max(0, inventory?.airBeds || 0) * Math.max(0, airBedPrice || 0) * safeNights +
-    Math.max(0, inventory?.rollaways || 0) * Math.max(0, rollawayPrice || 0) * safeNights +
-    Math.max(0, inventory?.extraPlaces || 0) * Math.max(0, extraPlaceDailyPrice || 0) * safeNights
-  );
+  return getExtraInventoryPlacements(inventory).reduce((sum, placement) =>
+    sum + getRoomExtraPlaceDailyPrice(room, checkIn, placement.guestType, extraPlaceAdultPercent, extraPlaceTeenPercent, extraPlaceChildPercent) * safeNights, 0);
 }
 
-function getReservationExtraInventoryPrice(reservation: Pick<Reservation, "extraInventoryChargeEnabled" | "inventoryAirBedPrice" | "inventoryRollawayPrice" | "inventoryExtraPlacePrice">, type: ExtraInventoryType, fallbackRooms: Room[] = []) {
+function getReservationExtraInventoryPrice(reservation: Pick<Reservation, "extraInventoryChargeEnabled" | "inventoryExtraPlaceAdultPercent">, _type: ExtraInventoryType, _fallbackRooms: Room[] = []) {
   if (!reservation.extraInventoryChargeEnabled) return 0;
-  const configuredPrice = type === "air-bed"
-    ? reservation.inventoryAirBedPrice
-    : type === "rollaway"
-      ? reservation.inventoryRollawayPrice
-      : reservation.inventoryExtraPlacePrice;
-  return Math.max(0, configuredPrice ?? getExtraPlaceUnitPrice(fallbackRooms));
+  return Math.max(0, reservation.inventoryExtraPlaceAdultPercent ?? 100);
 }
 
 function calculateExtraInventoryChargeTotal(
@@ -18925,17 +19014,26 @@ function calculateExtraInventoryChargeTotal(
   airBedPrice: number,
   rollawayPrice: number,
   extraPlaceAdultPercent: number,
+  extraPlaceTeenPercent: number,
   extraPlaceChildPercent: number,
   adults = 0,
+  teenagers = 0,
   children = 0
 ) {
   return rooms.reduce((sum, room) =>
     sum + calculateExtraInventoryItemCharge(
       extraInventoryByRoomId[room.id],
+      room,
+      checkIn,
       getNightsCount(checkIn, checkOut),
       airBedPrice,
       rollawayPrice,
-      getRoomExtraPlaceDailyPrice(room, checkIn, extraPlaceAdultPercent, extraPlaceChildPercent, adults, children)
+      extraPlaceAdultPercent,
+      extraPlaceTeenPercent,
+      extraPlaceChildPercent,
+      adults,
+      teenagers,
+      children
     ), 0);
 }
 
@@ -19610,6 +19708,7 @@ function createChatDraftFromReservation(reservation: Reservation): ChatBookingDr
     guestFirstName: reservation.guestFirstName || "",
     phone: reservation.phone || "",
     adults: reservation.adults ?? 0,
+    teenagers: reservation.teenagers ?? 0,
     children: reservation.children ?? 0,
     hasPet: Boolean(reservation.hasPet),
     extraBed: reservation.extraBed,
@@ -19622,6 +19721,7 @@ function createChatDraftFromReservation(reservation: Reservation): ChatBookingDr
     inventoryRollawayPrice: reservation.inventoryRollawayPrice,
     inventoryExtraPlacePrice: reservation.inventoryExtraPlacePrice,
     inventoryExtraPlaceAdultPercent: reservation.inventoryExtraPlaceAdultPercent,
+    inventoryExtraPlaceTeenPercent: reservation.inventoryExtraPlaceTeenPercent,
     inventoryExtraPlaceChildPercent: reservation.inventoryExtraPlaceChildPercent,
     extraInventoryManual: Boolean(extraInventoryCounts.airBeds || extraInventoryCounts.rollaways || getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {})),
     hourlyHours: reservation.hourlyHours || 2,
@@ -19661,9 +19761,7 @@ function calculateReservationSleepingPlacesTotal(reservation: Reservation, rooms
   const basePlaces = rooms
     .filter(isStayBookingObject)
     .reduce((sum, room) => sum + calculateRoomSleepingPlacesTotal(room), 0);
-  const extraPlaces = getReservationExtraInventoryCounts(reservation);
-  const mappedExtraPlaces = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {}) - extraPlaces.airBeds - extraPlaces.rollaways;
-  return basePlaces + extraPlaces.airBeds + extraPlaces.rollaways + Math.max(0, mappedExtraPlaces);
+  return basePlaces + getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation));
 }
 
 function calculateRoomSleepingPlacesTotal(room: Room) {
@@ -19672,7 +19770,7 @@ function calculateRoomSleepingPlacesTotal(room: Room) {
 }
 
 function calculateRoomReservationSleepingPlacesTotal(room: Room, extraInventory?: ExtraInventoryItem) {
-  return calculateRoomSleepingPlacesTotal(room) + Math.max(0, extraInventory?.airBeds || 0) + Math.max(0, extraInventory?.rollaways || 0) + Math.max(0, extraInventory?.extraPlaces || 0);
+  return calculateRoomSleepingPlacesTotal(room) + getExtraInventoryPlacements(extraInventory).length;
 }
 
 function calculatePricePdfSleepingPlacesTotal(rooms: Room[], availabilitySummary?: CatalogAvailabilitySummary) {
@@ -19689,7 +19787,14 @@ function buildExtraInventoryMapFromDraft(draft: Pick<ChatBookingDraft, "airMattr
   const counts = getDraftExtraInventoryCounts(draft);
   if (!draft.selectedRoomId || (!counts.airBeds && !counts.rollaways)) return {};
   return {
-    [draft.selectedRoomId]: counts
+    [draft.selectedRoomId]: {
+      ...counts,
+      extraPlaces: 0,
+      items: [
+        ...Array.from({ length: counts.airBeds }, (_, index) => createLegacyExtraInventoryPlacement("air-bed", "Надувной матрас", index)),
+        ...Array.from({ length: counts.rollaways }, (_, index) => createLegacyExtraInventoryPlacement("rollaway", "Раскладушка", index))
+      ]
+    }
   };
 }
 
@@ -19698,7 +19803,14 @@ function buildExtraInventoryMapFromReservation(reservation: Pick<Reservation, "a
   const roomId = reservation.roomIds[0] || "";
   if (!roomId || (!counts.airBeds && !counts.rollaways)) return {};
   return {
-    [roomId]: counts
+    [roomId]: {
+      ...counts,
+      extraPlaces: 0,
+      items: [
+        ...Array.from({ length: counts.airBeds }, (_, index) => createLegacyExtraInventoryPlacement("air-bed", "Надувной матрас", index)),
+        ...Array.from({ length: counts.rollaways }, (_, index) => createLegacyExtraInventoryPlacement("rollaway", "Раскладушка", index))
+      ]
+    }
   };
 }
 
@@ -19712,25 +19824,27 @@ function formatAdminBookingObject(room: Room) {
 
 function formatReservationGuestCountText(reservation: Reservation) {
   const adults = Math.max(0, reservation.adults || 0);
+  const teenagers = Math.max(0, reservation.teenagers || 0);
   const children = Math.max(0, reservation.children || 0);
-  const total = adults + children;
+  const total = adults + teenagers + children;
   if (!total) return "Гости: не указано";
-  return `Гости: ${adults} взр. / ${children} дет. / всего ${total}`;
+  return `Гости: ${adults} взр. / ${teenagers} подрост. / ${children} дет. / всего ${total}`;
 }
 
 function formatReservationSummaryGuestLine(reservation: Reservation) {
   const adults = Math.max(0, reservation.adults || 0);
+  const teenagers = Math.max(0, reservation.teenagers || 0);
   const children = Math.max(0, reservation.children || 0);
-  const total = adults + children;
+  const total = adults + teenagers + children;
   if (!total) return "";
 
-  return `| Гости: ${adults} взр. / ${children} дет. / всего ${total}`;
+  return `| Гости: ${adults} взр. / ${teenagers} подрост. / ${children} дет. / всего ${total}`;
 }
 
 function getReservationWeightedGuestCount(reservation: Reservation) {
   const adults = Math.max(0, reservation.adults || 0);
-  const children = Math.max(0, reservation.children || 0);
-  return adults + children * 0.5;
+  const teenagers = Math.max(0, reservation.teenagers || 0);
+  return adults + teenagers * 0.5;
 }
 
 function formatReservationAveragePerPersonLine(reservation: Reservation, nights: number) {
@@ -19757,10 +19871,11 @@ function formatReservationConfirmationRooms(reservation: Reservation, rooms: Roo
 
 function formatAdminGuestCountText(reservation: Reservation) {
   const adults = Math.max(0, reservation.adults || 0);
+  const teenagers = Math.max(0, reservation.teenagers || 0);
   const children = Math.max(0, reservation.children || 0);
-  const total = adults + children;
+  const total = adults + teenagers + children;
   if (!total) return "не указано";
-  return `${adults} взр. / ${children} дет. / всего ${total}`;
+  return `${adults} взр. / ${teenagers} подрост. / ${children} дет. / всего ${total}`;
 }
 
 function formatAdminRoomExtraInventory(reservation: Reservation, stayRooms: Room[]) {
@@ -19770,11 +19885,9 @@ function formatAdminRoomExtraInventory(reservation: Reservation, stayRooms: Room
   return stayRooms
     .map((room) => {
       const item = inventoryByRoomId[room.id];
-      const details = [
-        item?.airBeds ? `матрас ${item.airBeds}` : "",
-        item?.rollaways ? `раскладушка ${item.rollaways}` : "",
-        item?.extraPlaces ? `доп.место ${item.extraPlaces}` : ""
-      ].filter(Boolean).join(", ");
+      const details = getExtraInventoryPlacements(item)
+        .map((placement) => `${placement.label} (${getExtraGuestTypeLabel(placement.guestType)})`)
+        .join(", ");
 
       return details ? `${formatAdminBookingObject(room)}: ${details}` : "";
     })
@@ -19859,12 +19972,13 @@ function buildCookBreakfastExport(selectedDate: string, reservations: Reservatio
   }
 
   const totalAdults = breakfastReservations.reduce((sum, reservation) => sum + Math.max(0, reservation.adults || 0), 0);
+  const totalTeenagers = breakfastReservations.reduce((sum, reservation) => sum + Math.max(0, reservation.teenagers || 0), 0);
   const totalChildren = breakfastReservations.reduce((sum, reservation) => sum + Math.max(0, reservation.children || 0), 0);
-  const totalGuests = totalAdults + totalChildren;
+  const totalGuests = totalAdults + totalTeenagers + totalChildren;
   const lines = [
     "Завтраки",
     `Дата: ${formatAdminShortDate(date)}`,
-    `ИТОГО: взрослых ${totalAdults}, детей ${totalChildren}, всего завтраков ${totalGuests}`,
+    `ИТОГО: взрослых ${totalAdults}, подростков ${totalTeenagers}, детей ${totalChildren}, всего завтраков ${totalGuests}`,
     ""
   ];
 
@@ -19873,6 +19987,7 @@ function buildCookBreakfastExport(selectedDate: string, reservations: Reservatio
     lines.push(
       `${index + 1}. ${reservation.guestFirstName || "Гость"}`,
       `Взрослые: ${Math.max(0, reservation.adults || 0)}`,
+      `Подростки: ${Math.max(0, reservation.teenagers || 0)}`,
       `Дети: ${Math.max(0, reservation.children || 0)}`,
       `Всего: ${getReservationGuestTotal(reservation)}`,
       `Комментарий: ${comment}`,
@@ -19894,7 +20009,7 @@ function getAdminPriorityCleaningRooms(arrivals: Reservation[], departures: Rese
 }
 
 function getReservationGuestTotal(reservation: Reservation) {
-  return Math.max(0, reservation.adults || 0) + Math.max(0, reservation.children || 0);
+  return Math.max(0, reservation.adults || 0) + Math.max(0, reservation.teenagers || 0) + Math.max(0, reservation.children || 0);
 }
 
 function formatAdminStayState(reservation: Reservation, selectedDate: string) {
@@ -19948,7 +20063,7 @@ function formatReservationRowRooms(rooms: Room[]) {
   return `${numbers.slice(0, 2).join(", ")} +${numbers.length - 2}`;
 }
 
-function getAdminIncludedText(rooms: Room[], reservation?: Pick<Reservation, "airMattressCount" | "extraBedType" | "rollawayCount" | "breakfastIncluded">) {
+function getAdminIncludedText(rooms: Room[], reservation?: Pick<Reservation, "airMattressCount" | "extraBedType" | "rollawayCount" | "extraInventoryByRoomId" | "breakfastIncluded">) {
   const included = Array.from(new Set(rooms.flatMap((room) => getSelectedFood(room.amenities))));
   if (reservation?.breakfastIncluded === false) {
     const breakfastIndex = included.findIndex((item) => item.toLowerCase() === "завтрак");
@@ -19961,13 +20076,20 @@ function getAdminIncludedText(rooms: Room[], reservation?: Pick<Reservation, "ai
 }
 
 function formatReservationExtraInventory(reservation: Pick<Reservation, "airMattressCount" | "extraBedType" | "rollawayCount" | "extraInventoryByRoomId">) {
-  const counts = getReservationExtraInventoryCounts(reservation);
-  const mappedExtraPlaces = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {}) - counts.airBeds - counts.rollaways;
-  return [
-    counts.airBeds ? `Матрас: ${counts.airBeds}` : "",
-    counts.rollaways ? `Раскладушка: ${counts.rollaways}` : "",
-    mappedExtraPlaces > 0 ? `Доп.место: ${mappedExtraPlaces}` : ""
-  ].filter(Boolean).join(", ");
+  const placements = Object.values(reservation.extraInventoryByRoomId ?? {}).flatMap((item) => getExtraInventoryPlacements(item));
+  if (!placements.length) {
+    const counts = getReservationExtraInventoryCounts(reservation);
+    return [
+      counts.airBeds ? `Матрас: ${counts.airBeds}` : "",
+      counts.rollaways ? `Раскладушка: ${counts.rollaways}` : ""
+    ].filter(Boolean).join(", ");
+  }
+  const groups = new Map<string, number>();
+  placements.forEach((placement) => {
+    const key = `${placement.label} (${getExtraGuestTypeLabel(placement.guestType)})`;
+    groups.set(key, (groups.get(key) ?? 0) + 1);
+  });
+  return Array.from(groups.entries()).map(([label, count]) => `${label}: ${count}`).join(", ");
 }
 
 function formatAdminShortDate(date: string) {
@@ -21512,7 +21634,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
   const foodSummary = getReservationFoodSummary(
     nightlyRooms,
     reservation.breakfastIncluded !== false,
-    getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {})
+    getExtraInventoryMealCount(reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation))
   );
   const roomLines = reservationItems.map((item) => {
     const room = rooms.find((candidate) => candidate.id === item.roomId);
@@ -21782,14 +21904,20 @@ function formatReservationComment(comment: string) {
 }
 
 function formatRoomExtraInventoryLines(item?: ExtraInventoryItem, room?: Room, reservationItem?: ReservationItem, reservation?: Reservation) {
-  const extraPlaceTotal = item?.extraPlaces && room && reservationItem && reservation
-    ? calculateRoomExtraPlacesCharge(item, room, reservationItem.checkIn, reservationItem.checkOut, reservation)
-    : 0;
-  const lines = [
-    item?.airBeds ? `| Надувной матрас: ${item.airBeds} | Мест: ${item.airBeds}` : "",
-    item?.rollaways ? `| Раскладушка: ${item.rollaways} | Мест: ${item.rollaways}` : "",
-    item?.extraPlaces ? `| Доп.место: ${item.extraPlaces} | Мест: ${item.extraPlaces}${extraPlaceTotal ? ` | +${formatPrice(extraPlaceTotal)}` : ""}` : ""
-  ].filter(Boolean);
+  const nights = reservationItem ? getNightsCount(reservationItem.checkIn, reservationItem.checkOut) : 0;
+  const lines = getExtraInventoryPlacements(item).map((placement) => {
+    const total = room && reservation && nights
+      ? getRoomExtraPlaceDailyPrice(
+        room,
+        reservationItem?.checkIn ?? reservation.checkIn,
+        placement.guestType,
+        reservation.inventoryExtraPlaceAdultPercent ?? 100,
+        reservation.inventoryExtraPlaceTeenPercent ?? 50,
+        reservation.inventoryExtraPlaceChildPercent ?? 0
+      ) * nights
+      : 0;
+    return `| ${placement.label}: 1 | ${getExtraGuestTypeLabel(placement.guestType)} | Мест: 1${total ? ` | +${formatPrice(total)}` : ""}`;
+  });
   return lines.length ? `*Допместа:*\n${lines.join("\n")}` : "";
 }
 
@@ -22919,11 +23047,8 @@ function getPdfRoomCardTextBlockHeight(lines: string[]) {
 }
 
 function formatPdfRoomExtraInventoryLines(item?: ExtraInventoryItem) {
-  const lines = [
-    item?.airBeds ? `- Надувной матрас: ${item.airBeds} / Мест: ${item.airBeds}` : "",
-    item?.rollaways ? `- Раскладушка: ${item.rollaways} / Мест: ${item.rollaways}` : "",
-    item?.extraPlaces ? `- Доп.место: ${item.extraPlaces} / Мест: ${item.extraPlaces}` : ""
-  ].filter(Boolean);
+  const lines = getExtraInventoryPlacements(item)
+    .map((placement) => `- ${placement.label}: ${getExtraGuestTypeLabel(placement.guestType)} / Мест: 1`);
   return lines.length ? `Допместа:\n${lines.join("\n")}` : "";
 }
 
@@ -22933,17 +23058,14 @@ function formatPdfExtraInventorySummaryLines(reservation: Reservation, rooms: Ro
 }
 
 function formatReservationExtraInventorySummaryLine(reservation: Reservation, rooms: Room[]) {
-  const counts = getReservationExtraInventoryCounts(reservation);
-  const totalCount = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {});
+  const inventoryByRoomId = reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation);
+  const totalCount = getExtraInventoryTotalCount(inventoryByRoomId);
   if (!totalCount) return "";
 
-  const airBedUnitPrice = getReservationExtraInventoryPrice(reservation, "air-bed", rooms);
-  const rollawayUnitPrice = getReservationExtraInventoryPrice(reservation, "rollaway", rooms);
-  const nights = getNightsCount(reservation.checkIn, reservation.checkOut);
-  const totalCharge =
-    counts.airBeds * airBedUnitPrice * nights +
-    counts.rollaways * rollawayUnitPrice * nights +
-    calculateReservationExtraPlacesCharge(reservation, rooms);
+  const totalCharge = calculateReservationExtraPlacesCharge(
+    { ...reservation, extraInventoryByRoomId: inventoryByRoomId },
+    rooms
+  );
 
   return `Допместа всего${totalCharge ? `: (+${formatPrice(totalCharge)})` : ""}`;
 }

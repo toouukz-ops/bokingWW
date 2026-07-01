@@ -32,18 +32,20 @@ export interface Reservation {
   comment: string;
   adminComment?: string;
   adults: number;
+  teenagers?: number;
   children: number;
   hasPet: boolean;
   extraBed: boolean;
   extraBedType?: "air-bed" | "rollaway";
   airMattressCount: number;
   rollawayCount?: number;
-  extraInventoryByRoomId?: Record<string, { airBeds: number; rollaways: number; extraPlaces?: number }>;
+  extraInventoryByRoomId?: Record<string, ExtraInventoryItem>;
   extraInventoryChargeEnabled?: boolean;
   inventoryAirBedPrice?: number;
   inventoryRollawayPrice?: number;
   inventoryExtraPlacePrice?: number;
   inventoryExtraPlaceAdultPercent?: number;
+  inventoryExtraPlaceTeenPercent?: number;
   inventoryExtraPlaceChildPercent?: number;
   extraInventoryManual?: boolean;
   hourlyHours: number;
@@ -91,6 +93,22 @@ export interface ReservationItem {
   balancePaidAt?: string;
   checkedInAt?: string;
   checkedOutAt?: string;
+}
+
+export type ExtraGuestType = "adult" | "teen" | "child";
+
+export interface ExtraInventoryPlacement {
+  id: string;
+  typeId: string;
+  label: string;
+  guestType: ExtraGuestType;
+}
+
+export interface ExtraInventoryItem {
+  airBeds: number;
+  rollaways: number;
+  extraPlaces?: number;
+  items?: ExtraInventoryPlacement[];
 }
 
 export interface ReservationPayment {
@@ -185,6 +203,7 @@ export interface PaymentSettings {
   inventoryRollawayPrice: number;
   inventoryExtraPlacePrice: number;
   inventoryExtraPlaceAdultPercent: number;
+  inventoryExtraPlaceTeenPercent: number;
   inventoryExtraPlaceChildPercent: number;
   inventoryCustomFields: Record<string, string>;
   packageDiscountPercent: number;
@@ -268,18 +287,20 @@ export interface ChatBookingDraft {
   guestFirstName: string;
   phone: string;
   adults: number;
+  teenagers?: number;
   children: number;
   hasPet: boolean;
   extraBed: boolean;
   extraBedType?: "air-bed" | "rollaway";
   airMattressCount: number;
   rollawayCount?: number;
-  extraInventoryByRoomId?: Record<string, { airBeds: number; rollaways: number; extraPlaces?: number }>;
+  extraInventoryByRoomId?: Record<string, ExtraInventoryItem>;
   extraInventoryChargeEnabled?: boolean;
   inventoryAirBedPrice?: number;
   inventoryRollawayPrice?: number;
   inventoryExtraPlacePrice?: number;
   inventoryExtraPlaceAdultPercent?: number;
+  inventoryExtraPlaceTeenPercent?: number;
   inventoryExtraPlaceChildPercent?: number;
   extraInventoryManual?: boolean;
   hourlyHours: number;

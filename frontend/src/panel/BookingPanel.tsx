@@ -2644,8 +2644,15 @@ export function BookingPanel() {
     draft = restoredDraft;
     const shouldKeepCurrentContact = !draft.phone && !draft.guestFirstName && contactExtracted && Boolean(guestPhone.trim() || guestFirstName.trim());
     const phoneParts = splitPhoneForInput(shouldKeepCurrentContact ? buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone : draft.phone);
-    setSelectedRoomId(shouldResetPastBookingFields ? "" : draft.selectedRoomId);
-    setSelectedBookingRoomIds(shouldResetPastBookingFields ? [] : draft.selectedBookingRoomIds);
+    const restoredHasActiveReservation = isBookingPanelActiveReservation(draft.lastReservation);
+    const restoredSelectedBookingRoomIds = restoredHasActiveReservation
+      ? draft.lastReservation?.roomIds ?? []
+      : draft.selectedBookingRoomIds;
+    const restoredSelectedRoomId = restoredHasActiveReservation
+      ? restoredSelectedBookingRoomIds[0] ?? ""
+      : draft.selectedRoomId;
+    setSelectedRoomId(shouldResetPastBookingFields ? "" : restoredSelectedRoomId);
+    setSelectedBookingRoomIds(shouldResetPastBookingFields ? [] : restoredSelectedBookingRoomIds);
     setRoomDateOverrides(shouldResetPastBookingFields ? {} : draft.roomDateOverrides ?? buildRoomDateOverridesFromReservation(draft.lastReservation));
     setCheckIn(restoredCheckIn);
     setCheckOut(restoredCheckOut);
@@ -2852,7 +2859,12 @@ export function BookingPanel() {
 
   useEffect(() => {
     const visibleIds = new Set(catalogPanelRooms.map((room) => room.id));
-    const activeReservationRoomIds = new Set(isBookingPanelActiveReservation(lastReservation) ? lastReservation.roomIds : []);
+    if (isBookingPanelActiveReservation(lastReservation)) {
+      setSelectedRoomId(lastReservation.roomIds[0] || "");
+      setSelectedBookingRoomIds(lastReservation.roomIds);
+      return;
+    }
+    const activeReservationRoomIds = new Set<string>();
     setSelectedRoomId((currentId) =>
       visibleIds.has(currentId) || activeReservationRoomIds.has(currentId)
         ? currentId

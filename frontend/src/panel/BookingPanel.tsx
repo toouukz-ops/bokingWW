@@ -259,10 +259,7 @@ const DEFAULT_PRICE_PDF_SUMMARY_OPTIONS: PricePdfSummaryOptionKey[] = [
   "conditions"
 ];
 
-const DEFAULT_EXTRA_INVENTORY_TYPES: ExtraInventoryCatalogItem[] = [
-  { id: "air-bed", label: "Надувной матрас" },
-  { id: "rollaway", label: "Раскладушка" }
-];
+const DEFAULT_EXTRA_INVENTORY_TYPES: ExtraInventoryCatalogItem[] = [];
 
 function isPricePdfSummaryOptionKey(value: string): value is PricePdfSummaryOptionKey {
   return PRICE_PDF_SUMMARY_OPTION_KEYS.includes(value as PricePdfSummaryOptionKey);
@@ -1245,7 +1242,9 @@ export function BookingPanel() {
   );
   const hasHourlyBookingObject = proposalRooms.some(isHourlyBookingObject);
   const extraInventoryCount = getExtraInventoryTotalCount(extraInventoryByRoomId);
+  const extraInventoryPricingEnabled = extraInventoryCount > 0;
   const availableExtraGuestTypes = getAvailableExtraGuestTypes(guestAdults, guestTeenagers, guestChildren);
+  const extraInventoryCatalogItems = useMemo(() => buildExtraInventoryCatalogItems(inventoryCustomFields), [inventoryCustomFields]);
   const bookingTotals = calculateBookingTotalsWithRoomDates(
     proposalRooms,
     checkIn,
@@ -1258,7 +1257,7 @@ export function BookingPanel() {
     discountPercent,
     breakfastIncluded,
     breakfastPricePerPerson,
-    extraInventoryChargeEnabled,
+    extraInventoryPricingEnabled,
     inventoryAirBedPrice,
     inventoryRollawayPrice,
     inventoryExtraPlaceAdultPercent,
@@ -1870,7 +1869,7 @@ export function BookingPanel() {
     airMattressCount,
     defaultCheckInTime,
     extraBedType,
-    extraInventoryChargeEnabled,
+    extraInventoryPricingEnabled,
     extraInventoryByRoomId,
     roomDateOverrides,
     rollawayCount,
@@ -2260,7 +2259,7 @@ export function BookingPanel() {
       airMattressCount,
       rollawayCount,
       extraInventoryByRoomId,
-      extraInventoryChargeEnabled,
+      extraInventoryChargeEnabled: extraInventoryPricingEnabled,
       inventoryAirBedPrice,
       inventoryRollawayPrice,
       inventoryExtraPlacePrice,
@@ -4285,6 +4284,9 @@ export function BookingPanel() {
 
   async function handlePackageSettingsChange(nextSettings: {
     discountPercent: number;
+    extraPlaceAdultPercent: number;
+    extraPlaceTeenPercent: number;
+    extraPlaceChildPercent: number;
     periodDiscountPercent: number;
     periodDiscountFrom: string;
     periodDiscountTo: string;
@@ -4294,6 +4296,9 @@ export function BookingPanel() {
     minRooms: number;
   }) {
     setPackageDiscountPercent(nextSettings.discountPercent);
+    setInventoryExtraPlaceAdultPercent(nextSettings.extraPlaceAdultPercent);
+    setInventoryExtraPlaceTeenPercent(nextSettings.extraPlaceTeenPercent);
+    setInventoryExtraPlaceChildPercent(nextSettings.extraPlaceChildPercent);
     setPackagePeriodDiscountPercent(nextSettings.periodDiscountPercent);
     setPackagePeriodDiscountFrom(nextSettings.periodDiscountFrom);
     setPackagePeriodDiscountTo(nextSettings.periodDiscountTo);
@@ -4303,6 +4308,9 @@ export function BookingPanel() {
     setPackageMinRooms(nextSettings.minRooms);
     await savePaymentSettings(buildPaymentSettingsPatch({
       packageDiscountPercent: nextSettings.discountPercent,
+      inventoryExtraPlaceAdultPercent: nextSettings.extraPlaceAdultPercent,
+      inventoryExtraPlaceTeenPercent: nextSettings.extraPlaceTeenPercent,
+      inventoryExtraPlaceChildPercent: nextSettings.extraPlaceChildPercent,
       packagePeriodDiscountPercent: nextSettings.periodDiscountPercent,
       packagePeriodDiscountFrom: nextSettings.periodDiscountFrom,
       packagePeriodDiscountTo: nextSettings.periodDiscountTo,
@@ -4986,7 +4994,7 @@ export function BookingPanel() {
       reservationTotals.subtotal,
       reservationTotals.discountAmount,
       reservationTotals.total,
-      extraInventoryChargeEnabled,
+      extraInventoryPricingEnabled,
       inventoryAirBedPrice,
       inventoryRollawayPrice,
       inventoryExtraPlaceAdultPercent,
@@ -5020,7 +5028,7 @@ export function BookingPanel() {
       airMattressCount,
       rollawayCount,
       extraInventoryByRoomId,
-      extraInventoryChargeEnabled,
+      extraInventoryChargeEnabled: extraInventoryPricingEnabled,
       inventoryAirBedPrice,
       inventoryRollawayPrice,
       inventoryExtraPlacePrice,
@@ -5141,7 +5149,7 @@ export function BookingPanel() {
         effectiveBookingTotals.subtotal,
         effectiveBookingTotals.discountAmount,
         effectiveBookingTotals.total,
-        extraInventoryChargeEnabled,
+        extraInventoryPricingEnabled,
       inventoryAirBedPrice,
       inventoryRollawayPrice,
       inventoryExtraPlaceAdultPercent,
@@ -5181,7 +5189,7 @@ export function BookingPanel() {
       airMattressCount,
       rollawayCount,
       extraInventoryByRoomId,
-      extraInventoryChargeEnabled,
+      extraInventoryChargeEnabled: extraInventoryPricingEnabled,
       inventoryAirBedPrice,
       inventoryRollawayPrice,
       inventoryExtraPlacePrice,
@@ -6246,7 +6254,6 @@ export function BookingPanel() {
                   {catalogPanelRooms.map((room) => {
                     const roomIsReserved = !isHourlyBookingObject(room) && isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations);
                     const roomReservationConflict = findRoomReservedReservation(room, checkIn, checkOut, reservations);
-                    const roomExtraInventoryCatalogItems = buildRoomExtraInventoryCatalogItems(room);
                     return (
                     <button
                       className={[
@@ -6404,7 +6411,7 @@ export function BookingPanel() {
                         </button>
                         {extraInventoryPickerRoomId === room.id ? (
                           <span className="gpb-card-extra-menu" onClick={(event) => event.stopPropagation()}>
-                            {availableExtraGuestTypes.length ? roomExtraInventoryCatalogItems.map((item) => (
+                            {availableExtraGuestTypes.length && extraInventoryCatalogItems.length ? extraInventoryCatalogItems.map((item) => (
                               <span className="gpb-card-extra-menu-group" key={item.id}>
                                 <b>{item.label}</b>
                                 <span className="gpb-card-extra-guest-list">
@@ -6416,7 +6423,7 @@ export function BookingPanel() {
                                 </span>
                               </span>
                             )) : (
-                              <span className="gpb-card-extra-empty">Сначала укажите гостей</span>
+                              <span className="gpb-card-extra-empty">{availableExtraGuestTypes.length ? "Создайте допместа в настройках" : "Сначала укажите гостей"}</span>
                             )}
                           </span>
                         ) : null}
@@ -6655,20 +6662,6 @@ export function BookingPanel() {
                       }}
                     />
                     <span>Без завтр.</span>
-                  </label>
-                  <label className={`gpb-package-discount-toggle ${extraInventoryChargeEnabled ? "is-active" : ""}`}>
-                    <input
-                      checked={extraInventoryChargeEnabled}
-                      disabled={isBookingLocked}
-                      type="checkbox"
-                      onChange={(event) => {
-                        setExtraInventoryChargeEnabled(event.target.checked);
-                        setManualTotalAmount(0);
-                        setLastReservation(null);
-                        setAgreementSent(false);
-                      }}
-                    />
-                    <span>Инв.</span>
                   </label>
                 </div>
                 <div className="gpb-sale-payment-block">
@@ -10915,6 +10908,9 @@ function SettingsModal({
   onInventoryCustomFieldDelete: (fieldId: string) => void;
   onPackageSettingsChange: (settings: {
     discountPercent: number;
+    extraPlaceAdultPercent: number;
+    extraPlaceTeenPercent: number;
+    extraPlaceChildPercent: number;
     periodDiscountPercent: number;
     periodDiscountFrom: string;
     periodDiscountTo: string;
@@ -10988,7 +10984,7 @@ function SettingsModal({
     { id: "menu", label: "Меню", icon: Utensils },
     { id: "dialogs", label: "Диалоги", icon: Copy },
     { id: "package", label: "Прайс / пакет", icon: Hotel },
-    { id: "inventory", label: "Инвентарь", icon: BedDouble },
+    { id: "inventory", label: "Допместа", icon: BedDouble },
     { id: "weather", label: "Погода и время", icon: CloudSun },
     { id: "backup", label: "Резервная копия", icon: Download },
     { id: "users", label: "Пользователи", icon: Users },
@@ -11031,7 +11027,7 @@ function SettingsModal({
   }
 
   function addInventoryField() {
-    openCustomFieldOverlay("Новое поле инвентаря", "Например: Детские кроватки", inventoryCustomFields, (fieldId) => onInventoryCustomFieldChange(fieldId, ""));
+    openCustomFieldOverlay("Новое допместо", "Например: Диван, матрас, раскладушка", inventoryCustomFields, (fieldId) => onInventoryCustomFieldChange(fieldId, ""));
   }
 
   function addPackageField() {
@@ -11089,6 +11085,9 @@ function SettingsModal({
   function savePackageSettings() {
     onPackageSettingsChange({
       discountPercent: clampNumber(toNumber(localPackageDiscount, packageDiscountPercent), 0, 100),
+      extraPlaceAdultPercent: clampNumber(toNumber(localExtraPlaceAdultPercent, inventoryExtraPlaceAdultPercent), 0, 300),
+      extraPlaceTeenPercent: clampNumber(toNumber(localExtraPlaceTeenPercent, inventoryExtraPlaceTeenPercent), 0, 300),
+      extraPlaceChildPercent: clampNumber(toNumber(localExtraPlaceChildPercent, inventoryExtraPlaceChildPercent), 0, 300),
       periodDiscountPercent: clampNumber(toNumber(localPackagePeriodDiscount, packagePeriodDiscountPercent), 0, 100),
       periodDiscountFrom: localPackagePeriodFrom,
       periodDiscountTo: localPackagePeriodTo,
@@ -11600,6 +11599,18 @@ function SettingsModal({
                     <input min="0" inputMode="numeric" value={localBreakfastPrice} onChange={(event) => setLocalBreakfastPrice(String(parsePriceInput(event.target.value)))} />
                   </label>
                   <label>
+                    Взрослый / допместо, %
+                    <input min="0" type="number" value={localExtraPlaceAdultPercent} onChange={(event) => setLocalExtraPlaceAdultPercent(event.target.value)} />
+                  </label>
+                  <label>
+                    Подросток 6-18, %
+                    <input min="0" type="number" value={localExtraPlaceTeenPercent} onChange={(event) => setLocalExtraPlaceTeenPercent(event.target.value)} />
+                  </label>
+                  <label>
+                    Ребенок 1-6, %
+                    <input min="0" type="number" value={localExtraPlaceChildPercent} onChange={(event) => setLocalExtraPlaceChildPercent(event.target.value)} />
+                  </label>
+                  <label>
                     Расчет с завтраком
                     <input readOnly value="Цена номера" />
                   </label>
@@ -11665,35 +11676,20 @@ function SettingsModal({
               <section className={`gpb-settings-panel ${activeSettingsSection === "inventory" ? "" : "is-hidden"}`}>
                 <div className="gpb-editor-title">
                   <BedDouble size={20} />
-                  <h2>Доп. инвентарь</h2>
+                  <h2>Допместа</h2>
                 </div>
-                <p className="gpb-settings-note">Матрас и раскладушка - общий переносной склад. Диван, софа или тахта задаются в настройках конкретного номера как неосновное спальное место.</p>
-                <div className="gpb-default-time-settings">
-                  <label>
-                    Надувные матрасы
-                    <input min="0" type="number" value={localAirBeds} onChange={(event) => setLocalAirBeds(event.target.value)} />
-                  </label>
-                  <label>
-                    Раскладушки
-                    <input min="0" type="number" value={localRollaways} onChange={(event) => setLocalRollaways(event.target.value)} />
-                  </label>
-                  <label>
-                    Взрослый / допместо, %
-                    <input min="0" type="number" value={localExtraPlaceAdultPercent} onChange={(event) => setLocalExtraPlaceAdultPercent(event.target.value)} />
-                  </label>
-                  <label>
-                    Подросток 6-18, %
-                    <input min="0" type="number" value={localExtraPlaceTeenPercent} onChange={(event) => setLocalExtraPlaceTeenPercent(event.target.value)} />
-                  </label>
-                  <label>
-                    Ребенок 1-6, %
-                    <input min="0" type="number" value={localExtraPlaceChildPercent} onChange={(event) => setLocalExtraPlaceChildPercent(event.target.value)} />
-                  </label>
-                </div>
-                <p className="gpb-settings-note">Стоимость допместа считается по категории гостя: взрослый, подросток или ребенок. Сам предмет только показывает, что поставить в номер.</p>
-                <p className="gpb-settings-note">Если в номере есть диван или другое место, добавьте его в настройках этого номера. В карточке брони оно появится только для этого номера.</p>
+                <p className="gpb-settings-note">Создайте здесь позиции, которые оператор выбирает в карточке номера по кнопке «+»: диван, матрас, раскладушка, софа и т.д.</p>
+                <EditableSettingsFields
+                  fields={inventoryCustomFields}
+                  onChange={onInventoryCustomFieldChange}
+                  onDelete={onInventoryCustomFieldDelete}
+                />
+                <p className="gpb-settings-note">Стоимость включается автоматически, когда допместо добавлено в бронь. Проценты расчета задаются в разделе «Прайс / пакет».</p>
                 <div className="gpb-settings-panel-actions">
-                  <button className="gpb-primary" type="button" onClick={saveInventorySettings}>Сохранить инвентарь</button>
+                  <button className="gpb-settings-add-button" type="button" onClick={addInventoryField}>
+                    Создать допместо
+                  </button>
+                  <button className="gpb-primary" type="button" onClick={saveInventorySettings}>Сохранить допместа</button>
                 </div>
               </section>
 
@@ -18913,38 +18909,17 @@ function getExtraInventoryPlacements(item?: ExtraInventoryItem): ExtraInventoryP
   ];
 }
 
-function buildRoomExtraInventoryCatalogItems(room: Room): ExtraInventoryCatalogItem[] {
+function buildExtraInventoryCatalogItems(customFields: Record<string, string>): ExtraInventoryCatalogItem[] {
+  const customItems = Object.entries(customFields)
+    .map(([id, value]) => ({ id, label: normalizeExtractedText(value || id) }))
+    .filter((item) => item.id && item.label);
   const byId = new Map<string, ExtraInventoryCatalogItem>();
-  DEFAULT_EXTRA_INVENTORY_TYPES.forEach((item) => byId.set(item.id, item));
-  getRoomSpecificExtraInventoryItems(room).forEach((item) => byId.set(item.id, item));
+  DEFAULT_EXTRA_INVENTORY_TYPES.concat(customItems).forEach((item) => byId.set(item.id, item));
   return Array.from(byId.values());
 }
 
 function getExtraInventoryTypeLabel(typeId: string) {
   return DEFAULT_EXTRA_INVENTORY_TYPES.find((item) => item.id === typeId)?.label || "";
-}
-
-function getRoomSpecificExtraInventoryItems(room: Room): ExtraInventoryCatalogItem[] {
-  const items: ExtraInventoryCatalogItem[] = [];
-  room.sleepingPlaces.forEach((place) => {
-    if (!isRoomSpecificExtraInventoryPlace(place)) return;
-    const label = getSleepingPlaceTitle(place);
-    if (!label) return;
-    items.push({
-      id: `room-${room.id}-${place.id}`,
-      label
-    });
-  });
-  return items;
-}
-
-function isRoomSpecificExtraInventoryPlace(place: SleepingPlace) {
-  if (place.count <= 0) return false;
-  if (place.isMain) return false;
-  const title = normalizeExtractedText(getSleepingPlaceTitle(place)).toLowerCase();
-  const isSofaLike = place.type === "sofa" || place.type === "sofa-bed" || place.type === "fixed-sofa" || /диван|софа|тахта|кушет|канап/.test(title);
-  const isCustomExtra = place.type === "custom" && /доп|диван|софа|тахта|кушет|канап/.test(title);
-  return isSofaLike || isCustomExtra;
 }
 
 function getAvailableExtraGuestTypes(adults: number, teenagers: number, children: number): ExtraGuestType[] {

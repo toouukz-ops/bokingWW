@@ -343,32 +343,32 @@ body.gpb-booking-panel-open #app {
 
 .gpb-guest-count-section {
   background: #ffffff;
-  padding: 10px 12px;
+  padding: 8px 10px;
 }
 
 .gpb-guest-count-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(92px, 0.62fr);
+  gap: 6px;
 }
 
 .gpb-guest-count-grid label {
   display: grid;
-  grid-template-columns: minmax(48px, 1fr) 28px 38px 28px;
+  grid-template-columns: minmax(34px, 1fr) 26px 34px 26px;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
   border: 1px solid #d8dee5;
   border-radius: 8px;
   background: #ffffff;
-  padding: 6px;
+  padding: 5px;
 }
 
 .gpb-guest-count-grid span,
 .gpb-guest-count-total span {
   overflow: hidden;
   color: #5c6670;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -376,7 +376,7 @@ body.gpb-booking-panel-open #app {
 
 .gpb-guest-count-grid input,
 .gpb-guest-count-grid button {
-  height: 30px;
+  height: 28px;
   border: 1px solid #cfd6dd;
   border-radius: 7px;
   background: #ffffff;
@@ -387,7 +387,7 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-guest-count-grid input {
-  padding: 0 6px;
+  padding: 0 4px;
 }
 
 .gpb-guest-count-grid button {
@@ -409,25 +409,25 @@ body.gpb-booking-panel-open #app {
 
 .gpb-guest-count-total {
   display: grid;
-  grid-template-columns: minmax(48px, 1fr) 48px;
+  grid-template-columns: minmax(38px, 1fr) 36px;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   border: 1px solid #b9dfd2;
   border-radius: 8px;
   background: #eef8f4;
-  padding: 6px;
+  padding: 5px;
 }
 
 .gpb-guest-count-total strong {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 30px;
+  height: 28px;
   border-radius: 999px;
   background: #ffffff;
   color: #0f6b57;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 900;
 }
 

@@ -6162,7 +6162,7 @@ export function BookingPanel() {
       <section className="gpb-section gpb-guest-count-section">
         <div className="gpb-guest-count-grid">
           <label>
-            <span>Взрослые</span>
+            <span title="Взрослые">Взр.</span>
             <button type="button" onClick={() => updateGuestCount("adults", guestAdults - 1)} disabled={isBookingLocked || guestAdults <= 0}>-</button>
             <input
               aria-label="Количество взрослых"
@@ -6176,7 +6176,7 @@ export function BookingPanel() {
             <button type="button" onClick={() => updateGuestCount("adults", guestAdults + 1)} disabled={isBookingLocked}>+</button>
           </label>
           <label>
-            <span>Подростки <small>6-18</small></span>
+            <span title="Подростки 10-18">Подр. <small>10-18</small></span>
             <button type="button" onClick={() => updateGuestCount("teenagers", guestTeenagers - 1)} disabled={isBookingLocked || guestTeenagers <= 0}>-</button>
             <input
               aria-label="Количество подростков"
@@ -6190,7 +6190,7 @@ export function BookingPanel() {
             <button type="button" onClick={() => updateGuestCount("teenagers", guestTeenagers + 1)} disabled={isBookingLocked}>+</button>
           </label>
           <label>
-            <span>Дети <small>1-6</small></span>
+            <span title="Дети до 10">Дети <small>до 10</small></span>
             <button type="button" onClick={() => updateGuestCount("children", guestChildren - 1)} disabled={isBookingLocked || guestChildren <= 0}>-</button>
             <input
               aria-label="Количество детей"
@@ -6204,7 +6204,7 @@ export function BookingPanel() {
             <button type="button" onClick={() => updateGuestCount("children", guestChildren + 1)} disabled={isBookingLocked}>+</button>
           </label>
           <div className="gpb-guest-count-total">
-            <span>Итого</span>
+            <span>Всего</span>
             <strong>{guestAdults + guestTeenagers + guestChildren}</strong>
           </div>
         </div>
@@ -11645,11 +11645,11 @@ function SettingsModal({
                     <input min="0" type="number" value={localExtraPlaceAdultPercent} onChange={(event) => setLocalExtraPlaceAdultPercent(event.target.value)} />
                   </label>
                   <label>
-                    Подросток 6-18, %
+                    Подросток 10-18, %
                     <input min="0" type="number" value={localExtraPlaceTeenPercent} onChange={(event) => setLocalExtraPlaceTeenPercent(event.target.value)} />
                   </label>
                   <label>
-                    Ребенок 1-6, %
+                    Ребенок до 10, %
                     <input min="0" type="number" value={localExtraPlaceChildPercent} onChange={(event) => setLocalExtraPlaceChildPercent(event.target.value)} />
                   </label>
                   <label>

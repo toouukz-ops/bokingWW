@@ -6248,6 +6248,7 @@ export function BookingPanel() {
                   {catalogPanelRooms.map((room) => {
                     const roomIsReserved = !isHourlyBookingObject(room) && isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations);
                     const roomReservationConflict = findRoomReservedReservation(room, checkIn, checkOut, reservations);
+                    const roomExtraInventoryPlacements = getExtraInventoryPlacements(extraInventoryByRoomId[room.id]);
                     return (
                     <button
                       className={[
@@ -6276,26 +6277,32 @@ export function BookingPanel() {
                             <span>Выезд {formatNumericDayMonth(roomReservationConflict.checkOut)}</span>
                           </span>
                         ) : null}
-                      </span>
-                      {extraInventoryByRoomId[room.id] ? (
-                        <span className="gpb-card-extra-badge" onClick={(event) => event.stopPropagation()}>
-                          {getExtraInventoryPlacements(extraInventoryByRoomId[room.id]).map((placement) => (
-                            <span className="gpb-card-extra-badge-row" key={placement.id}>
-                              <span>{placement.label} - {getExtraGuestTypeLabel(placement.guestType)}</span>
-                              <button
-                                aria-label={`Удалить ${placement.label}`}
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  removeExtraInventoryPlacementFromCard(room.id, placement.id);
-                                }}
-                              >
-                                <X size={11} />
-                              </button>
+                        {roomExtraInventoryPlacements.length ? (
+                          <span className="gpb-card-extra-badge" onClick={(event) => event.stopPropagation()}>
+                            <span className="gpb-card-extra-badge-chip" aria-label={`Допместа: ${roomExtraInventoryPlacements.length}`}>
+                              <BedDouble size={13} />
+                              <span>+{roomExtraInventoryPlacements.length}</span>
                             </span>
-                          ))}
-                        </span>
-                      ) : null}
+                            <span className="gpb-card-extra-badge-popover">
+                              {roomExtraInventoryPlacements.map((placement) => (
+                                <span className="gpb-card-extra-badge-row" key={placement.id}>
+                                  <span>{placement.label} - {getExtraGuestTypeLabel(placement.guestType)}</span>
+                                  <button
+                                    aria-label={`Удалить ${placement.label}`}
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      removeExtraInventoryPlacementFromCard(room.id, placement.id);
+                                    }}
+                                  >
+                                    <X size={11} />
+                                  </button>
+                                </span>
+                              ))}
+                            </span>
+                          </span>
+                        ) : null}
+                      </span>
                       {getActiveRoomDateOverride(room.id, checkIn, checkOut, roomDateOverrides) ? (
                         <span className="gpb-card-date-badge" onClick={(event) => event.stopPropagation()}>
                           {formatShortDayMonth(getActiveRoomDateOverride(room.id, checkIn, checkOut, roomDateOverrides)?.checkIn ?? checkIn)} - {formatShortDayMonth(getActiveRoomDateOverride(room.id, checkIn, checkOut, roomDateOverrides)?.checkOut ?? checkOut)}

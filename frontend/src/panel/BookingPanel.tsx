@@ -1246,7 +1246,7 @@ export function BookingPanel() {
   const extraInventoryPricingEnabled = extraInventoryCount > 0;
   const availableExtraGuestTypes = getAvailableExtraGuestTypes(guestAdults, guestTeenagers, guestChildren);
   const extraInventoryCatalogItems = useMemo(() => buildExtraInventoryCatalogItems(inventoryCustomFields), [inventoryCustomFields]);
-  const activeExtraInventoryCatalogItem = extraInventoryCatalogItems.find((item) => item.id === extraInventoryPickerItemId) ?? extraInventoryCatalogItems[0] ?? null;
+  const activeExtraInventoryCatalogItem = extraInventoryCatalogItems.find((item) => item.id === extraInventoryPickerItemId) ?? null;
   const bookingTotals = calculateBookingTotalsWithRoomDates(
     proposalRooms,
     checkIn,
@@ -1301,19 +1301,6 @@ export function BookingPanel() {
       document.removeEventListener("mousedown", closeExtraInventoryPicker, true);
     };
   }, [extraInventoryPickerRoomId]);
-
-  useEffect(() => {
-    if (!extraInventoryPickerRoomId) return;
-    if (!extraInventoryCatalogItems.length) {
-      setExtraInventoryPickerItemId("");
-      return;
-    }
-    setExtraInventoryPickerItemId((currentId) =>
-      currentId && extraInventoryCatalogItems.some((item) => item.id === currentId)
-        ? currentId
-        : extraInventoryCatalogItems[0].id
-    );
-  }, [extraInventoryCatalogItems, extraInventoryPickerRoomId]);
 
   useEffect(() => {
     adminCommentValueRef.current = adminComment;
@@ -6396,7 +6383,7 @@ export function BookingPanel() {
                             event.stopPropagation();
                             setExtraInventoryPickerRoomId((currentId) => {
                               const nextId = currentId === room.id ? "" : room.id;
-                              setExtraInventoryPickerItemId(nextId ? extraInventoryCatalogItems[0]?.id ?? "" : "");
+                              setExtraInventoryPickerItemId("");
                               return nextId;
                             });
                           }}
@@ -6430,8 +6417,8 @@ export function BookingPanel() {
                           </span>
                         </button>
                         {extraInventoryPickerRoomId === room.id ? (
-                          <span className="gpb-card-extra-menu" onClick={(event) => event.stopPropagation()}>
-                            {availableExtraGuestTypes.length && extraInventoryCatalogItems.length && activeExtraInventoryCatalogItem ? (
+                          <span className={`gpb-card-extra-menu ${activeExtraInventoryCatalogItem ? "has-submenu" : ""}`} onClick={(event) => event.stopPropagation()}>
+                            {availableExtraGuestTypes.length && extraInventoryCatalogItems.length ? (
                               <>
                                 <span className="gpb-card-extra-items-list">
                                   {extraInventoryCatalogItems.map((item) => (
@@ -6445,13 +6432,15 @@ export function BookingPanel() {
                                     </button>
                                   ))}
                                 </span>
-                                <span className="gpb-card-extra-guest-list">
-                                  {availableExtraGuestTypes.map((guestType) => (
-                                    <button type="button" key={`${activeExtraInventoryCatalogItem.id}-${guestType}`} onClick={() => addExtraInventoryFromCard(room.id, activeExtraInventoryCatalogItem, guestType)}>
-                                      {getExtraGuestTypeLabel(guestType)}
-                                    </button>
-                                  ))}
-                                </span>
+                                {activeExtraInventoryCatalogItem ? (
+                                  <span className="gpb-card-extra-guest-list">
+                                    {availableExtraGuestTypes.map((guestType) => (
+                                      <button type="button" key={`${activeExtraInventoryCatalogItem.id}-${guestType}`} onClick={() => addExtraInventoryFromCard(room.id, activeExtraInventoryCatalogItem, guestType)}>
+                                        {getExtraGuestTypeLabel(guestType)}
+                                      </button>
+                                    ))}
+                                  </span>
+                                ) : null}
                               </>
                             ) : (
                               <span className="gpb-card-extra-empty">{availableExtraGuestTypes.length ? "Создайте допместа в настройках" : "Сначала укажите гостей"}</span>

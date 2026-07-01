@@ -1090,10 +1090,10 @@ body.gpb-booking-panel-open #app {
   bottom: calc(100% + 6px);
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(118px, auto);
+  grid-template-columns: minmax(130px, 1fr);
   gap: 8px;
-  min-width: 300px;
-  max-width: 360px;
+  min-width: 160px;
+  max-width: 220px;
   max-height: 360px;
   overflow: auto;
   border: 1px solid #cbd6df;
@@ -1101,6 +1101,12 @@ body.gpb-booking-panel-open #app {
   background: #ffffff;
   box-shadow: 0 10px 24px rgba(15, 32, 43, 0.18);
   padding: 6px;
+}
+
+.gpb-card-extra-menu.has-submenu {
+  grid-template-columns: minmax(120px, 1fr) minmax(118px, auto);
+  min-width: 300px;
+  max-width: 360px;
 }
 
 .gpb-card-extra-items-list,
@@ -1111,8 +1117,11 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-card-extra-items-list {
-  border-right: 1px solid #e3e9ef;
   padding-right: 6px;
+}
+
+.gpb-card-extra-menu.has-submenu .gpb-card-extra-items-list {
+  border-right: 1px solid #e3e9ef;
 }
 
 .gpb-card-extra-menu button {

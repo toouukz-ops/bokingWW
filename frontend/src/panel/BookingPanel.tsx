@@ -117,6 +117,8 @@ const TIMELINE_CLEANING_COLOR_KEY = "gpb-timeline-cleaning-color";
 const DEFAULT_TIMELINE_CLEANING_COLOR = "#7c3aed";
 const TIMELINE_REPAIR_COLOR_KEY = "gpb-timeline-repair-color";
 const DEFAULT_TIMELINE_REPAIR_COLOR = "#d12b2b";
+const RESERVATION_CALENDAR_LIST_HEIGHT_KEY = "gpb-reservation-calendar-list-height";
+const DEFAULT_RESERVATION_CALENDAR_LIST_HEIGHT = 280;
 const BOOKING_ERROR_CANCEL_REASON = "Ошибка бронирования";
 const PANEL_WIDTH_RATIO = 0.4;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -539,6 +541,22 @@ function getStoredTimelineColor(key: string, fallback: string) {
     return storedColor && /^#[0-9a-f]{6}$/i.test(storedColor) ? storedColor : fallback;
   } catch {
     return fallback;
+  }
+}
+
+function clampReservationCalendarListHeight(value: number) {
+  const maxHeight = Math.max(220, Math.floor(window.innerHeight * 0.72));
+  return Math.min(maxHeight, Math.max(140, Math.round(value)));
+}
+
+function getStoredReservationCalendarListHeight() {
+  try {
+    const storedHeight = Number(window.localStorage.getItem(RESERVATION_CALENDAR_LIST_HEIGHT_KEY));
+    return Number.isFinite(storedHeight) && storedHeight > 0
+      ? clampReservationCalendarListHeight(storedHeight)
+      : DEFAULT_RESERVATION_CALENDAR_LIST_HEIGHT;
+  } catch {
+    return DEFAULT_RESERVATION_CALENDAR_LIST_HEIGHT;
   }
 }
 
@@ -12085,9 +12103,11 @@ function ReservationsModal({
   const [cookCopyState, setCookCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [deleteTarget, setDeleteTarget] = useState<Reservation | null>(null);
   const [editingReservation, setEditingReservation] = useState<Reservation | null>(null);
+  const [calendarListHeight, setCalendarListHeight] = useState(getStoredReservationCalendarListHeight);
   const [timelineLayers, setTimelineLayers] = useState({
     alternateRows: true,
     checkIn: true,
+    checkOut: true,
     cleaning: false,
     lodging: true,
     repair: true
@@ -12099,7 +12119,7 @@ function ReservationsModal({
   const [timelineCheckOutColor, setTimelineCheckOutColor] = useState(() => getStoredTimelineColor(TIMELINE_CHECKOUT_COLOR_KEY, DEFAULT_TIMELINE_CHECKOUT_COLOR));
   const [timelineCleaningColor, setTimelineCleaningColor] = useState(() => getStoredTimelineColor(TIMELINE_CLEANING_COLOR_KEY, DEFAULT_TIMELINE_CLEANING_COLOR));
   const [timelineRepairColor, setTimelineRepairColor] = useState(() => getStoredTimelineColor(TIMELINE_REPAIR_COLOR_KEY, DEFAULT_TIMELINE_REPAIR_COLOR));
-  const allTimelineLayersEnabled = timelineLayers.checkIn && timelineLayers.cleaning && timelineLayers.lodging && timelineLayers.repair;
+  const allTimelineLayersEnabled = timelineLayers.checkIn && timelineLayers.checkOut && timelineLayers.cleaning && timelineLayers.lodging && timelineLayers.repair;
   const timelineDays = useMemo(() => getMonthTimelineDays(monthDate), [monthDate]);
   const timelineRooms = useMemo(() => rooms
     .filter((room) => room.bookable && !room.hideInBookingPanel)
@@ -12178,6 +12198,32 @@ function ReservationsModal({
     }
   }
 
+  function handleCalendarSplitResizeStart(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = calendarListHeight;
+
+    function handleMove(moveEvent: PointerEvent) {
+      const nextHeight = clampReservationCalendarListHeight(startHeight + startY - moveEvent.clientY);
+      setCalendarListHeight(nextHeight);
+      try {
+        window.localStorage.setItem(RESERVATION_CALENDAR_LIST_HEIGHT_KEY, String(nextHeight));
+      } catch {
+        // Split preference is optional.
+      }
+    }
+
+    function handleEnd() {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleEnd);
+      document.body.classList.remove("gpb-reservation-split-resizing");
+    }
+
+    document.body.classList.add("gpb-reservation-split-resizing");
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleEnd);
+  }
+
   return (
     <div className="gpb-modal-backdrop">
       <div className="gpb-catalog-modal gpb-reservations-modal" role="dialog" aria-modal="true" aria-label="Брони">
@@ -12230,7 +12276,7 @@ function ReservationsModal({
                 type="button"
                 onClick={() => {
                   const nextValue = !allTimelineLayersEnabled;
-                  setTimelineLayers((current) => ({ ...current, checkIn: nextValue, cleaning: nextValue, lodging: nextValue, repair: nextValue }));
+                  setTimelineLayers((current) => ({ ...current, checkIn: nextValue, checkOut: nextValue, cleaning: nextValue, lodging: nextValue, repair: nextValue }));
                 }}
               >
                 <span>Все</span>
@@ -12256,7 +12302,7 @@ function ReservationsModal({
                 },
                 {
                   color: timelineCheckOutColor,
-                  key: "checkIn",
+                  key: "checkOut",
                   label: "Выезд",
                   onColor: (color: string) => {
                     setTimelineCheckOutColor(color);
@@ -12334,7 +12380,10 @@ function ReservationsModal({
             </div>
           </section>
 
-          <section className="gpb-reservations-layout">
+          <section
+            className="gpb-reservations-layout"
+            style={{ "--gpb-reservation-list-height": `${calendarListHeight}px` } as CSSProperties}
+          >
             <ReservationTimelineBoard
               reservations={filteredCalendarReservations}
               rooms={timelineRooms}
@@ -12349,6 +12398,13 @@ function ReservationsModal({
               timelineLayers={timelineLayers}
               timelineDays={timelineDays}
               onSelectDate={setSelectedDate}
+            />
+
+            <div
+              aria-label="Изменить высоту списка броней"
+              className="gpb-reservation-split-resizer"
+              onPointerDown={handleCalendarSplitResizeStart}
+              role="separator"
             />
 
             <div className="gpb-reservation-list-panel">
@@ -12422,7 +12478,7 @@ function ReservationTimelineBoard({
   timelineLodgingColor: string;
   timelineRepairColor: string;
   timelineSelectedDayColor: string;
-  timelineLayers: { alternateRows: boolean; checkIn: boolean; cleaning: boolean; lodging: boolean; repair: boolean };
+  timelineLayers: { alternateRows: boolean; checkIn: boolean; checkOut: boolean; cleaning: boolean; lodging: boolean; repair: boolean };
   timelineDays: Array<{ date: string; dayNumber: number; weekday: string; isWeekend: boolean }>;
   onSelectDate: (date: string) => void;
 }) {
@@ -12535,7 +12591,7 @@ function ReservationTimelineRoomRow({
   rowIndex: number;
   room: Room;
   selectedDate: string;
-  timelineLayers: { alternateRows: boolean; checkIn: boolean; cleaning: boolean; lodging: boolean; repair: boolean };
+  timelineLayers: { alternateRows: boolean; checkIn: boolean; checkOut: boolean; cleaning: boolean; lodging: boolean; repair: boolean };
   timelineDays: Array<{ date: string; dayNumber: number; weekday: string; isWeekend: boolean }>;
   onSelectDate: (date: string) => void;
 }) {
@@ -12599,7 +12655,7 @@ function ReservationTimelineRoomRow({
           />
         </svg>
       )) : null}
-      {timelineLayers.checkIn ? segments.flatMap((segment) => [
+      {timelineLayers.checkIn ? segments.map((segment) => (
         <div
           className="gpb-timeline-point is-checkin"
           key={`${segment.reservation.id}-${segment.roomId}-checkin`}
@@ -12609,7 +12665,9 @@ function ReservationTimelineRoomRow({
             "--gpb-timeline-start": segment.startPosition
           } as React.CSSProperties}
           title={`Заезд: ${segment.reservation.guestFirstName || "Гость"} · ${segment.checkInTime}`}
-        />,
+        />
+      )) : null}
+      {timelineLayers.checkOut ? segments.map((segment) => (
         <div
           className="gpb-timeline-point is-checkout"
           key={`${segment.reservation.id}-${segment.roomId}-checkout`}
@@ -12620,7 +12678,7 @@ function ReservationTimelineRoomRow({
           } as React.CSSProperties}
           title={`Выезд: ${segment.reservation.guestFirstName || "Гость"} · ${segment.checkOutTime}`}
         />
-      ]) : null}
+      )) : null}
       {timelineLayers.cleaning ? cleaningSegments.map((segment) => (
         <div
           className="gpb-timeline-status-bar is-cleaning"
@@ -12659,8 +12717,6 @@ function ReservationCard({
   const bookedRooms = reservation.roomIds
     .map((roomId) => rooms.find((room) => room.id === roomId))
     .filter((room): room is Room => Boolean(room));
-  const extraInventoryText = formatReservationExtraInventory(reservation);
-  const includedText = getAdminIncludedText(bookedRooms, reservation);
   const balance = getReservationBalance(reservation);
 
   return (
@@ -12670,12 +12726,10 @@ function ReservationCard({
         <span>{formatReservationPhone(reservation.phone)}</span>
         <span>{formatReservationDateRange(reservation)}</span>
         <span>{formatReservationRowRooms(bookedRooms)}</span>
-        <span>{formatReservationGuestCountText(reservation).replace("Гости: ", "")}</span>
-        <span>{includedText}</span>
+        <span>{formatReservationCompactGuestCountText(reservation)}</span>
         <b>{formatPrice(reservation.total)}</b>
         <span className={reservation.prepaymentReceivedAt ? "is-done" : "is-muted"}>Пред. {formatPrice(reservation.prepayment)}</span>
         <span className={reservation.balancePaidAt ? "is-done" : balance > 0 ? "" : "is-muted"}>Ост. {formatReservationPaymentAmount(balance)}</span>
-        {extraInventoryText ? <span>{extraInventoryText}</span> : null}
         {reservation.checkedInAt ? <span className="is-done">Въезд</span> : null}
         {reservation.checkedOutAt ? <span className="is-done">Выезд</span> : null}
         {reservation.adminComment?.trim() ? <span>{reservation.adminComment.trim()}</span> : null}
@@ -19976,6 +20030,15 @@ function formatReservationGuestCountText(reservation: Reservation) {
   return `Гости: ${adults} взр. / ${teenagers} подрост. / ${children} дет. / всего ${total}`;
 }
 
+function formatReservationCompactGuestCountText(reservation: Reservation) {
+  const adults = Math.max(0, reservation.adults || 0);
+  const teenagers = Math.max(0, reservation.teenagers || 0);
+  const children = Math.max(0, reservation.children || 0);
+  const total = adults + teenagers + children;
+  if (!total) return "гости не указаны";
+  return `${total} чел. (${adults}/${teenagers}/${children})`;
+}
+
 function formatReservationSummaryGuestLine(reservation: Reservation) {
   const adults = Math.max(0, reservation.adults || 0);
   const teenagers = Math.max(0, reservation.teenagers || 0);
@@ -20215,8 +20278,6 @@ function getAdminIncludedText(rooms: Room[], reservation?: Pick<Reservation, "ai
     if (breakfastIndex >= 0) included.splice(breakfastIndex, 1);
     included.unshift("Без завтрака");
   }
-  const extraInventoryText = reservation ? formatReservationExtraInventory(reservation) : "";
-  if (extraInventoryText) included.push(extraInventoryText);
   return included.length ? included.join(", ") : "нет";
 }
 

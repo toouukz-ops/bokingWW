@@ -5431,10 +5431,36 @@ body.gpb-booking-panel-open #app {
 
 .gpb-reservations-layout {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(150px, 180px);
-  gap: 14px;
+  grid-template-rows: minmax(120px, 1fr) 12px minmax(140px, var(--gpb-reservation-list-height, 280px));
+  gap: 0;
   height: 100%;
   min-height: 0;
+}
+
+.gpb-reservation-split-resizer {
+  position: relative;
+  display: grid;
+  place-items: center;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.gpb-reservation-split-resizer::before {
+  content: "";
+  width: 64px;
+  height: 4px;
+  border-radius: 999px;
+  background: #c8d1da;
+}
+
+.gpb-reservation-split-resizer:hover::before,
+body.gpb-reservation-split-resizing .gpb-reservation-split-resizer::before {
+  background: #0f6b57;
+}
+
+body.gpb-reservation-split-resizing {
+  cursor: row-resize;
+  user-select: none;
 }
 
 .gpb-reservation-timeline-board,

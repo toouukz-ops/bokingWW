@@ -941,6 +941,7 @@ export function BookingPanel() {
   }>({ message: "", status: "idle" });
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [menuUploadItemId, setMenuUploadItemId] = useState("");
+  const [menuUploadError, setMenuUploadError] = useState("");
   const [quickPhrases, setQuickPhrases] = useState<string[]>(DEFAULT_QUICK_PHRASES);
   const [customAmenityOptions, setCustomAmenityOptions] = useState<string[]>([]);
   const [customFoodOptions, setCustomFoodOptions] = useState<string[]>([]);
@@ -4253,16 +4254,20 @@ export function BookingPanel() {
     if (!file) return;
 
     setMenuUploadItemId(itemId);
+    setMenuUploadError("");
     try {
       const previousPhotoPath = menuItems.find((item) => item.id === itemId)?.photoPath;
-      const uploaded = await uploadObjectGalleryMedia(file);
+      const preparedFile = await prepareMenuPhotoForUpload(file);
+      const uploaded = await withTimeout(uploadObjectGalleryMedia(preparedFile), 120000, "Фото не загрузилось за 2 минуты. Попробуйте сжать фото или отправить другое.");
       if (uploaded.mediaType !== "photo") return;
       await preloadMediaBlobs([uploaded.path]);
       if (previousPhotoPath && previousPhotoPath !== uploaded.path) {
         await deleteCachedMediaBlobs([previousPhotoPath]);
       }
       const nextItems = menuItems.map((item) => item.id === itemId ? { ...item, photoPath: uploaded.path } : item);
-      await saveMenuItems(nextItems);
+      await withTimeout(saveMenuItems(nextItems), 30000, "Фото загрузилось, но настройки меню не сохранились. Нажмите «Сохранить меню» или повторите загрузку.");
+    } catch (error) {
+      setMenuUploadError(error instanceof Error ? error.message : "Не удалось загрузить фото меню.");
     } finally {
       setMenuUploadItemId("");
     }
@@ -7456,6 +7461,7 @@ export function BookingPanel() {
           linkMethods={linkMethods}
           menuItems={menuItems}
           menuUploadItemId={menuUploadItemId}
+          menuUploadError={menuUploadError}
           includedCardPages={includedCardPages}
           objectGalleryPhotoDescriptions={objectGalleryPhotoDescriptions}
           objectGalleryPhotoPaths={objectGalleryPhotoPaths}
@@ -10884,6 +10890,7 @@ function SettingsModal({
   linkMethods,
   menuItems,
   menuUploadItemId,
+  menuUploadError,
   includedCardPages,
   objectGalleryPhotoDescriptions,
   objectGalleryPhotoPaths,
@@ -10961,6 +10968,7 @@ function SettingsModal({
   linkMethods: Record<string, string>;
   menuItems: MenuItem[];
   menuUploadItemId: string;
+  menuUploadError: string;
   includedCardPages: IncludedCardPage[];
   objectGalleryPhotoDescriptions: Record<string, string>;
   objectGalleryPhotoPaths: string[];
@@ -11682,6 +11690,9 @@ function SettingsModal({
               ) : (
                 <p className="gpb-settings-note">Меню пока пустое.</p>
               )}
+              {menuUploadError ? (
+                <div className="gpb-settings-upload-error">{menuUploadError}</div>
+              ) : null}
               <div className="gpb-settings-panel-actions gpb-menu-panel-actions">
                 <button className="gpb-settings-add-button" type="button" onClick={onMenuItemCreate}>
                   Добавить блюдо
@@ -23990,6 +24001,71 @@ function convertImageBlobToJpeg(blob: Blob) {
       reject(new Error("Image load failed"));
     };
 
+    image.src = objectUrl;
+  });
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise
+      .then((value) => resolve(value))
+      .catch((error) => reject(error))
+      .finally(() => window.clearTimeout(timeoutId));
+  });
+}
+
+async function prepareMenuPhotoForUpload(file: File) {
+  if (!file.type.startsWith("image/") || /\.(heic|heif|hec)$/i.test(file.name)) {
+    return file;
+  }
+
+  const shouldResizeBySize = file.size > 1.5 * 1024 * 1024;
+  if (!shouldResizeBySize && file.type === "image/jpeg") {
+    return file;
+  }
+
+  try {
+    const image = await loadImageFromFile(file);
+    const maxSide = 1800;
+    const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+    if (!shouldResizeBySize && scale >= 1 && file.type === "image/jpeg") {
+      URL.revokeObjectURL(image.src);
+      return file;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) {
+      URL.revokeObjectURL(image.src);
+      return file;
+    }
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(image.src);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.86));
+    if (!blob || blob.size >= file.size) return file;
+    const cleanName = file.name.replace(/\.[a-z0-9]+$/i, "") || "menu-photo";
+    return new File([blob], `${cleanName}.jpg`, { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
+}
+
+function loadImageFromFile(file: File) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new window.Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    image.onload = () => resolve(image);
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Image load failed"));
+    };
     image.src = objectUrl;
   });
 }

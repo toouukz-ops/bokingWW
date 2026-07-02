@@ -605,7 +605,13 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
         servicePassword: typeof settings?.servicePassword === "string" && settings.servicePassword.trim() ? settings.servicePassword : "0000",
         agreementHoldMinutes: typeof settings?.agreementHoldMinutes === "number" && Number.isFinite(settings.agreementHoldMinutes)
           ? Math.max(1, Math.round(settings.agreementHoldMinutes))
-          : 30
+          : 30,
+        reservationReminderTime: typeof settings?.reservationReminderTime === "string" && /^\d{2}:\d{2}$/.test(settings.reservationReminderTime)
+          ? settings.reservationReminderTime
+          : "09:00",
+        reservationReminderRepeatHours: typeof settings?.reservationReminderRepeatHours === "number" && Number.isFinite(settings.reservationReminderRepeatHours)
+          ? Math.max(0, Math.min(24, Math.round(settings.reservationReminderRepeatHours)))
+          : 0
       };
 }
 

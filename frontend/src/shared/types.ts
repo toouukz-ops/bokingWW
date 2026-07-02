@@ -221,6 +221,8 @@ export interface PaymentSettings {
   packageCustomFields: Record<string, string>;
   servicePassword: string;
   agreementHoldMinutes: number;
+  reservationReminderTime: string;
+  reservationReminderRepeatHours: number;
 }
 
 export type IncludedCardTemplate = "hero-thumbs-description" | "photo-description";

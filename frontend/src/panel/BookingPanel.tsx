@@ -1023,6 +1023,8 @@ export function BookingPanel() {
   const [socialPriceDescription, setSocialPriceDescription] = useState("");
   const [servicePassword, setServicePassword] = useState("0000");
   const [agreementHoldMinutes, setAgreementHoldMinutes] = useState(DEFAULT_ROOM_HOLD_MINUTES);
+  const [reservationReminderTime, setReservationReminderTime] = useState("09:00");
+  const [reservationReminderRepeatHours, setReservationReminderRepeatHours] = useState(0);
   const [operatorName, setOperatorName] = useState(getStoredOperatorName);
   const [lastReservation, setLastReservation] = useState<Reservation | null>(null);
   const [bookingDateWarning, setBookingDateWarning] = useState("");
@@ -1038,7 +1040,9 @@ export function BookingPanel() {
   const [selectedCheckInRoomId, setSelectedCheckInRoomId] = useState("");
   const [extendReservationTarget, setExtendReservationTarget] = useState<Reservation | null>(null);
   const [reservationReminderToday, setReservationReminderToday] = useState(() => formatDateInput(new Date()));
+  const [reservationReminderNowMs, setReservationReminderNowMs] = useState(() => Date.now());
   const [reservationReminderDismissals, setReservationReminderDismissals] = useState<Record<string, boolean>>(() => getStoredReservationReminderDismissals());
+  const [isManualReservationReminderOpen, setIsManualReservationReminderOpen] = useState(false);
   const [isPaymentMethodRequiredOpen, setIsPaymentMethodRequiredOpen] = useState(false);
   const [agreementSent, setAgreementSent] = useState(false);
   const [agreementEverSent, setAgreementEverSent] = useState(false);
@@ -1096,11 +1100,21 @@ export function BookingPanel() {
     [checkIn, dynamicPricingEnabled, dynamicPricingMarginPercent, dynamicPricingSeasonEnd, expenseEntries, reservations, rooms]
   );
   const reservationDailyReminders = useMemo(
-    () => buildReservationDailyReminders(reservations, pricedRooms, reservationReminderToday)
-      .filter((reminder) => !reservationReminderDismissals[reminder.id]),
-    [pricedRooms, reservationReminderDismissals, reservationReminderToday, reservations]
+    () => {
+      const runKey = getReservationReminderRunKey(reservationReminderTime, reservationReminderRepeatHours, reservationReminderNowMs);
+      if (!runKey) return [];
+      return buildReservationDailyReminders(reservations, pricedRooms, reservationReminderToday, runKey)
+        .filter((reminder) => !reservationReminderDismissals[reminder.id]);
+    },
+    [pricedRooms, reservationReminderDismissals, reservationReminderNowMs, reservationReminderRepeatHours, reservationReminderTime, reservationReminderToday, reservations]
   );
-  const activeReservationDailyReminder = reservationDailyReminders[0] ?? null;
+  const manualReservationDailyReminders = useMemo(
+    () => buildReservationDailyReminders(reservations, pricedRooms, reservationReminderToday, `manual-${reservationReminderToday}`),
+    [pricedRooms, reservationReminderToday, reservations]
+  );
+  const activeReservationDailyReminder = isManualReservationReminderOpen
+    ? manualReservationDailyReminders[0] ?? null
+    : reservationDailyReminders[0] ?? null;
   const activeRoomHolds = useMemo(
     () => roomHolds.filter((hold) => new Date(hold.expiresAt).getTime() > holdNowMs),
     [holdNowMs, roomHolds]
@@ -1117,9 +1131,13 @@ export function BookingPanel() {
     [agreementHoldMinutes]
   );
   useEffect(() => {
-    const updateToday = () => setReservationReminderToday(formatDateInput(new Date()));
-    updateToday();
-    const intervalId = window.setInterval(updateToday, 60_000);
+    const updateReminderClock = () => {
+      const now = new Date();
+      setReservationReminderToday(formatDateInput(now));
+      setReservationReminderNowMs(now.getTime());
+    };
+    updateReminderClock();
+    const intervalId = window.setInterval(updateReminderClock, 60_000);
     return () => window.clearInterval(intervalId);
   }, []);
   const currentHoldOwnerId = useMemo(
@@ -2267,6 +2285,8 @@ export function BookingPanel() {
     setPackageCustomFields(settings.packageCustomFields);
     setServicePassword(settings.servicePassword);
     setAgreementHoldMinutes(settings.agreementHoldMinutes);
+    setReservationReminderTime(settings.reservationReminderTime);
+    setReservationReminderRepeatHours(settings.reservationReminderRepeatHours);
   }
 
   function buildPaymentSettingsPatch(overrides: Partial<PaymentSettings> = {}) {
@@ -2320,6 +2340,8 @@ export function BookingPanel() {
       packageCustomFields,
       servicePassword,
       agreementHoldMinutes,
+      reservationReminderTime,
+      reservationReminderRepeatHours,
       ...overrides
     };
   }
@@ -4531,6 +4553,18 @@ export function BookingPanel() {
     await savePaymentSettings(buildPaymentSettingsPatch({ agreementHoldMinutes: nextMinutes }));
   }
 
+  async function handleReservationReminderTimeChange(value: string) {
+    const nextTime = /^\d{2}:\d{2}$/.test(value) ? value : "09:00";
+    setReservationReminderTime(nextTime);
+    await savePaymentSettings(buildPaymentSettingsPatch({ reservationReminderTime: nextTime }));
+  }
+
+  async function handleReservationReminderRepeatHoursChange(value: number) {
+    const nextHours = Math.max(0, Math.min(24, Math.round(value || 0)));
+    setReservationReminderRepeatHours(nextHours);
+    await savePaymentSettings(buildPaymentSettingsPatch({ reservationReminderRepeatHours: nextHours }));
+  }
+
   async function sendLinkMethodToClient(methodId: string) {
     const method = getSettingMethod(LINK_METHODS, linkMethods, methodId);
     const value = linkMethods[methodId]?.trim();
@@ -6166,6 +6200,9 @@ export function BookingPanel() {
           <button type="button" onClick={() => setIsReservationsOpen(true)} title="Брони">
             <CalendarDays size={18} />
           </button>
+          <button type="button" onClick={() => setIsManualReservationReminderOpen(true)} title="Проверка оплат и въезда">
+            <Check size={18} />
+          </button>
           <button type="button" onClick={() => setIsGuestDatabaseOpen(true)} title="База гостей">
             <Users size={18} />
           </button>
@@ -7464,11 +7501,29 @@ export function BookingPanel() {
         <ReservationDailyReminderOverlay
           configuredPaymentMethods={configuredPaymentMethods}
           reminder={activeReservationDailyReminder}
-          onClose={() => dismissReservationDailyReminder(activeReservationDailyReminder)}
-          onMarkBalancePaid={() => void toggleBalancePaid(activeReservationDailyReminder.reservation)}
-          onMarkCheckedIn={() => void toggleCheckedIn(activeReservationDailyReminder.reservation)}
-          onMarkPrepaymentPaid={() => void togglePrepaymentPaid(activeReservationDailyReminder.reservation)}
+          onClose={() => {
+            if (isManualReservationReminderOpen) {
+              setIsManualReservationReminderOpen(false);
+              return;
+            }
+            dismissReservationDailyReminder(activeReservationDailyReminder);
+          }}
+          onMarkBalancePaid={() => {
+            if (isManualReservationReminderOpen) setIsManualReservationReminderOpen(false);
+            void toggleBalancePaid(activeReservationDailyReminder.reservation);
+          }}
+          onMarkCheckedIn={() => {
+            if (isManualReservationReminderOpen) setIsManualReservationReminderOpen(false);
+            void toggleCheckedIn(activeReservationDailyReminder.reservation);
+          }}
+          onMarkPrepaymentPaid={() => {
+            if (isManualReservationReminderOpen) setIsManualReservationReminderOpen(false);
+            void togglePrepaymentPaid(activeReservationDailyReminder.reservation);
+          }}
         />
+      ) : null}
+      {isManualReservationReminderOpen && !activeReservationDailyReminder ? (
+        <ReservationDailyReminderEmptyOverlay onClose={() => setIsManualReservationReminderOpen(false)} />
       ) : null}
       {balanceRoomSelectionTarget ? (
         <InlineReservationRoomActionOverlay
@@ -7568,6 +7623,8 @@ export function BookingPanel() {
           packageMinRooms={packageMinRooms}
           servicePassword={servicePassword}
           agreementHoldMinutes={agreementHoldMinutes}
+          reservationReminderTime={reservationReminderTime}
+          reservationReminderRepeatHours={reservationReminderRepeatHours}
           operatorName={operatorName}
           syncClientId={syncClientIdRef.current}
           onClose={() => setIsSettingsOpen(false)}
@@ -7608,6 +7665,8 @@ export function BookingPanel() {
           onServicePasswordChange={handleServicePasswordChange}
           onOperatorNameSave={handleOperatorNameSave}
           onAgreementHoldMinutesChange={handleAgreementHoldMinutesChange}
+          onReservationReminderTimeChange={handleReservationReminderTimeChange}
+          onReservationReminderRepeatHoursChange={handleReservationReminderRepeatHoursChange}
         />
       ) : null}
       {cancelReservationTarget ? (
@@ -7972,6 +8031,27 @@ function ReservationDailyReminderOverlay({
             <button className="gpb-primary" type="button" onClick={onMarkCheckedIn}>Отметить въезд</button>
           ) : null}
           <button className="gpb-secondary" type="button" onClick={onClose}>Не сейчас</button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function ReservationDailyReminderEmptyOverlay({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="gpb-inline-prepayment-overlay">
+      <div className="gpb-inline-prepayment-card gpb-daily-reminder-card" role="dialog" aria-modal="true" aria-label="Проверка броней">
+        <header>
+          <div>
+            <strong>Проверка броней</strong>
+            <span>На сегодня нет броней, где нужно отметить предоплату, доплату или въезд.</span>
+          </div>
+          <button type="button" onClick={onClose} title="Закрыть">
+            <X size={18} />
+          </button>
+        </header>
+        <footer>
+          <button className="gpb-primary" type="button" onClick={onClose}>Закрыть</button>
         </footer>
       </div>
     </div>
@@ -11077,6 +11157,8 @@ function SettingsModal({
   packageMinRooms,
   servicePassword,
   agreementHoldMinutes,
+  reservationReminderTime,
+  reservationReminderRepeatHours,
   operatorName,
   syncClientId,
   onClose,
@@ -11116,7 +11198,9 @@ function SettingsModal({
   onPackageCustomFieldDelete,
   onServicePasswordChange,
   onOperatorNameSave,
-  onAgreementHoldMinutesChange
+  onAgreementHoldMinutesChange,
+  onReservationReminderTimeChange,
+  onReservationReminderRepeatHoursChange
 }: {
   companyRequisites: Record<string, string>;
   defaultCheckInTime: string;
@@ -11155,6 +11239,8 @@ function SettingsModal({
   packageMinRooms: number;
   servicePassword: string;
   agreementHoldMinutes: number;
+  reservationReminderTime: string;
+  reservationReminderRepeatHours: number;
   operatorName: string;
   syncClientId: string;
   onClose: () => void;
@@ -11207,6 +11293,8 @@ function SettingsModal({
   onServicePasswordChange: (value: string) => void;
   onOperatorNameSave: (value: string) => Promise<void>;
   onAgreementHoldMinutesChange: (value: number) => void;
+  onReservationReminderTimeChange: (value: string) => void;
+  onReservationReminderRepeatHoursChange: (value: number) => void;
 }) {
   const [localWeatherName, setLocalWeatherName] = useState(weatherLocationName);
   const [localWeatherLatitude, setLocalWeatherLatitude] = useState(String(weatherLatitude));
@@ -12089,6 +12177,25 @@ function SettingsModal({
                     onChange={(event) => onAgreementHoldMinutesChange(toNumber(event.target.value, DEFAULT_ROOM_HOLD_MINUTES))}
                   />
                 </label>
+                <label className="gpb-wide-label">
+                  Запуск проверки оплат и въезда
+                  <input
+                    type="time"
+                    value={reservationReminderTime}
+                    onChange={(event) => onReservationReminderTimeChange(event.target.value)}
+                  />
+                </label>
+                <label className="gpb-wide-label">
+                  Повтор проверки, часов
+                  <input
+                    min="0"
+                    max="24"
+                    type="number"
+                    value={reservationReminderRepeatHours}
+                    onChange={(event) => onReservationReminderRepeatHoursChange(toNumber(event.target.value, 0))}
+                  />
+                </label>
+                <p className="gpb-settings-note">0 = один раз в день после указанного локального времени. 1-24 = повторять через указанное количество часов.</p>
               </section>
             </div>
           </div>
@@ -21347,7 +21454,22 @@ function canMarkCheckedIn(reservation: Pick<Reservation, "status" | "checkedInAt
   return reservation.status !== "cancelled" && !reservation.noShowAt && !reservation.checkedInAt;
 }
 
-function buildReservationDailyReminders(reservations: Reservation[], rooms: Room[], today: string): ReservationDailyReminder[] {
+function getReservationReminderRunKey(startTime: string, repeatHours: number, nowMs: number) {
+  const now = new Date(nowMs);
+  if (Number.isNaN(now.getTime())) return "";
+  const [startHours, startMinutes] = (startTime || "09:00").split(":").map((part) => Number(part));
+  const startTotalMinutes = (Number.isFinite(startHours) ? startHours : 9) * 60 + (Number.isFinite(startMinutes) ? startMinutes : 0);
+  const nowTotalMinutes = now.getHours() * 60 + now.getMinutes();
+  if (nowTotalMinutes < startTotalMinutes) return "";
+  const today = formatDateInput(now);
+  const intervalHours = Math.max(0, Math.min(24, Math.round(repeatHours || 0)));
+  if (!intervalHours) return `${today}:daily`;
+  const elapsedMinutes = nowTotalMinutes - startTotalMinutes;
+  const slot = Math.floor(elapsedMinutes / (intervalHours * 60));
+  return `${today}:repeat-${intervalHours}:${slot}`;
+}
+
+function buildReservationDailyReminders(reservations: Reservation[], rooms: Room[], today: string, runKey: string): ReservationDailyReminder[] {
   if (!today) return [];
   return reservations
     .filter((reservation) => reservation.status !== "cancelled" && !reservation.noShowAt && !reservation.isAddOnSale)
@@ -21381,7 +21503,7 @@ function buildReservationDailyReminders(reservations: Reservation[], rooms: Room
       return {
         activeItems,
         balance,
-        id: `${today}:${reservation.id}`,
+        id: `${runKey}:${reservation.id}`,
         kinds,
         paidAmount,
         reservation,

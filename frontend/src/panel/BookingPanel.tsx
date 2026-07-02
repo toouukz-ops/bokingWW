@@ -12598,6 +12598,8 @@ function ReservationTimelineRoomRow({
   const segments = buildReservationTimelineSegments(room, reservations, timelineDays);
   const cleaningSegments = buildCleaningTimelineSegments(room, reservations, timelineDays);
   const rowLaneCount = Math.max(1, ...segments.map((segment) => segment.lane + 1), room.status === "repair" ? 1 : 0);
+  const primaryLabel = room.number || room.title;
+  const secondaryLabel = room.number && room.title && room.title !== room.number ? room.title : "";
 
   return (
     <div
@@ -12608,8 +12610,8 @@ function ReservationTimelineRoomRow({
       style={{ "--gpb-timeline-lanes": rowLaneCount } as React.CSSProperties}
     >
       <div className="gpb-timeline-room-cell">
-        <strong>{room.number || room.title}</strong>
-        <span>{room.title}</span>
+        <strong>{primaryLabel}</strong>
+        {secondaryLabel ? <span>{secondaryLabel}</span> : null}
       </div>
       {timelineDays.map((day, index) => (
         <button

@@ -5248,6 +5248,63 @@ export function BookingPanel() {
     };
   }
 
+  function findExistingReservationForDraft(reservation: Reservation) {
+    const reservationPhone = normalizePhoneSearch(reservation.phone);
+    const reservationRoomIds = reservation.roomIds.slice().sort();
+    return reservations
+      .filter((candidate) => !candidate.isAddOnSale && candidate.status !== "cancelled")
+      .filter((candidate) => {
+        if (candidate.id === reservation.id) return true;
+        if (candidate.checkIn !== reservation.checkIn || candidate.checkOut !== reservation.checkOut) return false;
+        const candidateRoomIds = candidate.roomIds.slice().sort();
+        if (candidateRoomIds.length !== reservationRoomIds.length || candidateRoomIds.some((roomId, index) => roomId !== reservationRoomIds[index])) return false;
+        const candidatePhone = normalizePhoneSearch(candidate.phone);
+        if (reservationPhone && candidatePhone && !phonesMatchForContactLookup(reservationPhone, candidatePhone)) return false;
+        return Boolean(reservationPhone || normalizeContactLookupText(candidate.guestFirstName) === normalizeContactLookupText(reservation.guestFirstName));
+      })
+      .sort((left, right) => {
+        if (left.id === reservation.id) return -1;
+        if (right.id === reservation.id) return 1;
+        if (left.prepaymentReceivedAt && !right.prepaymentReceivedAt) return -1;
+        if (!left.prepaymentReceivedAt && right.prepaymentReceivedAt) return 1;
+        if (left.status === "pending" && right.status !== "pending") return -1;
+        if (left.status !== "pending" && right.status === "pending") return 1;
+        return right.createdAt.localeCompare(left.createdAt);
+      })[0] ?? null;
+  }
+
+  function mergeReservationPaymentState(nextReservation: Reservation, sourceReservation: Reservation | null) {
+    if (!sourceReservation) return nextReservation;
+    const sourceItemsByRoomId = new Map(getReservationItems(sourceReservation, pricedRooms).map((item) => [item.roomId, item]));
+    return {
+      ...nextReservation,
+      id: sourceReservation.id,
+      items: nextReservation.items?.map((item) => {
+        const sourceItem = sourceItemsByRoomId.get(item.roomId);
+        return sourceItem
+          ? {
+            ...item,
+            balancePaidAt: sourceItem.balancePaidAt,
+            checkedInAt: sourceItem.checkedInAt,
+            checkedOutAt: sourceItem.checkedOutAt,
+            paidAmount: sourceItem.paidAmount,
+            prepayment: sourceItem.prepayment
+          }
+          : item;
+      }),
+      payments: sourceReservation.payments ?? nextReservation.payments,
+      prepayment: sourceReservation.prepayment,
+      paidAmount: sourceReservation.paidAmount,
+      prepaymentReceivedAt: sourceReservation.prepaymentReceivedAt,
+      balancePaidAt: sourceReservation.balancePaidAt ?? nextReservation.balancePaidAt,
+      checkedInAt: sourceReservation.checkedInAt ?? nextReservation.checkedInAt,
+      checkedOutAt: sourceReservation.checkedOutAt ?? nextReservation.checkedOutAt,
+      extendedAt: sourceReservation.extendedAt ?? nextReservation.extendedAt,
+      noShowAt: sourceReservation.noShowAt ?? nextReservation.noShowAt,
+      createdAt: sourceReservation.createdAt
+    } satisfies Reservation;
+  }
+
   async function startManualSaleFlow() {
     setManualSaleOpen(true);
     setBookingNewChatOpen(false);
@@ -5422,10 +5479,11 @@ export function BookingPanel() {
     if (!ensureReservationDatesAreNotPast(reservation)) return;
     if (!ensureSelectedRoomsAreNotHeldByAnotherGuest()) return;
     if (!ensurePaymentMethodSelected()) return;
-    const confirmedReservation = {
+    const existingReservation = findExistingReservationForDraft(reservation);
+    const confirmedReservation = mergeReservationPaymentState({
       ...reservation,
       status: "booked" as const
-    };
+    }, existingReservation);
     await updateReservation(confirmedReservation);
     await clearRoomHoldsForReservation(confirmedReservation, true);
     setSelectedRoomId(confirmedReservation.roomIds[0] || selectedRoomId);
@@ -6096,11 +6154,12 @@ export function BookingPanel() {
     if (!ensureSelectedRoomsAreNotHeldByAnotherGuest()) return;
     if (!ensurePaymentMethodSelected()) return;
 
-    const confirmedReservation: Reservation = {
+    const existingReservation = findExistingReservationForDraft(reservation);
+    const confirmedReservation: Reservation = mergeReservationPaymentState({
       ...reservation,
       paymentMethod: manualSalePaymentMethod || reservation.paymentMethod,
       status: "booked"
-    };
+    }, existingReservation);
 
     setSendState("sending");
     await updateReservation(confirmedReservation);
@@ -21048,6 +21107,7 @@ function distributeReservationItemPrepayment(items: ReservationItem[] = [], prep
     distributed += paidAmount;
     return {
       ...item,
+      prepayment: paidAmount,
       paidAmount
     };
   });

@@ -2584,7 +2584,10 @@ export function BookingPanel() {
   async function getStoredChatDraftForActiveChat(chat: ActiveChat) {
     const directDraft = getCachedChatBookingDraft(chat.id) ?? await getChatBookingDraft(chat.id);
     if (directDraft) updateDraftCache(chat.id, directDraft);
-    const draft = directDraft ?? await findFallbackChatDraftForActiveChat(chat, draftCacheRef.current);
+    const fallbackDraft = await findFallbackChatDraftForActiveChat(chat, draftCacheRef.current, directDraft?.phone || directDraft?.lastReservation?.phone || "");
+    const draft = directDraft && fallbackDraft
+      ? mergeChatDraftForActiveRestore(directDraft, fallbackDraft)
+      : directDraft ?? fallbackDraft;
     debugContactFlow("chat-draft-strict-restore", {
       activeChatId: chat.id,
       activeChatTitle: chat.title,
@@ -2597,9 +2600,9 @@ export function BookingPanel() {
     return draft;
   }
 
-  async function findFallbackChatDraftForActiveChat(chat: ActiveChat, cachedDrafts?: Record<string, ChatBookingDraft>) {
+  async function findFallbackChatDraftForActiveChat(chat: ActiveChat, cachedDrafts?: Record<string, ChatBookingDraft>, fallbackPhone = "") {
     const drafts = cachedDrafts ?? draftCacheRef.current;
-    const chatPhone = normalizePhoneSearch(chat.phone || "");
+    const chatPhone = normalizePhoneSearch(chat.phone || fallbackPhone);
     if (!chatPhone) return null;
     const matches = Object.values(drafts).filter((draft) => {
       const draftPhone = normalizePhoneSearch(draft.phone || draft.lastReservation?.phone || "");
@@ -21297,6 +21300,26 @@ function mergeChatDraftForPhoneAlias(currentDraft: ChatBookingDraft | undefined,
   };
 
   return areChatDraftsEquivalent(currentDraft, mergedDraft) ? currentDraft : mergedDraft;
+}
+
+function mergeChatDraftForActiveRestore(directDraft: ChatBookingDraft, fallbackDraft: ChatBookingDraft) {
+  const directReservationId = directDraft.lastReservation?.id ?? "";
+  const fallbackReservationId = fallbackDraft.lastReservation?.id ?? "";
+  if (directReservationId && fallbackReservationId && directReservationId !== fallbackReservationId) {
+    const mergedPhone = formatPhoneDigits(directDraft.phone || fallbackDraft.phone) || directDraft.phone || fallbackDraft.phone;
+    const mergedGuestName = resolveGuestNameForPhone(directDraft.guestFirstName || fallbackDraft.guestFirstName, mergedPhone);
+    const mergedLastReservation = mergeDraftReservationIdentity(directDraft.lastReservation, null, mergedGuestName, mergedPhone);
+    const mergedDraft = {
+      ...directDraft,
+      guestFirstName: mergedGuestName,
+      lastReservation: mergedLastReservation,
+      phone: mergedPhone,
+      updatedAt: [directDraft.updatedAt, fallbackDraft.updatedAt].filter(Boolean).sort().at(-1) || new Date().toISOString()
+    };
+    return areChatDraftsEquivalent(directDraft, mergedDraft) ? directDraft : mergedDraft;
+  }
+
+  return mergeChatDraftForPhoneAlias(directDraft, fallbackDraft);
 }
 
 function mergeDraftReservationIdentity(

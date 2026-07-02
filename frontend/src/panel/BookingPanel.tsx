@@ -12165,7 +12165,7 @@ function ReservationsModal({
 
   async function handleCopyCookBookings() {
     try {
-      await navigator.clipboard.writeText(buildCookBreakfastExport(selectedDate, reservations));
+      await navigator.clipboard.writeText(buildCookBreakfastExport(selectedDate, reservations, rooms));
       setCookCopyState("copied");
     } catch {
       setCookCopyState("error");
@@ -20217,7 +20217,7 @@ function buildAdminTomorrowArrivalsBlock(selectedDate: string, reservations: Res
   return lines.join("\n");
 }
 
-function buildCookBreakfastExport(selectedDate: string, reservations: Reservation[]) {
+function buildCookBreakfastExport(selectedDate: string, reservations: Reservation[], rooms: Room[] = []) {
   const date = selectedDate || formatDateInput(new Date());
   const breakfastReservations = reservations
     .filter((reservation) => reservation.status === "booked")
@@ -20242,8 +20242,9 @@ function buildCookBreakfastExport(selectedDate: string, reservations: Reservatio
 
   breakfastReservations.forEach((reservation, index) => {
     const comment = reservation.adminComment?.trim() || reservation.comment?.trim() || "нет";
+    const roomNumbers = formatCookBreakfastRoomNumbers(reservation, date, rooms);
     lines.push(
-      `${index + 1}. ${reservation.guestFirstName || "Гость"}`,
+      `${index + 1}. ${reservation.guestFirstName || "Гость"}${roomNumbers ? ` / ${roomNumbers}` : ""}`,
       `Взрослые: ${Math.max(0, reservation.adults || 0)}`,
       `Подростки: ${Math.max(0, reservation.teenagers || 0)}`,
       `Дети: ${Math.max(0, reservation.children || 0)}`,
@@ -20254,6 +20255,16 @@ function buildCookBreakfastExport(selectedDate: string, reservations: Reservatio
   });
 
   return lines.join("\n").trim();
+}
+
+function formatCookBreakfastRoomNumbers(reservation: Reservation, date: string, rooms: Room[]) {
+  const roomIds = getReservationCalendarRoomIdsForDate(reservation, date, rooms);
+  return roomIds
+    .map((roomId) => rooms.find((room) => room.id === roomId))
+    .filter((room): room is Room => Boolean(room) && isStayBookingObject(room))
+    .map((room) => room.number || room.title)
+    .filter(Boolean)
+    .join(", ");
 }
 
 function getAdminPriorityCleaningRooms(arrivals: Reservation[], departures: Reservation[], rooms: Room[]) {

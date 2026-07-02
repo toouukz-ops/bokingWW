@@ -534,6 +534,25 @@ function isChatDraftPastStay(draft: Pick<ChatBookingDraft, "checkOut" | "lastRes
   return Boolean((draft.checkOut && draft.checkOut < getDefaultCheckInDate()) || isReservationPastStay(draft.lastReservation));
 }
 
+function sanitizeDraftSelectedRoomIds(
+  draft: ChatBookingDraft,
+  checkIn: string,
+  checkOut: string,
+  rooms: Room[],
+  reservations: Reservation[]
+) {
+  const candidateIds = Array.from(new Set([...(draft.selectedBookingRoomIds ?? []), draft.selectedRoomId].filter(Boolean)));
+  if (!candidateIds.length) return [];
+  const checkInTime = draft.checkInTime || DEFAULT_CHECK_IN_TIME;
+  const checkOutTime = draft.checkOutTime || DEFAULT_CHECK_OUT_TIME;
+
+  return candidateIds.filter((roomId) => {
+    const room = rooms.find((item) => item.id === roomId);
+    if (!room) return false;
+    return !isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations);
+  });
+}
+
 function getStoredTimelineAlternateRowColor() {
   try {
     const storedColor = window.localStorage.getItem(TIMELINE_ALTERNATE_ROW_COLOR_KEY);
@@ -2784,10 +2803,12 @@ export function BookingPanel() {
     const restoredHasActiveReservation = isBookingPanelActiveReservation(draft.lastReservation);
     const restoredSelectedBookingRoomIds = restoredHasActiveReservation
       ? draft.lastReservation?.roomIds ?? []
-      : draft.selectedBookingRoomIds;
+      : sanitizeDraftSelectedRoomIds(draft, restoredCheckIn, restoredCheckOut, pricedRooms, reservations);
     const restoredSelectedRoomId = restoredHasActiveReservation
       ? restoredSelectedBookingRoomIds[0] ?? ""
-      : draft.selectedRoomId;
+      : restoredSelectedBookingRoomIds.includes(draft.selectedRoomId)
+        ? draft.selectedRoomId
+        : restoredSelectedBookingRoomIds[0] ?? "";
     setSelectedRoomId(shouldResetPastBookingFields ? "" : restoredSelectedRoomId);
     setSelectedBookingRoomIds(shouldResetPastBookingFields ? [] : restoredSelectedBookingRoomIds);
     setRoomDateOverrides(shouldResetPastBookingFields ? {} : draft.roomDateOverrides ?? buildRoomDateOverridesFromReservation(draft.lastReservation));
@@ -13021,7 +13042,6 @@ function ReservationCard({
         <span className={reservation.balancePaidAt ? "is-done" : balance > 0 ? "" : "is-muted"}>Ост. {formatReservationPaymentAmount(balance)}</span>
         {reservation.checkedInAt ? <span className="is-done">Въезд</span> : null}
         {reservation.checkedOutAt ? <span className="is-done">Выезд</span> : null}
-        {reservation.adminComment?.trim() ? <span>{reservation.adminComment.trim()}</span> : null}
       </div>
       <div className="gpb-reservation-card-actions">
         <button type="button" onClick={onMarkBalancePaid} disabled={!canMarkBalancePaid(reservation)}>

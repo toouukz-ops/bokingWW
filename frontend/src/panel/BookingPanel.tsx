@@ -5578,6 +5578,7 @@ export function BookingPanel() {
     setPrepaymentAlreadyPaid(false);
     const updatedReservation = {
       ...reservation,
+      items: getReservationItems(reservation, pricedRooms).map((item) => ({ ...item, paidAmount: 0 })),
       paidAmount: 0,
       prepaymentReceivedAt: undefined
     };
@@ -5591,6 +5592,7 @@ export function BookingPanel() {
     setPrepaymentAlreadyPaid(prepaymentAmount > 0);
     const updatedReservation = {
       ...reservation,
+      items: distributeReservationItemPrepayment(reservation.items, prepaymentAmount),
       paymentMethod: manualSalePaymentMethod || reservation.paymentMethod,
       paidAmount: prepaymentAmount,
       prepayment: prepaymentAmount,
@@ -7792,7 +7794,7 @@ function InlineReservationRoomActionOverlay({
           {items.length ? items.map((item) => {
             const room = rooms.find((candidate) => candidate.id === item.roomId);
             const label = room ? `${room.number || room.title} | ${formatShortDayMonth(item.checkIn)}-${formatShortDayMonth(item.checkOut)}` : item.roomId;
-            const balance = Math.max(0, item.total - (item.paidAmount ?? item.prepayment ?? 0));
+            const balance = getReservationItemBalance(item);
             return (
               <button
                 className={item.roomId === selectedItem?.roomId ? "is-active" : ""}
@@ -21000,6 +21002,35 @@ function getReservationPaidAmount(
 
 function getReservationPaymentsTotal(payments: ReservationPayment[] = [], total: number) {
   return clampNumber(payments.reduce((sum, payment) => sum + Math.max(0, payment.amount || 0), 0), 0, total);
+}
+
+function getReservationItemPaidAmount(item: Pick<ReservationItem, "balancePaidAt" | "paidAmount" | "prepayment" | "total">) {
+  if (item.balancePaidAt) return item.total;
+  return clampNumber(Math.max(item.paidAmount ?? 0, item.prepayment ?? 0), 0, item.total);
+}
+
+function getReservationItemBalance(item: Pick<ReservationItem, "balancePaidAt" | "paidAmount" | "prepayment" | "total">) {
+  return Math.max(0, item.total - getReservationItemPaidAmount(item));
+}
+
+function distributeReservationItemPrepayment(items: ReservationItem[] = [], prepaymentAmount: number) {
+  const safeAmount = Math.max(0, Math.round(prepaymentAmount || 0));
+  if (!items.length) return items;
+  const baseTotal = items.reduce((sum, item) => sum + Math.max(0, item.prepayment ?? 0), 0)
+    || items.reduce((sum, item) => sum + Math.max(0, item.total || 0), 0);
+  if (!baseTotal || !safeAmount) return items.map((item) => ({ ...item, paidAmount: 0 }));
+
+  let distributed = 0;
+  return items.map((item, index) => {
+    const base = Math.max(0, (item.prepayment ?? 0) || item.total || 0);
+    const rawAmount = index === items.length - 1 ? safeAmount - distributed : Math.round((safeAmount * base) / baseTotal);
+    const paidAmount = clampNumber(rawAmount, 0, item.total);
+    distributed += paidAmount;
+    return {
+      ...item,
+      paidAmount
+    };
+  });
 }
 
 function getReservationFinance(

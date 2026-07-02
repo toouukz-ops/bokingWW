@@ -7065,6 +7065,90 @@ body.gpb-reservation-split-resizing {
   color: #ffffff;
 }
 
+.gpb-daily-reminder-card {
+  width: min(100%, 620px);
+}
+
+.gpb-daily-reminder-body {
+  display: grid;
+  gap: 10px;
+}
+
+.gpb-daily-reminder-guest {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #dcefe9;
+  border-radius: 7px;
+  background: #eef8f4;
+  color: #0f6b57;
+  padding: 9px 10px;
+}
+
+.gpb-daily-reminder-guest strong {
+  color: #16202a;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.gpb-daily-reminder-guest span {
+  color: #5f6b78;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.gpb-daily-reminder-grid {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(0, 1fr);
+  gap: 7px 12px;
+  border: 1px solid #d8dee5;
+  border-radius: 7px;
+  padding: 10px;
+}
+
+.gpb-daily-reminder-grid span {
+  color: #6a7580;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.gpb-daily-reminder-grid b {
+  min-width: 0;
+  color: #16202a;
+  font-size: 13px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.gpb-daily-reminder-grid b.is-warning {
+  color: #b45309;
+}
+
+.gpb-daily-reminder-grid b.is-done {
+  color: #0f6b57;
+}
+
+.gpb-daily-reminder-missing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gpb-daily-reminder-missing span {
+  border: 1px solid #f6c36f;
+  border-radius: 999px;
+  background: #fff7e8;
+  color: #92400e;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 9px;
+}
+
+.gpb-inline-prepayment-card footer.gpb-daily-reminder-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .gpb-form-error {
   grid-column: 1 / -1;
   border: 1px solid #f3b5b5;

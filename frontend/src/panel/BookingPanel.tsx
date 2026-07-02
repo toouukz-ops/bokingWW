@@ -99,6 +99,7 @@ const SYNC_CLIENT_ID_STORAGE_KEY = "gpb-sync-client-id";
 const OPERATOR_NAME_STORAGE_KEY = "gpb-operator-name";
 const CHAT_MESSAGE_KEYS_STORAGE_KEY = "gpb-chat-message-keys";
 const CHAT_MESSAGE_PENDING_STORAGE_KEY = "gpb-chat-message-pending";
+const RESERVATION_DAILY_REMINDER_DISMISSALS_KEY = "gpb-reservation-daily-reminder-dismissals";
 const CHAT_MESSAGE_VISIBLE_TAIL_LIMIT = 45;
 const CHAT_MESSAGE_SAVED_KEYS_LIMIT = 400;
 const CHAT_MESSAGE_PENDING_LIMIT = 120;
@@ -175,6 +176,17 @@ type PricePdfRoomStatus = {
 };
 type PdfImageFit = "cover" | "contain";
 type PdfLoadedImage = { image: HTMLImageElement; objectUrl: string };
+type ReservationDailyReminderKind = "check-in" | "balance" | "prepayment";
+type ReservationDailyReminder = {
+  activeItems: ReservationItem[];
+  balance: number;
+  id: string;
+  kinds: ReservationDailyReminderKind[];
+  paidAmount: number;
+  reservation: Reservation;
+  roomLabels: string[];
+  today: string;
+};
 type WhatsAppDialogExportMessage = {
   author: string;
   fromMe: boolean;
@@ -645,6 +657,27 @@ function saveStoredOperatorName(name: string) {
   }
 }
 
+function getStoredReservationReminderDismissals(): Record<string, boolean> {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(RESERVATION_DAILY_REMINDER_DISMISSALS_KEY) || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.entries(parsed as Record<string, unknown>).reduce<Record<string, boolean>>((acc, [key, value]) => {
+      if (key && value === true) acc[key] = true;
+      return acc;
+    }, {});
+  } catch {
+    return {};
+  }
+}
+
+function saveStoredReservationReminderDismissals(value: Record<string, boolean>) {
+  try {
+    window.localStorage.setItem(RESERVATION_DAILY_REMINDER_DISMISSALS_KEY, JSON.stringify(value));
+  } catch {
+    return;
+  }
+}
+
 function readStoredChatMessageKeys(): Record<string, string[]> {
   try {
     return normalizeStoredChatMessageKeys(JSON.parse(window.localStorage.getItem(CHAT_MESSAGE_KEYS_STORAGE_KEY) || "{}"));
@@ -1004,6 +1037,8 @@ export function BookingPanel() {
   const [selectedBalanceRoomId, setSelectedBalanceRoomId] = useState("");
   const [selectedCheckInRoomId, setSelectedCheckInRoomId] = useState("");
   const [extendReservationTarget, setExtendReservationTarget] = useState<Reservation | null>(null);
+  const [reservationReminderToday, setReservationReminderToday] = useState(() => formatDateInput(new Date()));
+  const [reservationReminderDismissals, setReservationReminderDismissals] = useState<Record<string, boolean>>(() => getStoredReservationReminderDismissals());
   const [isPaymentMethodRequiredOpen, setIsPaymentMethodRequiredOpen] = useState(false);
   const [agreementSent, setAgreementSent] = useState(false);
   const [agreementEverSent, setAgreementEverSent] = useState(false);
@@ -1060,6 +1095,12 @@ export function BookingPanel() {
     }),
     [checkIn, dynamicPricingEnabled, dynamicPricingMarginPercent, dynamicPricingSeasonEnd, expenseEntries, reservations, rooms]
   );
+  const reservationDailyReminders = useMemo(
+    () => buildReservationDailyReminders(reservations, pricedRooms, reservationReminderToday)
+      .filter((reminder) => !reservationReminderDismissals[reminder.id]),
+    [pricedRooms, reservationReminderDismissals, reservationReminderToday, reservations]
+  );
+  const activeReservationDailyReminder = reservationDailyReminders[0] ?? null;
   const activeRoomHolds = useMemo(
     () => roomHolds.filter((hold) => new Date(hold.expiresAt).getTime() > holdNowMs),
     [holdNowMs, roomHolds]
@@ -1075,6 +1116,12 @@ export function BookingPanel() {
     () => Math.max(1, Math.round(agreementHoldMinutes || DEFAULT_ROOM_HOLD_MINUTES)) * 60 * 1000,
     [agreementHoldMinutes]
   );
+  useEffect(() => {
+    const updateToday = () => setReservationReminderToday(formatDateInput(new Date()));
+    updateToday();
+    const intervalId = window.setInterval(updateToday, 60_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
   const currentHoldOwnerId = useMemo(
     () => getCurrentRoomHoldOwnerId(activeChat, guestPhone, guestPhonePrefix, guestFirstName),
     [activeChat?.id, guestFirstName, guestPhone, guestPhonePrefix]
@@ -5393,13 +5440,28 @@ export function BookingPanel() {
       setBookingDateWarning(buildPastReservationWarning(normalizedReservation));
       return;
     }
-    await saveReservation(normalizedReservation);
+    try {
+      await saveReservation(normalizedReservation, { requireRemote: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setBookingDateWarning("Не удалось сохранить бронь на сервере. Проверьте интернет/Render и повторите действие.");
+      void sendDebugLog("reservation-save-remote-error", { message, reservationId: normalizedReservation.id });
+      return;
+    }
     await ensureGuestContactForReservation(normalizedReservation);
     setReservations((currentReservations) => currentReservations.filter((item) => item.id !== normalizedReservation.id).concat(normalizedReservation));
     if (shouldAttachReservationToActiveChat(normalizedReservation)) {
       setLastReservation(normalizedReservation);
     }
     await syncReservationDraftForStatus(normalizedReservation);
+  }
+
+  function dismissReservationDailyReminder(reminder: ReservationDailyReminder) {
+    setReservationReminderDismissals((currentDismissals) => {
+      const nextDismissals = { ...currentDismissals, [reminder.id]: true };
+      saveStoredReservationReminderDismissals(nextDismissals);
+      return nextDismissals;
+    });
   }
 
   async function toggleBalancePaid(reservation: Reservation) {
@@ -7398,6 +7460,16 @@ export function BookingPanel() {
           onClose={() => setIsReservationsOpen(false)}
         />
       ) : null}
+      {activeReservationDailyReminder ? (
+        <ReservationDailyReminderOverlay
+          configuredPaymentMethods={configuredPaymentMethods}
+          reminder={activeReservationDailyReminder}
+          onClose={() => dismissReservationDailyReminder(activeReservationDailyReminder)}
+          onMarkBalancePaid={() => void toggleBalancePaid(activeReservationDailyReminder.reservation)}
+          onMarkCheckedIn={() => void toggleCheckedIn(activeReservationDailyReminder.reservation)}
+          onMarkPrepaymentPaid={() => void togglePrepaymentPaid(activeReservationDailyReminder.reservation)}
+        />
+      ) : null}
       {balanceRoomSelectionTarget ? (
         <InlineReservationRoomActionOverlay
           actionLabel="Принять доплату"
@@ -7821,6 +7893,86 @@ function PaymentMethodRequiredOverlay({
             </button>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ReservationDailyReminderOverlay({
+  configuredPaymentMethods,
+  reminder,
+  onClose,
+  onMarkBalancePaid,
+  onMarkCheckedIn,
+  onMarkPrepaymentPaid
+}: {
+  configuredPaymentMethods: SettingMethod[];
+  reminder: ReservationDailyReminder;
+  onClose: () => void;
+  onMarkBalancePaid: () => void;
+  onMarkCheckedIn: () => void;
+  onMarkPrepaymentPaid: () => void;
+}) {
+  const { reservation } = reminder;
+  const paymentMethodLabel = getManualSalePaymentLabel(reservation.paymentMethod ?? "", configuredPaymentMethods) || "не указан";
+  const hasPrepaymentReminder = reminder.kinds.includes("prepayment");
+  const hasBalanceReminder = reminder.kinds.includes("balance");
+  const hasCheckInReminder = reminder.kinds.includes("check-in");
+  const titleParts = [
+    hasCheckInReminder ? "въезд" : "",
+    hasBalanceReminder ? "доплата" : "",
+    hasPrepaymentReminder ? "предоплата" : ""
+  ].filter(Boolean);
+
+  return (
+    <div className="gpb-inline-prepayment-overlay">
+      <div className="gpb-inline-prepayment-card gpb-daily-reminder-card" role="dialog" aria-modal="true" aria-label="Проверка брони на сегодня">
+        <header>
+          <div>
+            <strong>Проверить бронь: {titleParts.join(", ")}</strong>
+            <span>Система будет спрашивать по этой брони каждый новый день, пока отметка не появится.</span>
+          </div>
+          <button type="button" onClick={onClose} title="Не сейчас">
+            <X size={18} />
+          </button>
+        </header>
+        <div className="gpb-daily-reminder-body">
+          <div className="gpb-daily-reminder-guest">
+            <strong>{reservation.guestFirstName || "Гость"}</strong>
+            <span>{formatReservationPhone(reservation.phone)}</span>
+          </div>
+          <div className="gpb-daily-reminder-grid">
+            <span>Номера</span>
+            <b>{reminder.roomLabels.join(", ") || "не указаны"}</b>
+            <span>Период</span>
+            <b>{formatReservationDateRange(reservation)}</b>
+            <span>Итого</span>
+            <b>{formatPrice(reservation.total)}</b>
+            <span>Получено</span>
+            <b>{formatPrice(reminder.paidAmount)}</b>
+            <span>Остаток</span>
+            <b className={reminder.balance > 0 ? "is-warning" : "is-done"}>{formatReservationPaymentAmount(reminder.balance)}</b>
+            <span>Оплата</span>
+            <b>{paymentMethodLabel}</b>
+          </div>
+          <div className="gpb-daily-reminder-missing">
+            {hasPrepaymentReminder ? <span>Предоплата не отмечена</span> : null}
+            {hasBalanceReminder ? <span>Есть остаток к оплате</span> : null}
+            {hasCheckInReminder ? <span>Въезд не отмечен</span> : null}
+          </div>
+        </div>
+        <footer className="gpb-daily-reminder-actions">
+          {hasPrepaymentReminder ? (
+            <button className="gpb-primary" type="button" onClick={onMarkPrepaymentPaid}>Предоплата получена</button>
+          ) : null}
+          {hasBalanceReminder ? (
+            <button className="gpb-primary" type="button" onClick={onMarkBalancePaid}>Принять доплату</button>
+          ) : null}
+          {hasCheckInReminder ? (
+            <button className="gpb-primary" type="button" onClick={onMarkCheckedIn}>Отметить въезд</button>
+          ) : null}
+          <button className="gpb-secondary" type="button" onClick={onClose}>Не сейчас</button>
+        </footer>
       </div>
     </div>
   );
@@ -20375,6 +20527,10 @@ function formatReservationRowRooms(rooms: Room[]) {
   return `${numbers.slice(0, 2).join(", ")} +${numbers.length - 2}`;
 }
 
+function formatRoomNumberLabel(room: Room) {
+  return room.number || room.title || "номер";
+}
+
 function getAdminIncludedText(rooms: Room[], reservation?: Pick<Reservation, "airMattressCount" | "extraBedType" | "rollawayCount" | "extraInventoryByRoomId" | "breakfastIncluded">) {
   const included = Array.from(new Set(rooms.flatMap((room) => getSelectedFood(room.amenities))));
   if (reservation?.breakfastIncluded === false) {
@@ -21189,6 +21345,62 @@ function canMarkBalancePaid(reservation: Pick<Reservation, "status" | "balancePa
 
 function canMarkCheckedIn(reservation: Pick<Reservation, "status" | "checkedInAt" | "noShowAt">) {
   return reservation.status !== "cancelled" && !reservation.noShowAt && !reservation.checkedInAt;
+}
+
+function buildReservationDailyReminders(reservations: Reservation[], rooms: Room[], today: string): ReservationDailyReminder[] {
+  if (!today) return [];
+  return reservations
+    .filter((reservation) => reservation.status !== "cancelled" && !reservation.noShowAt && !reservation.isAddOnSale)
+    .filter((reservation) => !isReservationCheckedOut(reservation))
+    .map((reservation) => {
+      const items = getReservationItems(reservation, rooms).filter((item) => reservation.roomIds.includes(item.roomId));
+      const activeItems = items.filter((item) => item.checkIn <= today && today < item.checkOut);
+      const isStayToday = reservation.checkIn <= today && today < reservation.checkOut;
+      const isCheckOutToday = reservation.checkOut === today;
+      const balance = getReservationBalance(reservation);
+      const paidAmount = getReservationPaidAmount(reservation);
+      const kinds: ReservationDailyReminderKind[] = [];
+
+      if (reservation.prepayment > 0 && !reservation.prepaymentReceivedAt && today <= reservation.checkIn) {
+        kinds.push("prepayment");
+      }
+      if (reservation.status === "booked" && balance > 0 && !reservation.balancePaidAt && (isStayToday || isCheckOutToday)) {
+        kinds.push("balance");
+      }
+      if (reservation.status === "booked" && !reservation.checkedInAt && isStayToday) {
+        kinds.push("check-in");
+      }
+
+      if (!kinds.length) return null;
+      const displayItems = activeItems.length ? activeItems : items;
+      const roomLabels = Array.from(new Set(displayItems.map((item) => {
+        const room = rooms.find((candidate) => candidate.id === item.roomId);
+        return room ? formatRoomNumberLabel(room) : item.roomId;
+      }).filter(Boolean)));
+
+      return {
+        activeItems,
+        balance,
+        id: `${today}:${reservation.id}`,
+        kinds,
+        paidAmount,
+        reservation,
+        roomLabels,
+        today
+      };
+    })
+    .filter((reminder): reminder is ReservationDailyReminder => Boolean(reminder))
+    .sort((left, right) => {
+      const leftPriority = getReservationDailyReminderPriority(left);
+      const rightPriority = getReservationDailyReminderPriority(right);
+      return leftPriority - rightPriority || left.reservation.checkIn.localeCompare(right.reservation.checkIn) || left.reservation.guestFirstName.localeCompare(right.reservation.guestFirstName);
+    });
+}
+
+function getReservationDailyReminderPriority(reminder: ReservationDailyReminder) {
+  if (reminder.kinds.includes("balance")) return 0;
+  if (reminder.kinds.includes("check-in")) return 1;
+  return 2;
 }
 
 function buildBookingPanelSummary(

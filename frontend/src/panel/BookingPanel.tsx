@@ -5517,16 +5517,19 @@ export function BookingPanel() {
   async function confirmReservationExtension(reservation: Reservation, nightsToAdd: number, amount: number, paidNow: boolean) {
     const extensionNights = Math.max(1, Math.round(nightsToAdd));
     const extensionAmount = Math.max(0, Math.round(amount));
+    const previousCheckOut = reservation.checkOut;
     const nextCheckOut = formatDateInput(addDays(parseDateInput(reservation.checkOut), extensionNights));
     const extensionNote = `Продление: +${extensionNights} ${formatNightsWord(extensionNights)} до ${formatKazakhDate(nextCheckOut)} (${formatPrice(extensionAmount)}${paidNow ? ", оплачено" : ", оплата при выезде"})`;
     const alreadyPaid = getReservationPaidAmount(reservation);
     const nextTotal = reservation.total + extensionAmount;
     const nextPaidAmount = paidNow ? clampNumber(alreadyPaid + extensionAmount, 0, nextTotal) : alreadyPaid;
+    const updatedItems = buildExtendedReservationItems(reservation.items, previousCheckOut, nextCheckOut, extensionAmount);
     const updatedReservation: Reservation = {
       ...reservation,
       checkOut: nextCheckOut,
       comment: [reservation.comment, extensionNote].filter(Boolean).join("\n"),
       extendedAt: new Date().toISOString(),
+      items: updatedItems,
       paidAmount: nextPaidAmount,
       subtotal: reservation.subtotal + extensionAmount,
       total: nextTotal,
@@ -18840,6 +18843,35 @@ function getReservationItems(reservation: Reservation, rooms: Room[] = []) {
       checkedInAt: reservation.checkedInAt,
       checkedOutAt: reservation.checkedOutAt
     } satisfies ReservationItem;
+  });
+}
+
+function buildExtendedReservationItems(items: ReservationItem[] | undefined, previousCheckOut: string, nextCheckOut: string, extensionAmount: number) {
+  if (!items?.length) return items;
+  const indexesToExtend = items
+    .map((item, index) => item.checkOut === previousCheckOut ? index : -1)
+    .filter((index) => index >= 0);
+  if (!indexesToExtend.length) return items;
+
+  const totalBase = indexesToExtend.reduce((sum, index) => sum + Math.max(0, items[index]?.total || items[index]?.subtotal || 0), 0);
+  let distributedAmount = 0;
+
+  return items.map((item, index) => {
+    if (!indexesToExtend.includes(index)) return item;
+    const isLast = index === indexesToExtend[indexesToExtend.length - 1];
+    const baseAmount = Math.max(0, item.total || item.subtotal || 0);
+    const itemExtensionAmount = isLast
+      ? Math.max(0, extensionAmount - distributedAmount)
+      : totalBase > 0
+        ? Math.round(extensionAmount * baseAmount / totalBase)
+        : Math.round(extensionAmount / indexesToExtend.length);
+    distributedAmount += itemExtensionAmount;
+    return {
+      ...item,
+      checkOut: nextCheckOut,
+      subtotal: Math.max(0, (item.subtotal || 0) + itemExtensionAmount),
+      total: Math.max(0, (item.total || 0) + itemExtensionAmount)
+    };
   });
 }
 

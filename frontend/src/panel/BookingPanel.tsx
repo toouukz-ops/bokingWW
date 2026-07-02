@@ -12144,10 +12144,18 @@ function ReservationsModal({
   const visibleReservations = useMemo(() => filteredCalendarReservations
     .filter((reservation) => !selectedDate || isReservationRelevantForCalendarDate(reservation, selectedDate))
     .sort((left, right) => left.checkIn.localeCompare(right.checkIn)), [filteredCalendarReservations, selectedDate]);
+  const visibleReservationRows = useMemo(() => visibleReservations
+    .map((reservation) => ({
+      reservation,
+      roomIds: getReservationCalendarRoomIdsForDate(reservation, selectedDate, rooms)
+    }))
+    .filter((row) => !selectedDate || row.roomIds.length > 0), [rooms, selectedDate, visibleReservations]);
+  const visibleReservationsForAdminCopy = useMemo(() => visibleReservationRows
+    .map(({ reservation }) => narrowReservationForCalendarDate(reservation, selectedDate, rooms)), [rooms, selectedDate, visibleReservationRows]);
 
   async function handleCopyAdminBookings() {
     try {
-      await navigator.clipboard.writeText(buildAdminBookingsExport(visibleReservations, rooms, selectedDate, reservations));
+      await navigator.clipboard.writeText(buildAdminBookingsExport(visibleReservationsForAdminCopy, rooms, selectedDate, reservations));
       setAdminCopyState("copied");
     } catch {
       setAdminCopyState("error");
@@ -12409,13 +12417,14 @@ function ReservationsModal({
 
             <div className="gpb-reservation-list-panel">
               <h2>{selectedDate ? `Брони на ${selectedDate}` : "Брони"}</h2>
-              {visibleReservations.length ? (
+              {visibleReservationRows.length ? (
                 <div className="gpb-reservation-card-list">
-                  {visibleReservations.map((reservation) => (
+                  {visibleReservationRows.map(({ reservation, roomIds }) => (
                     <ReservationCard
                       key={reservation.id}
                       reservation={reservation}
                       rooms={rooms}
+                      visibleRoomIds={roomIds}
                       onCancel={() => onCancelReservation(reservation)}
                       onDelete={() => setDeleteTarget(reservation)}
                       onEdit={() => setEditingReservation(reservation)}
@@ -12702,6 +12711,7 @@ function ReservationTimelineRoomRow({
 function ReservationCard({
   reservation,
   rooms,
+  visibleRoomIds,
   onCancel,
   onDelete,
   onEdit,
@@ -12710,13 +12720,15 @@ function ReservationCard({
 }: {
   reservation: Reservation;
   rooms: Room[];
+  visibleRoomIds?: string[];
   onCancel: () => void;
   onDelete: () => void;
   onEdit: () => void;
   onMarkBalancePaid: () => void;
   onMarkCheckedIn: () => void;
 }) {
-  const bookedRooms = reservation.roomIds
+  const displayRoomIds = visibleRoomIds?.length ? visibleRoomIds : reservation.roomIds;
+  const bookedRooms = displayRoomIds
     .map((roomId) => rooms.find((room) => room.id === roomId))
     .filter((room): room is Room => Boolean(room));
   const balance = getReservationBalance(reservation);
@@ -15677,6 +15689,42 @@ function isReservationRelevantForCalendarDate(reservation: Pick<Reservation, "ch
   if (!date) return false;
   const nextDate = formatDateInput(addDays(parseDateInput(date), 1));
   return dateRangesOverlap(date, nextDate, reservation.checkIn, reservation.checkOut) || reservation.checkOut === date;
+}
+
+function isReservationItemRelevantForCalendarDate(item: Pick<ReservationItem, "checkIn" | "checkOut">, date: string) {
+  if (!date) return false;
+  const nextDate = formatDateInput(addDays(parseDateInput(date), 1));
+  return dateRangesOverlap(date, nextDate, item.checkIn, item.checkOut) || item.checkOut === date;
+}
+
+function getReservationCalendarItemsForDate(reservation: Reservation, date: string, rooms: Room[] = []) {
+  const items = getReservationItems(reservation, rooms);
+  if (!date) return items;
+  return items.filter((item) => isReservationItemRelevantForCalendarDate(item, date));
+}
+
+function getReservationCalendarRoomIdsForDate(reservation: Reservation, date: string, rooms: Room[] = []) {
+  if (!date) return reservation.roomIds;
+  const activeRoomIds = new Set(getReservationCalendarItemsForDate(reservation, date, rooms).map((item) => item.roomId));
+  const orderedRoomIds = reservation.roomIds.filter((roomId) => activeRoomIds.has(roomId));
+  const missingRoomIds = Array.from(activeRoomIds).filter((roomId) => !orderedRoomIds.includes(roomId));
+  return [...orderedRoomIds, ...missingRoomIds];
+}
+
+function narrowReservationForCalendarDate(reservation: Reservation, date: string, rooms: Room[] = []) {
+  if (!date) return reservation;
+  const calendarItems = getReservationCalendarItemsForDate(reservation, date, rooms);
+  const activeRoomIds = new Set(calendarItems.map((item) => item.roomId));
+  const roomIds = [
+    ...reservation.roomIds.filter((roomId) => activeRoomIds.has(roomId)),
+    ...Array.from(activeRoomIds).filter((roomId) => !reservation.roomIds.includes(roomId))
+  ];
+
+  return {
+    ...reservation,
+    roomIds,
+    items: reservation.items?.length ? calendarItems : reservation.items
+  };
 }
 
 function isBreakfastServedOnDate(reservation: Pick<Reservation, "checkIn" | "checkOut">, date: string) {

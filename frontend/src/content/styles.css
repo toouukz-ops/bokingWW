@@ -5784,6 +5784,26 @@ body.gpb-reservation-split-resizing {
   padding: 8px 10px;
 }
 
+.gpb-reservation-card.is-date-check-in,
+.gpb-reservation-card.is-date-check-out,
+.gpb-reservation-card.is-date-lodging {
+  border-color: color-mix(in srgb, var(--gpb-reservation-row-status-color, #0f6b57) 42%, #d8dee5);
+  background: color-mix(in srgb, var(--gpb-reservation-row-status-color, #0f6b57) 10%, #ffffff);
+}
+
+.gpb-reservation-card.is-date-check-in::before,
+.gpb-reservation-card.is-date-check-out::before,
+.gpb-reservation-card.is-date-lodging::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 4px;
+  border-radius: 0 999px 999px 0;
+  background: var(--gpb-reservation-row-status-color, #0f6b57);
+}
+
 .gpb-reservation-card div {
   min-width: 0;
 }
@@ -5844,6 +5864,22 @@ body.gpb-reservation-split-resizing {
 .gpb-reservation-row-values .is-done {
   background: #e2f3ee;
   color: #0f6b57;
+}
+
+.gpb-reservation-row-values .gpb-reservation-date-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border-radius: 999px;
+  background: var(--gpb-reservation-row-status-color, #0f6b57);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 0 9px;
+}
+
+.gpb-reservation-row-values .gpb-reservation-date-status::before {
+  content: none;
 }
 
 .gpb-reservation-row-values .is-muted {

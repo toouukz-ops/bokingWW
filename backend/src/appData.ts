@@ -14,10 +14,23 @@ export async function listReservations() {
 }
 
 export async function saveReservationData(id: string, reservation: Record<string, unknown>) {
-  const { createdAt, ...reservationData } = reservation;
+  const { createdAt, ...reservationData } = stripMongoIdFields(reservation) as Record<string, unknown>;
   const document = { ...reservationData, id, updatedAt: new Date() };
   await reservations.updateOne({ id }, { $set: document, $setOnInsert: { createdAt: createdAt ?? new Date().toISOString() } }, { upsert: true });
   return document;
+}
+
+function stripMongoIdFields(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripMongoIdFields);
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== "_id")
+      .map(([key, entryValue]) => [key, stripMongoIdFields(entryValue)]);
+    return Object.fromEntries(entries);
+  }
+  return value;
 }
 
 export async function replaceReservations(items: Array<Record<string, unknown>>) {

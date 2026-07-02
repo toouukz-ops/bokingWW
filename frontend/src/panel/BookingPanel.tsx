@@ -530,6 +530,14 @@ function isReservationPastStay(reservation: Pick<Reservation, "checkOut"> | null
   return Boolean(reservation?.checkOut && reservation.checkOut < getDefaultCheckInDate());
 }
 
+function getReservationDateListStatus(reservation: Pick<Reservation, "checkIn" | "checkOut">, selectedDate: string) {
+  if (!selectedDate) return "";
+  if (reservation.checkIn === selectedDate) return "check-in";
+  if (reservation.checkOut === selectedDate) return "check-out";
+  if (reservation.checkIn < selectedDate && selectedDate < reservation.checkOut) return "lodging";
+  return "";
+}
+
 function isChatDraftPastStay(draft: Pick<ChatBookingDraft, "checkOut" | "lastReservation">) {
   return Boolean((draft.checkOut && draft.checkOut < getDefaultCheckInDate()) || isReservationPastStay(draft.lastReservation));
 }
@@ -12765,6 +12773,10 @@ function ReservationsModal({
                       key={reservation.id}
                       reservation={reservation}
                       rooms={rooms}
+                      selectedDate={selectedDate}
+                      timelineCheckInColor={timelineCheckInColor}
+                      timelineCheckOutColor={timelineCheckOutColor}
+                      timelineLodgingColor={timelineLodgingColor}
                       visibleRoomIds={roomIds}
                       onCancel={() => onCancelReservation(reservation)}
                       onDelete={() => setDeleteTarget(reservation)}
@@ -13052,6 +13064,10 @@ function ReservationTimelineRoomRow({
 function ReservationCard({
   reservation,
   rooms,
+  selectedDate,
+  timelineCheckInColor,
+  timelineCheckOutColor,
+  timelineLodgingColor,
   visibleRoomIds,
   onCancel,
   onDelete,
@@ -13061,6 +13077,10 @@ function ReservationCard({
 }: {
   reservation: Reservation;
   rooms: Room[];
+  selectedDate: string;
+  timelineCheckInColor: string;
+  timelineCheckOutColor: string;
+  timelineLodgingColor: string;
   visibleRoomIds?: string[];
   onCancel: () => void;
   onDelete: () => void;
@@ -13073,10 +13093,32 @@ function ReservationCard({
     .map((roomId) => rooms.find((room) => room.id === roomId))
     .filter((room): room is Room => Boolean(room));
   const balance = getReservationBalance(reservation);
+  const dateStatus = getReservationDateListStatus(reservation, selectedDate);
+  const rowColor = dateStatus === "check-in"
+    ? timelineCheckInColor
+    : dateStatus === "check-out"
+      ? timelineCheckOutColor
+      : dateStatus === "lodging"
+        ? timelineLodgingColor
+        : "";
+  const dateStatusLabel = dateStatus === "check-in"
+    ? "Заезд"
+    : dateStatus === "check-out"
+      ? "Выезд"
+      : dateStatus === "lodging"
+        ? "Проживание"
+        : "";
 
   return (
-    <article className="gpb-reservation-card">
+    <article
+      className={[
+        "gpb-reservation-card",
+        dateStatus ? `is-date-${dateStatus}` : ""
+      ].filter(Boolean).join(" ")}
+      style={rowColor ? { "--gpb-reservation-row-status-color": rowColor } as CSSProperties : undefined}
+    >
       <div className="gpb-reservation-row-values">
+        {dateStatusLabel ? <span className="gpb-reservation-date-status">{dateStatusLabel}</span> : null}
         <strong>{reservation.guestFirstName || "Гость"}</strong>
         <span>{formatReservationPhone(reservation.phone)}</span>
         <span>{formatReservationDateRange(reservation)}</span>

@@ -5669,26 +5669,9 @@ export function BookingPanel() {
   }
 
   async function confirmPrepaymentAmount(reservation: Reservation, amount: number) {
-    const prepaymentAmount = clampNumber(Math.round(amount), 0, reservation.total);
     const now = new Date().toISOString();
-    setPrepaymentAlreadyPaid(prepaymentAmount > 0);
-    const updatedReservation = {
-      ...reservation,
-      items: distributeReservationItemPrepayment(reservation.items, prepaymentAmount),
-      paymentMethod: manualSalePaymentMethod || reservation.paymentMethod,
-      paidAmount: prepaymentAmount,
-      prepayment: prepaymentAmount,
-      prepaymentReceivedAt: prepaymentAmount > 0 ? now : undefined,
-      payments: (reservation.payments ?? [])
-        .filter((payment) => payment.type !== "prepayment")
-        .concat(prepaymentAmount > 0 ? [{
-          id: `payment-${Date.now()}`,
-          type: "prepayment",
-          amount: prepaymentAmount,
-          method: manualSalePaymentMethod || reservation.paymentMethod,
-          paidAt: now
-        }] : [])
-    };
+    const updatedReservation = applyReservationPrepaymentAmount(reservation, amount, manualSalePaymentMethod || reservation.paymentMethod, now);
+    setPrepaymentAlreadyPaid(updatedReservation.prepayment > 0);
     await updateReservation(updatedReservation);
     await saveAgreementDraftForReservation(updatedReservation);
     setPrepaymentAmountTarget(null);
@@ -13356,7 +13339,7 @@ function EditReservationModal({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSaving(true);
-    await onSave({
+    const normalizedDraft = {
       ...draft,
       adults: Math.max(0, draft.adults),
       children: Math.max(0, draft.children),
@@ -13368,7 +13351,15 @@ function EditReservationModal({
       discountAmount: Math.max(0, draft.discountAmount),
       total: Math.max(0, draft.total),
       prepayment: Math.max(0, draft.prepayment)
-    });
+    };
+    const paymentFieldsChanged =
+      normalizedDraft.prepayment !== reservation.prepayment ||
+      normalizedDraft.prepaymentReceivedAt !== reservation.prepaymentReceivedAt ||
+      normalizedDraft.balancePaidAt !== reservation.balancePaidAt;
+    await onSave(paymentFieldsChanged
+      ? applyReservationPrepaymentAmount(normalizedDraft, normalizedDraft.prepayment, normalizedDraft.paymentMethod)
+      : normalizedDraft
+    );
     setIsSaving(false);
   }
 
@@ -21114,6 +21105,53 @@ function distributeReservationItemPrepayment(items: ReservationItem[] = [], prep
       paidAmount
     };
   });
+}
+
+function applyReservationPrepaymentAmount(reservation: Reservation, amount: number, paymentMethod?: string, paidAt = new Date().toISOString()) {
+  const total = Math.max(0, Math.round(reservation.total || 0));
+  const prepaymentAmount = clampNumber(Math.round(amount || 0), 0, total);
+  const isFullyPaid = total > 0 && (prepaymentAmount >= total || Boolean(reservation.balancePaidAt));
+  const hasPrepayment = prepaymentAmount > 0;
+  const baseItems = getReservationItems(reservation);
+  const items = isFullyPaid
+    ? baseItems.map((item) => ({
+      ...item,
+      prepayment: item.total,
+      paidAmount: item.total,
+      balancePaidAt: item.balancePaidAt ?? paidAt
+    }))
+    : distributeReservationItemPrepayment(baseItems, prepaymentAmount);
+  const payment: ReservationPayment | null = hasPrepayment
+    ? {
+      id: `payment-${Date.now()}`,
+      type: "prepayment",
+      amount: prepaymentAmount,
+      method: paymentMethod || reservation.paymentMethod,
+      paidAt
+    }
+    : null;
+  const balancePayment: ReservationPayment | null = isFullyPaid && prepaymentAmount < total
+    ? {
+      id: `payment-${Date.now()}-balance`,
+      type: "balance",
+      amount: total - prepaymentAmount,
+      method: paymentMethod || reservation.paymentMethod,
+      paidAt
+    }
+    : null;
+
+  return {
+    ...reservation,
+    items,
+    paidAmount: isFullyPaid ? total : prepaymentAmount,
+    paymentMethod: paymentMethod || reservation.paymentMethod,
+    prepayment: prepaymentAmount,
+    prepaymentReceivedAt: hasPrepayment ? reservation.prepaymentReceivedAt ?? paidAt : undefined,
+    balancePaidAt: isFullyPaid ? reservation.balancePaidAt ?? paidAt : undefined,
+    payments: (reservation.payments ?? [])
+      .filter((item) => item.type !== "prepayment" && (isFullyPaid ? item.type !== "balance" : true))
+      .concat([payment, balancePayment].filter((item): item is ReservationPayment => Boolean(item)))
+  };
 }
 
 function getReservationFinance(

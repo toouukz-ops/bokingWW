@@ -512,19 +512,34 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
     getPaymentSettingsData(),
     listReservations()
   ]);
-  const intent = extractAiBookingIntent(messages, body);
-  const replyLanguage = detectGuestReplyLanguage(messages);
+  const visibleMessages = Array.isArray(body?.visibleMessages)
+    ? body.visibleMessages
+        .filter((message): message is Record<string, unknown> => Boolean(message && typeof message === "object" && !Array.isArray(message)))
+        .map((message) => ({
+          fromMe: Boolean(message.fromMe),
+          text: toSafeString(message.text),
+          timestamp: toSafeString(message.timestamp),
+          type: toSafeString(message.type) || "visible"
+        }))
+        .filter((message) => message.text)
+    : [];
+  const messagesForAi = visibleMessages.length ? visibleMessages : messages;
+  const intent = extractAiBookingIntent(messagesForAi, body);
+  const bodyReplyLanguage = body?.replyLanguage === "kk" || body?.replyLanguage === "ru" ? body.replyLanguage : "";
+  const replyLanguage = bodyReplyLanguage || detectGuestReplyLanguage(messagesForAi);
   const roomsForAi = rooms as unknown as Array<Record<string, unknown>>;
   const availability = buildAvailabilityForAi(roomsForAi, reservations as Array<Record<string, unknown>>, intent);
 
-  const compactMessages = messages
+  const compactMessages = messagesForAi
     .slice(-40)
     .map((message) => {
       const author = message.fromMe ? "Оператор" : "Гость";
       return `${message.timestamp ? `[${message.timestamp}] ` : ""}${author}: ${toSafeString(message.text)}`.trim();
     })
     .filter(Boolean);
-  const lastGuestMessage = [...messages].reverse().find((message) => !message.fromMe && toSafeString(message.text))?.text || "";
+  const lastGuestMessage = toSafeString(body?.lastGuestMessage) ||
+    [...messagesForAi].reverse().find((message) => !message.fromMe && toSafeString(message.text))?.text ||
+    "";
   const compactRooms = rooms
     .filter((room) => room.bookable && room.status === "active" && !room.hideInBookingPanel)
     .map((room) => compactRoomForAi(room as unknown as Record<string, unknown>))

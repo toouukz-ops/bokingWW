@@ -4662,6 +4662,17 @@ export function BookingPanel() {
     setAiReplyError("");
     try {
       const phone = buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || activeChat.phone || guestPhone;
+      const visibleDialog = collectVisibleWhatsAppDialog(activeChat);
+      const visibleMessages = visibleDialog?.messages
+        .slice(-30)
+        .map((message) => ({
+          fromMe: message.fromMe,
+          text: message.text,
+          timestamp: message.timestamp,
+          type: message.type
+        })) ?? [];
+      const lastGuestMessage = [...visibleMessages].reverse().find((message) => !message.fromMe && message.text.trim())?.text ?? "";
+      const replyLanguage = detectAiReplyLanguage(lastGuestMessage || visibleMessages.map((message) => message.text).join(" "));
       const suggestions = await getAiReplySuggestions({
         chatKey: activeChat.id,
         chatTitle: activeChat.title,
@@ -4669,7 +4680,10 @@ export function BookingPanel() {
         checkOut,
         guestName: guestFirstName,
         guestsTotal: guestAdults + guestTeenagers + guestChildren,
-        phone
+        lastGuestMessage,
+        phone,
+        replyLanguage,
+        visibleMessages
       });
       setAiReplySuggestions(suggestions);
       setAiReplyState("ready");
@@ -13466,6 +13480,7 @@ function EditReservationModal({
     const normalizedDraft = {
       ...draft,
       adults: Math.max(0, draft.adults),
+      teenagers: Math.max(0, draft.teenagers ?? 0),
       children: Math.max(0, draft.children),
       airMattressCount: Math.max(0, draft.airMattressCount),
       rollawayCount: Math.max(0, draft.rollawayCount ?? 0),
@@ -13547,6 +13562,15 @@ function EditReservationModal({
                 type="number"
                 value={draft.adults}
                 onChange={(event) => updateDraft({ adults: toNumber(event.target.value, 0) })}
+              />
+            </label>
+            <label>
+              Подростки
+              <input
+                min="0"
+                type="number"
+                value={draft.teenagers ?? 0}
+                onChange={(event) => updateDraft({ teenagers: toNumber(event.target.value, 0) })}
               />
             </label>
             <label>
@@ -17017,6 +17041,13 @@ function normalizeDialogMessageForDedupe(value: string) {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function detectAiReplyLanguage(value: string): "kk" | "ru" {
+  const text = normalizeExtractedText(value).toLowerCase();
+  const hasKazakhLetters = /[әғқңөұүһі]/i.test(text);
+  const hasKazakhWords = /(салеметсіз|сәлеметсіз|салеметсиз|адамға|адамга|барма|бар ма|күнге|кунге|үй|уй|жоқ|иә|неше|қанша|канша)/i.test(text);
+  return hasKazakhLetters || hasKazakhWords ? "kk" : "ru";
 }
 
 function formatSavedChatMessageTime(value: string) {

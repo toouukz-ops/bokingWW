@@ -122,7 +122,10 @@ export async function getAiReplySuggestions(payload: {
   checkOut?: string;
   guestName: string;
   guestsTotal?: number;
+  lastGuestMessage?: string;
   phone: string;
+  replyLanguage?: "kk" | "ru";
+  visibleMessages?: Array<Pick<ChatMessageLogItem, "fromMe" | "text" | "timestamp" | "type">>;
 }): Promise<AiReplySuggestions> {
   const response = await fetch(`${API_BASE_URL}/api/ai/reply-suggestions`, {
     method: "POST",

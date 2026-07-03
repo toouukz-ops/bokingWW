@@ -20323,43 +20323,89 @@ function buildAdminBookingsExport(reservations: Reservation[], rooms: Room[], se
     return "Броней нет.";
   }
 
-  const lines: string[] = [];
+  const date = selectedDate || formatDateInput(new Date());
+  const dayReservations = allReservations
+    .filter((reservation) => reservation.status === "booked")
+    .filter((reservation) => isReservationRelevantForCalendarDate(reservation, date));
+  const entries = dayReservations.flatMap((reservation) => getAdminDayRoomEntries(reservation, date, rooms));
+  const arrivals = entries.filter((entry) => entry.status === "check-in");
+  const departures = entries.filter((entry) => entry.status === "check-out");
+  const lodging = entries.filter((entry) => entry.status === "lodging");
+  const departureRoomIds = new Set(departures.map((entry) => entry.room.id));
+  const urgentRoomIds = new Set(arrivals.filter((entry) => departureRoomIds.has(entry.room.id)).map((entry) => entry.room.id));
+  const urgent = departures.filter((entry) => urgentRoomIds.has(entry.room.id));
+  const lines = [
+    "Сводка админу",
+    `Дата: ${formatAdminShortDate(date)}`,
+    ""
+  ];
 
-  reservations.forEach((reservation, index) => {
-    const reservationRooms = reservation.roomIds
-      .map((roomId) => rooms.find((room) => room.id === roomId))
-      .filter((room): room is Room => Boolean(room));
-    const stayRooms = reservationRooms.filter((room) => !isHourlyBookingObject(room));
-    const hourlyRooms = reservationRooms.filter(isHourlyBookingObject);
-    const objects = stayRooms.map(formatAdminBookingObject).join(", ") || "не указан";
-    const saunaText = hourlyRooms.map((room) => `${room.title || "Сауна"}: ${formatAdminShortDate(reservation.checkIn)} ${reservation.checkInTime}-${getReservationHourlyEndTime(reservation)}`).join(", ");
-    const roomExtraInventoryText = formatAdminRoomExtraInventory(reservation, stayRooms);
-    const stayStateText = formatAdminStayState(reservation, selectedDate);
-    const included = getAdminIncludedText(stayRooms, reservation);
-    const comment = reservation.adminComment?.trim() || reservation.comment?.trim() || "нет";
-
-    const reservationLines = [
-      `${index + 1}. ${reservation.guestFirstName || "Гость"}`,
-      stayStateText ? `Статус: ${stayStateText}` : "",
-      `Заезд: ${formatAdminShortDate(reservation.checkIn)}`,
-      `Выезд: ${formatAdminShortDate(reservation.checkOut)}`,
-      stayRooms.length ? `Номер: ${objects}` : "",
-      saunaText ? `Сауна: ${saunaText}` : "",
-      roomExtraInventoryText ? `Допместа: ${roomExtraInventoryText}` : "",
-      `Гости: ${formatAdminGuestCountText(reservation)}`,
-      `Включено: ${included}`,
-      `Комментарий: ${comment}`,
-    ].filter(Boolean);
-
-    lines.push(...reservationLines, "");
-  });
-
-  const tomorrowArrivalsText = buildAdminTomorrowArrivalsBlock(selectedDate, allReservations, rooms);
-  if (tomorrowArrivalsText) {
-    lines.push(tomorrowArrivalsText);
-  }
+  lines.push(...formatAdminDaySection("УБРАТЬ В ПЕРВУЮ ОЧЕРЕДЬ", urgent, "Нет срочной уборки."));
+  lines.push("");
+  lines.push(...formatAdminDaySection("ЗАЕЗДЫ", arrivals, "Заездов нет."));
+  lines.push("");
+  lines.push(...formatAdminDaySection("ВЫЕЗДЫ", departures, "Выездов нет."));
+  lines.push("");
+  lines.push(...formatAdminDaySection("ПРОЖИВАЮТ", lodging, "Проживающих нет."));
+  lines.push("");
+  lines.push(`ИТОГО: срочная уборка ${urgentRoomIds.size}, заезды ${arrivals.length}, выезды ${departures.length}, проживают ${lodging.length}`);
 
   return lines.join("\n").trim();
+}
+
+type AdminDayRoomEntry = {
+  reservation: Reservation;
+  room: Room;
+  item: ReservationItem;
+  status: "check-in" | "check-out" | "lodging";
+};
+
+function getAdminDayRoomEntries(reservation: Reservation, date: string, rooms: Room[]): AdminDayRoomEntry[] {
+  return getReservationCalendarItemsForDate(reservation, date, rooms)
+    .map((item) => {
+      const room = rooms.find((candidate) => candidate.id === item.roomId);
+      if (!room || !isStayBookingObject(room)) return null;
+      const status = getReservationItemDateStatus(item, date);
+      return status ? { item, reservation, room, status } : null;
+    })
+    .filter((entry): entry is AdminDayRoomEntry => Boolean(entry))
+    .sort((left, right) =>
+      left.room.number.localeCompare(right.room.number, "ru", { numeric: true }) ||
+      left.reservation.guestFirstName.localeCompare(right.reservation.guestFirstName, "ru")
+    );
+}
+
+function getReservationItemDateStatus(item: Pick<ReservationItem, "checkIn" | "checkOut">, date: string): AdminDayRoomEntry["status"] | "" {
+  if (item.checkIn === date) return "check-in";
+  if (item.checkOut === date) return "check-out";
+  if (item.checkIn < date && date < item.checkOut) return "lodging";
+  return "";
+}
+
+function formatAdminDaySection(title: string, entries: AdminDayRoomEntry[], emptyText: string) {
+  if (!entries.length) return [title, emptyText];
+  return [title, ...entries.map(formatAdminDayRoomLine)];
+}
+
+function formatAdminDayRoomLine({ item, reservation, room, status }: AdminDayRoomEntry) {
+  const guestCount = getReservationGuestTotal(reservation);
+  const timeText = status === "check-in"
+    ? `заезд ${item.checkInTime || reservation.checkInTime || DEFAULT_CHECK_IN_TIME}`
+    : status === "check-out"
+      ? `выезд до ${item.checkOutTime || reservation.checkOutTime || DEFAULT_CHECK_OUT_TIME}`
+      : `до ${formatAdminShortDate(item.checkOut)}`;
+  const balance = getReservationBalance(reservation);
+  const paymentText = balance > 0 ? `ост. ${formatPrice(balance)}` : "оплачено";
+  const extraInventoryText = formatAdminRoomExtraInventory(reservation, [room]);
+  const comment = reservation.adminComment?.trim() || reservation.comment?.trim() || "";
+  return [
+    `- ${formatAdminBookingObject(room)} - ${reservation.guestFirstName || "Гость"}`,
+    timeText,
+    guestCount ? `${guestCount} чел.` : "гости не указаны",
+    paymentText,
+    extraInventoryText ? `допместа: ${extraInventoryText}` : "",
+    comment ? `комм.: ${comment}` : ""
+  ].filter(Boolean).join(" | ");
 }
 
 function createChatDraftFromReservation(reservation: Reservation): ChatBookingDraft {
@@ -20642,6 +20688,7 @@ function buildCookBreakfastExport(selectedDate: string, reservations: Reservatio
     .filter((reservation) => reservation.status === "booked")
     .filter((reservation) => reservation.breakfastIncluded !== false)
     .filter((reservation) => isBreakfastServedOnDate(reservation, date))
+    .filter((reservation) => getReservationGuestTotal(reservation) > 0)
     .sort((left, right) => `${left.checkInTime || DEFAULT_CHECK_IN_TIME} ${left.guestFirstName}`.localeCompare(`${right.checkInTime || DEFAULT_CHECK_IN_TIME} ${right.guestFirstName}`, "ru"));
 
   if (!breakfastReservations.length) {
@@ -20655,25 +20702,21 @@ function buildCookBreakfastExport(selectedDate: string, reservations: Reservatio
   const lines = [
     "Завтраки",
     `Дата: ${formatAdminShortDate(date)}`,
-    `ИТОГО: взрослых ${totalAdults}, подростков ${totalTeenagers}, детей ${totalChildren}, всего завтраков ${totalGuests}`,
+    `ИТОГО: ${totalGuests} завтраков (${totalAdults} взр. / ${totalTeenagers} подрост. / ${totalChildren} дет.)`,
     ""
   ];
 
   breakfastReservations.forEach((reservation, index) => {
-    const comment = reservation.adminComment?.trim() || reservation.comment?.trim() || "нет";
+    const comment = reservation.adminComment?.trim();
     const roomNumbers = formatCookBreakfastRoomNumbers(reservation, date, rooms);
+    const guestText = `${getReservationGuestTotal(reservation)} завтраков (${Math.max(0, reservation.adults || 0)} взр. / ${Math.max(0, reservation.teenagers || 0)} подрост. / ${Math.max(0, reservation.children || 0)} дет.)`;
     lines.push(
-      `${index + 1}. ${reservation.guestFirstName || "Гость"}${roomNumbers ? ` / ${roomNumbers}` : ""}`,
-      `Взрослые: ${Math.max(0, reservation.adults || 0)}`,
-      `Подростки: ${Math.max(0, reservation.teenagers || 0)}`,
-      `Дети: ${Math.max(0, reservation.children || 0)}`,
-      `Всего: ${getReservationGuestTotal(reservation)}`,
-      `Комментарий: ${comment}`,
-      ""
+      `${index + 1}. ${roomNumbers ? `№${roomNumbers} - ` : ""}${reservation.guestFirstName || "Гость"}: ${guestText}`,
+      comment ? `Комментарий: ${comment}` : ""
     );
   });
 
-  return lines.join("\n").trim();
+  return lines.filter((line, index, source) => line || source[index - 1]).join("\n").trim();
 }
 
 function formatCookBreakfastRoomNumbers(reservation: Reservation, date: string, rooms: Room[]) {

@@ -5633,6 +5633,7 @@ export function BookingPanel() {
       const nextPaidAmount = getReservationPaymentsTotal(nextPayments, reservation.total);
       await updateReservation({
         ...reservation,
+        comment: allBalancesPaid ? normalizePaidReservationComment(reservation.comment) : reservation.comment,
         items: nextItems,
         payments: nextPayments,
         status: "booked",
@@ -5649,6 +5650,7 @@ export function BookingPanel() {
     }));
     await updateReservation({
       ...reservation,
+      comment: hasBalancePaid ? reservation.comment : normalizePaidReservationComment(reservation.comment),
       items: nextItems,
       status: "booked",
       paymentMethod: hasBalancePaid ? reservation.paymentMethod : manualSalePaymentMethod || reservation.paymentMethod,
@@ -20439,7 +20441,7 @@ function formatAdminDayGroupLine(group: AdminDayEntryGroup) {
   const paymentText = balance > 0 ? `ост. ${formatPrice(balance)}` : "оплачено";
   const groupRooms = entries.map((entry) => entry.room);
   const extraInventoryText = formatAdminRoomExtraInventory(reservation, groupRooms);
-  const comment = reservation.adminComment?.trim() || reservation.comment?.trim() || "";
+  const comment = formatAdminReservationComment(reservation, balance);
   return [
     `- ${formatAdminBookingObjects(groupRooms)} - ${reservation.guestFirstName || "Гость"}`,
     timeText,
@@ -20456,6 +20458,16 @@ function getAdminDayGroupBalance(group: AdminDayEntryGroup) {
     return items.reduce((sum, item) => sum + getReservationItemBalance(item), 0);
   }
   return getReservationBalance(group.reservation);
+}
+
+function formatAdminReservationComment(reservation: Reservation, balance: number) {
+  const comment = reservation.adminComment?.trim() || reservation.comment?.trim() || "";
+  if (!comment) return "";
+  return balance <= 0 ? normalizePaidReservationComment(comment) : comment;
+}
+
+function normalizePaidReservationComment(comment = "") {
+  return comment.replace(/,\s*оплата при выезде/gi, ", оплачено");
 }
 
 function createChatDraftFromReservation(reservation: Reservation): ChatBookingDraft {

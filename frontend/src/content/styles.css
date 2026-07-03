@@ -667,6 +667,7 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-ai-reply-option {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -699,15 +700,35 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-ai-reply-option small {
-  display: none;
+  position: absolute;
+  left: 12px;
+  bottom: calc(100% + 6px);
+  z-index: 30;
+  display: block;
+  width: max-content;
+  max-width: min(520px, calc(100vw - 80px));
+  border: 1px solid #b9dfd2;
+  border-radius: 7px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 107, 87, 0.18);
   color: #66717f;
   font-size: 11px;
   font-weight: 800;
+  line-height: 1.35;
+  opacity: 0;
+  padding: 7px 9px;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 140ms ease, transform 140ms ease;
+  visibility: hidden;
+  white-space: normal;
 }
 
 .gpb-ai-reply-option:hover small,
 .gpb-ai-reply-option:focus-within small {
-  display: block;
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
 }
 
 .gpb-ai-reply-option button {

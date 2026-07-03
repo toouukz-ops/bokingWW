@@ -241,6 +241,9 @@ const AI_REPLY_SYSTEM_PROMPT = `Ты — помощник оператора п�
 — Варианты должны отличаться по смыслу, а не только словами.
 — Выбери лучший вариант и отметь его как рекомендуемый.
 — Если гость пишет на казахском, отвечай гостю на казахском.
+— Если поле replyLanguage равно "kk", все 5 answers ОБЯЗАТЕЛЬНО должны быть на казахском языке.
+— Если поле replyLanguage равно "ru", все 5 answers должны быть на русском языке.
+— Поле reason всегда пиши на русском языке.
 — Если ответ не на русском, добавь русский перевод каждого варианта в answerTranslations.
 — Green Pine Burabay — гостиница с номерами, а не база с отдельными домиками.
 — Если гость спрашивает домик, коттедж, үй или отдельный house, честно отвечай: домиков нет, есть гостиничные номера.
@@ -373,6 +376,20 @@ function extractAiBookingIntent(messages: Array<Record<string, unknown>>, body: 
   };
 }
 
+function detectGuestReplyLanguage(messages: Array<Record<string, unknown>>) {
+  const lastGuestText = [...messages].reverse().find((message) => !message.fromMe && toSafeString(message.text))?.text ?? "";
+  const recentGuestText = messages
+    .slice(-8)
+    .filter((message) => !message.fromMe)
+    .map((message) => toSafeString(message.text))
+    .join(" ")
+    .toLowerCase();
+  const text = `${lastGuestText} ${recentGuestText}`.toLowerCase();
+  const hasKazakhLetters = /[әғқңөұүһі]/i.test(text);
+  const hasKazakhWords = /\b(салеметсіз|сәлеметсіз|салеметсиз|адамға|адамга|барма|бар ма|күнге|кунге|үй|уй|жоқ|иә|неше|қанша|канша)\b/i.test(text);
+  return hasKazakhLetters || hasKazakhWords ? "kk" : "ru";
+}
+
 function getReservationItemsForAi(reservation: Record<string, unknown>) {
   const items = Array.isArray(reservation.items)
     ? reservation.items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
@@ -496,6 +513,7 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
     listReservations()
   ]);
   const intent = extractAiBookingIntent(messages, body);
+  const replyLanguage = detectGuestReplyLanguage(messages);
   const roomsForAi = rooms as unknown as Array<Record<string, unknown>>;
   const availability = buildAvailabilityForAi(roomsForAi, reservations as Array<Record<string, unknown>>, intent);
 
@@ -533,6 +551,10 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
       guestName: toSafeString(body?.guestName)
     },
     lastGuestMessage,
+    replyLanguage,
+    languageInstruction: replyLanguage === "kk"
+      ? "Гость пишет на казахском или казахско-русской смеси. Все answers должны быть на казахском. answerTranslations должны быть русским переводом."
+      : "Гость пишет на русском. Answers должны быть на русском.",
     messages: compactMessages,
     hotelData: {
       objectInfo,

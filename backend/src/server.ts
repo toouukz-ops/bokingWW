@@ -207,6 +207,7 @@ app.post("/api/booking/draft", async (request, reply) => {
 
 type AiReplySuggestionPayload = {
   answers: string[];
+  answerTranslations: string[];
   reason: string;
   recommended: number;
 };
@@ -239,6 +240,9 @@ const AI_REPLY_SYSTEM_PROMPT = `Ты — помощник оператора п�
 — Не дави и не запугивай гостя.
 — Варианты должны отличаться по смыслу, а не только словами.
 — Выбери лучший вариант и отметь его как рекомендуемый.
+— Если гость пишет на казахском, отвечай гостю на казахском.
+— Если ответ не на русском, добавь русский перевод каждого варианта в answerTranslations.
+— Если по датам есть доступные номера, не отвечай, что мест нет. Предлагай доступные номера или уточнение.
 
 Формат ответа строго JSON:
 {
@@ -250,10 +254,17 @@ const AI_REPLY_SYSTEM_PROMPT = `Ты — помощник оператора п�
     "Вариант ответа 3",
     "Вариант ответа 4",
     "Вариант ответа 5"
+  ],
+  "answerTranslations": [
+    "Перевод варианта 1 на русский",
+    "Перевод варианта 2 на русский",
+    "Перевод варианта 3 на русский",
+    "Перевод варианта 4 на русский",
+    "Перевод варианта 5 на русский"
   ]
 }
 
-Поле reason видит только оператор. Гостю оно не отправляется.`;
+Поле reason и answerTranslations видит только оператор. Гостю они не отправляются.`;
 
 function toSafeString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -286,6 +297,143 @@ function compactRoomForAi(room: Record<string, unknown>) {
   };
 }
 
+function toDateInput(value: unknown) {
+  const text = toSafeString(value);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
+}
+
+function addDaysInput(dateInput: string, days: number) {
+  const [year, month, day] = dateInput.split("-").map((part) => Number.parseInt(part, 10));
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  return date.toISOString().slice(0, 10);
+}
+
+function dateRangesOverlap(leftStart: string, leftEnd: string, rightStart: string, rightEnd: string) {
+  return Boolean(leftStart && leftEnd && rightStart && rightEnd && leftStart < rightEnd && rightStart < leftEnd);
+}
+
+function extractAiBookingIntent(messages: Array<Record<string, unknown>>, body: Record<string, unknown> | undefined) {
+  const panelCheckIn = toDateInput(body?.checkIn);
+  const panelCheckOut = toDateInput(body?.checkOut);
+  const panelGuests = toSafeNumber(body?.guestsTotal);
+  const text = messages
+    .slice(-12)
+    .map((message) => toSafeString(message.text))
+    .join("\n")
+    .toLowerCase();
+  const months: Record<string, number> = {
+    "январ": 1,
+    "қаңтар": 1,
+    "феврал": 2,
+    "ақпан": 2,
+    "март": 3,
+    "наурыз": 3,
+    "апрел": 4,
+    "сәуір": 4,
+    "май": 5,
+    "мамыр": 5,
+    "июн": 6,
+    "маусым": 6,
+    "июл": 7,
+    "шілде": 7,
+    "август": 8,
+    "августа": 8,
+    "тамыз": 8,
+    "сентябр": 9,
+    "қыркүй": 9,
+    "октябр": 10,
+    "қазан": 10,
+    "ноябр": 11,
+    "қараша": 11,
+    "декабр": 12,
+    "желтоқсан": 12
+  };
+  const monthEntry = Object.entries(months).find(([name]) => text.includes(name));
+  const dateMatch = text.match(/(?:\b|[^\d])(\d{1,2})\s*[-–—]\s*(\d{1,2})(?:\b|[^\d])/);
+  const nightsMatch = text.match(/(\d{1,2})\s*(?:күн|кун|дн|ноч|түн|тун)/);
+  let checkIn = panelCheckIn;
+  let checkOut = panelCheckOut;
+  if ((!checkIn || !checkOut) && monthEntry && dateMatch) {
+    const year = new Date().getFullYear();
+    const month = monthEntry[1];
+    const startDay = Number.parseInt(dateMatch[1], 10);
+    const endDay = Number.parseInt(dateMatch[2], 10);
+    const nights = nightsMatch ? Math.max(1, Number.parseInt(nightsMatch[1], 10)) : 0;
+    checkIn = `${year}-${String(month).padStart(2, "0")}-${String(startDay).padStart(2, "0")}`;
+    checkOut = nights ? addDaysInput(checkIn, nights) : `${year}-${String(month).padStart(2, "0")}-${String(endDay).padStart(2, "0")}`;
+    if (checkOut <= checkIn) checkOut = addDaysInput(checkIn, Math.max(1, endDay - startDay || 1));
+  }
+  const guestMatch = text.match(/(\d{1,2})\s*(?:адам|чел|гост)/);
+  return {
+    checkIn,
+    checkOut,
+    guestsTotal: panelGuests || (guestMatch ? Number.parseInt(guestMatch[1], 10) : 0)
+  };
+}
+
+function getReservationItemsForAi(reservation: Record<string, unknown>) {
+  const items = Array.isArray(reservation.items)
+    ? reservation.items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    : [];
+  if (items.length) return items;
+  const roomIds = Array.isArray(reservation.roomIds) ? reservation.roomIds.map((roomId) => toSafeString(roomId)).filter(Boolean) : [];
+  return roomIds.map((roomId) => ({
+    roomId,
+    checkIn: toSafeString(reservation.checkIn),
+    checkOut: toSafeString(reservation.checkOut)
+  }));
+}
+
+function buildAvailabilityForAi(
+  rooms: Array<Record<string, unknown>>,
+  reservations: Array<Record<string, unknown>>,
+  intent: { checkIn: string; checkOut: string; guestsTotal: number }
+) {
+  if (!intent.checkIn || !intent.checkOut) {
+    return {
+      requestedPeriod: null,
+      note: "Даты из переписки не определены. Нужно уточнить даты.",
+      availableRooms: []
+    };
+  }
+  const bookedRoomIds = new Set<string>();
+  const overlappingReservations: Array<Record<string, unknown>> = [];
+  for (const reservation of reservations) {
+    if (toSafeString(reservation.status) === "cancelled") continue;
+    const overlappingItems = getReservationItemsForAi(reservation).filter((item) =>
+      dateRangesOverlap(toSafeString(item.checkIn), toSafeString(item.checkOut), intent.checkIn, intent.checkOut)
+    );
+    if (!overlappingItems.length) continue;
+    overlappingReservations.push({
+      guest: toSafeString(reservation.guestFirstName) || "Гость",
+      rooms: overlappingItems.map((item) => toSafeString(item.roomId)).filter(Boolean),
+      checkIn: toSafeString(reservation.checkIn),
+      checkOut: toSafeString(reservation.checkOut),
+      status: toSafeString(reservation.status)
+    });
+    overlappingItems.forEach((item) => {
+      const roomId = toSafeString(item.roomId);
+      if (roomId) bookedRoomIds.add(roomId);
+    });
+  }
+  const availableRooms = rooms
+    .filter((room) => toSafeString(room.category) === "guest-room" && Boolean(room.bookable) && toSafeString(room.status) === "active" && !room.hideInBookingPanel)
+    .filter((room) => !bookedRoomIds.has(toSafeString(room.id)))
+    .map((room) => compactRoomForAi(room))
+    .slice(0, 30);
+  return {
+    requestedPeriod: {
+      checkIn: intent.checkIn,
+      checkOut: intent.checkOut,
+      guestsTotal: intent.guestsTotal
+    },
+    availableRooms,
+    availableRoomsCount: availableRooms.length,
+    availableTotalPlaces: availableRooms.reduce((sum, room) => sum + toSafeNumber(room.places), 0),
+    overlappingReservations
+  };
+}
+
 function buildBorovoeReferenceForAi() {
   return [
     "Green Pine Burabay находится в Бурабае/Боровом, подходит гостям на машине и для спокойного отдыха.",
@@ -301,13 +449,20 @@ function normalizeAiSuggestionPayload(value: unknown): AiReplySuggestionPayload 
   const answers = Array.isArray(payload.answers)
     ? payload.answers.map((answer) => toSafeString(answer)).filter(Boolean).slice(0, 5)
     : [];
+  const answerTranslations = Array.isArray(payload.answerTranslations)
+    ? payload.answerTranslations.map((answer) => toSafeString(answer)).slice(0, 5)
+    : [];
   while (answers.length < 5) {
     answers.push("Уточните, пожалуйста, даты и состав гостей");
+  }
+  while (answerTranslations.length < 5) {
+    answerTranslations.push("");
   }
   const rawRecommended = typeof payload.recommended === "number" ? payload.recommended : Number.parseInt(String(payload.recommended ?? "1"), 10);
   const recommended = Math.max(1, Math.min(5, Number.isFinite(rawRecommended) ? rawRecommended : 1));
   return {
     answers,
+    answerTranslations,
     reason: toSafeString(payload.reason) || "Выбран самый уместный короткий ответ.",
     recommended
   };
@@ -332,11 +487,15 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
     return reply.status(400).send({ error: "chatKey is required" });
   }
 
-  const [messages, rooms, settings] = await Promise.all([
+  const [messages, rooms, settings, reservations] = await Promise.all([
     listChatMessages(chatKey, 80),
     listRooms(),
-    getPaymentSettingsData()
+    getPaymentSettingsData(),
+    listReservations()
   ]);
+  const intent = extractAiBookingIntent(messages, body);
+  const roomsForAi = rooms as unknown as Array<Record<string, unknown>>;
+  const availability = buildAvailabilityForAi(roomsForAi, reservations as Array<Record<string, unknown>>, intent);
 
   const compactMessages = messages
     .slice(-40)
@@ -375,7 +534,8 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
     messages: compactMessages,
     hotelData: {
       objectInfo,
-      rooms: compactRooms
+      rooms: compactRooms,
+      availability
     },
     borovoeReference: buildBorovoeReferenceForAi()
   }, null, 2);

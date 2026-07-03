@@ -173,6 +173,7 @@ export interface ChatMessageDialog {
 
 export interface AiReplySuggestions {
   answers: string[];
+  answerTranslations?: string[];
   reason: string;
   recommended: number;
 }

@@ -4665,7 +4665,10 @@ export function BookingPanel() {
       const suggestions = await getAiReplySuggestions({
         chatKey: activeChat.id,
         chatTitle: activeChat.title,
+        checkIn,
+        checkOut,
         guestName: guestFirstName,
+        guestsTotal: guestAdults + guestTeenagers + guestChildren,
         phone
       });
       setAiReplySuggestions(suggestions);
@@ -6569,10 +6572,15 @@ export function BookingPanel() {
             <div className="gpb-ai-reply-results">
               {aiReplySuggestions.reason ? <p>{aiReplySuggestions.reason}</p> : null}
               {aiReplySuggestions.answers.map((answer, index) => (
-                <div className={`gpb-ai-reply-option ${aiReplySuggestions.recommended === index + 1 ? "is-recommended" : ""}`} key={`${answer}-${index}`}>
+                <div
+                  className={`gpb-ai-reply-option ${aiReplySuggestions.recommended === index + 1 ? "is-recommended" : ""}`}
+                  key={`${answer}-${index}`}
+                  title={aiReplySuggestions.answerTranslations?.[index] || ""}
+                >
                   <span>
                     {aiReplySuggestions.recommended === index + 1 ? <b>Рекомендуемый</b> : null}
                     {answer}
+                    {aiReplySuggestions.answerTranslations?.[index] ? <small>{aiReplySuggestions.answerTranslations[index]}</small> : null}
                   </span>
                   <button type="button" onClick={() => void handleSendQuickPhrase(answer)} disabled={quickPhraseSendState === "sending"}>
                     Отправить

@@ -118,7 +118,10 @@ export async function createDraftFromMessage(message: string): Promise<BookingDr
 export async function getAiReplySuggestions(payload: {
   chatKey: string;
   chatTitle: string;
+  checkIn?: string;
+  checkOut?: string;
   guestName: string;
+  guestsTotal?: number;
   phone: string;
 }): Promise<AiReplySuggestions> {
   const response = await fetch(`${API_BASE_URL}/api/ai/reply-suggestions`, {

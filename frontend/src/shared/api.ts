@@ -1,4 +1,4 @@
-import type { ActiveDialog, BookingDraft, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, Room, RoomHold } from "./types";
+import type { ActiveDialog, AiReplySuggestions, BookingDraft, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, Room, RoomHold } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://bokingww.onrender.com";
 const LOCAL_ROOMS_STORAGE_KEY = "gpb-booking-rooms";
@@ -110,6 +110,25 @@ export async function createDraftFromMessage(message: string): Promise<BookingDr
 
   if (!response.ok) {
     throw new Error(`Draft request failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export async function getAiReplySuggestions(payload: {
+  chatKey: string;
+  chatTitle: string;
+  guestName: string;
+  phone: string;
+}): Promise<AiReplySuggestions> {
+  const response = await fetch(`${API_BASE_URL}/api/ai/reply-suggestions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error(`AI reply suggestions failed: ${response.status}`);
   }
 
   return response.json();

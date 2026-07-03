@@ -171,6 +171,12 @@ export interface ChatMessageDialog {
   messages: ChatMessageLogItem[];
 }
 
+export interface AiReplySuggestions {
+  answers: string[];
+  reason: string;
+  recommended: number;
+}
+
 export interface PaymentSettings {
   paymentLink: string;
   paymentMethods: Record<string, string>;

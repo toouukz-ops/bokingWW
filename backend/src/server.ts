@@ -37,6 +37,7 @@ import { closeDatabase, connectDatabase } from "./db.js";
 import { deleteGuestContact, guestContactSchema, listGuestContacts, saveGuestContact } from "./guestContacts.js";
 import { cropPhotoFile, deleteMediaFile, ensureWhatsappVideoFile, getLocalUploadPath, saveRoomMediaFile, uploadsRoot } from "./media.js";
 import { getMediaContentType, getStoredMedia, openStoredMediaStream } from "./mediaStore.js";
+import { createOpenAiClient } from "./openai.js";
 import { addRoomMedia, deleteRoom, getRoom, listRooms, removeRoomMedia, replaceRoomMedia, roomSchema, saveRoom } from "./rooms.js";
 
 await connectDatabase();
@@ -202,6 +203,204 @@ app.post("/api/booking/draft", async (request, reply) => {
   }
 
   return createStubDraft(result.data.message);
+});
+
+type AiReplySuggestionPayload = {
+  answers: string[];
+  reason: string;
+  recommended: number;
+};
+
+const AI_REPLY_SYSTEM_PROMPT = `Ты — помощник оператора по продажам гостиницы Green Pine Burabay.
+
+Тебе передаются:
+
+1. Полная история переписки с гостем.
+2. Последнее сообщение гостя.
+3. Актуальные данные гостиницы, номеров, цен и услуг.
+4. Краткий справочник по Боровому: озёра, пляжи, центр, достопримечательности, расстояния и маршруты.
+
+Задача:
+Проанализируй переписку и предложи 5 вариантов следующего ответа оператору.
+
+Правила:
+— Учитывай всю переписку, особенно последнее сообщение.
+— Не задавай повторно вопросы, на которые гость уже ответил.
+— Учитывай, что гость может менять даты, состав и требования.
+— Не обвиняй гостя и не спорь с ним.
+— Отвечай только на текущий вопрос или возражение.
+— Каждый вариант — не более 8 слов.
+— Ответ должен быть простым и понятным для WhatsApp.
+— Не используй длинные описания и сложные формулировки.
+— Не придумывай цены, наличие, услуги и расстояния.
+— При недостатке данных задай один короткий уточняющий вопрос.
+— Мягко веди гостя к бронированию.
+— Если объект явно не подходит, честно сообщи это.
+— Не дави и не запугивай гостя.
+— Варианты должны отличаться по смыслу, а не только словами.
+— Выбери лучший вариант и отметь его как рекомендуемый.
+
+Формат ответа строго JSON:
+{
+  "recommended": 2,
+  "reason": "Кратко объясни оператору причину выбора",
+  "answers": [
+    "Вариант ответа 1",
+    "Вариант ответа 2",
+    "Вариант ответа 3",
+    "Вариант ответа 4",
+    "Вариант ответа 5"
+  ]
+}
+
+Поле reason видит только оператор. Гостю оно не отправляется.`;
+
+function toSafeString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function toSafeNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function compactRoomForAi(room: Record<string, unknown>) {
+  const sleepingPlaces = Array.isArray(room.sleepingPlaces)
+    ? room.sleepingPlaces
+        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+        .map((item) => `${toSafeString(item.title)} x${toSafeNumber(item.count) || 1}, мест ${toSafeNumber(item.normalCapacity) || toSafeNumber(item.placesCount)}`)
+        .filter(Boolean)
+    : [];
+  return {
+    number: toSafeString(room.number),
+    title: toSafeString(room.title),
+    category: toSafeString(room.group),
+    floor: toSafeString(room.floor),
+    places: toSafeNumber(room.capacityAdults) + toSafeNumber(room.capacityChildren),
+    weekdayPrice: toSafeNumber(room.weekdayPrice) || toSafeNumber(room.basePrice),
+    weekendPrice: toSafeNumber(room.weekendPrice) || toSafeNumber(room.basePrice),
+    holidayPrice: toSafeNumber(room.holidayPrice) || toSafeNumber(room.weekendPrice) || toSafeNumber(room.basePrice),
+    food: toSafeString(room.amenities).split(",").map((item) => item.trim()).filter((item) => /завтрак|питан/i.test(item)).join(", "),
+    amenities: toSafeString(room.amenities).split(",").map((item) => item.trim()).filter(Boolean).slice(0, 12).join(", "),
+    description: toSafeString(room.description).slice(0, 500),
+    sleepingPlaces
+  };
+}
+
+function buildBorovoeReferenceForAi() {
+  return [
+    "Green Pine Burabay находится в Бурабае/Боровом, подходит гостям на машине и для спокойного отдыха.",
+    "Не обещай точное расстояние или минуты, если в данных переписки или объекта нет точной цифры.",
+    "Если гость просит центр, пляж, озеро или пешую доступность, отвечай честно и мягко уточняй приоритет.",
+    "Можно упоминать, что в Боровом важны даты, состав гостей, питание, парковка и близость к нужной локации.",
+    "Если гость хочет совсем рядом с озером/центром, не спорь: предложи проверить вариант или честно сказать, что может не подойти."
+  ].join("\n");
+}
+
+function normalizeAiSuggestionPayload(value: unknown): AiReplySuggestionPayload {
+  const payload = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const answers = Array.isArray(payload.answers)
+    ? payload.answers.map((answer) => toSafeString(answer)).filter(Boolean).slice(0, 5)
+    : [];
+  while (answers.length < 5) {
+    answers.push("Уточните, пожалуйста, даты и состав гостей");
+  }
+  const rawRecommended = typeof payload.recommended === "number" ? payload.recommended : Number.parseInt(String(payload.recommended ?? "1"), 10);
+  const recommended = Math.max(1, Math.min(5, Number.isFinite(rawRecommended) ? rawRecommended : 1));
+  return {
+    answers,
+    reason: toSafeString(payload.reason) || "Выбран самый уместный короткий ответ.",
+    recommended
+  };
+}
+
+function parseAiJsonResponse(text: string): AiReplySuggestionPayload {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  const jsonText = fenced || trimmed.match(/\{[\s\S]*\}/)?.[0] || trimmed;
+  return normalizeAiSuggestionPayload(JSON.parse(jsonText));
+}
+
+app.post("/api/ai/reply-suggestions", async (request, reply) => {
+  const client = createOpenAiClient();
+  if (!client) {
+    return reply.status(503).send({ error: "OPENAI_API_KEY is not configured" });
+  }
+
+  const body = request.body as Record<string, unknown> | undefined;
+  const chatKey = toSafeString(body?.chatKey);
+  if (!chatKey) {
+    return reply.status(400).send({ error: "chatKey is required" });
+  }
+
+  const [messages, rooms, settings] = await Promise.all([
+    listChatMessages(chatKey, 80),
+    listRooms(),
+    getPaymentSettingsData()
+  ]);
+
+  const compactMessages = messages
+    .slice(-40)
+    .map((message) => {
+      const author = message.fromMe ? "Оператор" : "Гость";
+      return `${message.timestamp ? `[${message.timestamp}] ` : ""}${author}: ${toSafeString(message.text)}`.trim();
+    })
+    .filter(Boolean);
+  const lastGuestMessage = [...messages].reverse().find((message) => !message.fromMe && toSafeString(message.text))?.text || "";
+  const compactRooms = rooms
+    .filter((room) => room.bookable && room.status === "active" && !room.hideInBookingPanel)
+    .map((room) => compactRoomForAi(room as unknown as Record<string, unknown>))
+    .slice(0, 40);
+  const settingsRecord = settings && typeof settings === "object" && !Array.isArray(settings) ? settings as Record<string, unknown> : {};
+  const objectInfo = {
+    paymentLink: toSafeString(settingsRecord.paymentLink),
+    packageGiftText: toSafeString(settingsRecord.packageGiftText),
+    customFoodOptions: Array.isArray(settingsRecord.customFoodOptions) ? settingsRecord.customFoodOptions.slice(0, 20) : [],
+    includedCardPages: Array.isArray(settingsRecord.includedCardPages)
+      ? settingsRecord.includedCardPages
+          .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+          .map((item) => toSafeString(item.description))
+          .filter(Boolean)
+          .slice(0, 10)
+      : []
+  };
+
+  const userPrompt = JSON.stringify({
+    chat: {
+      chatKey,
+      chatTitle: toSafeString(body?.chatTitle),
+      phone: toSafeString(body?.phone),
+      guestName: toSafeString(body?.guestName)
+    },
+    lastGuestMessage,
+    messages: compactMessages,
+    hotelData: {
+      objectInfo,
+      rooms: compactRooms
+    },
+    borovoeReference: buildBorovoeReferenceForAi()
+  }, null, 2);
+
+  const completion = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: AI_REPLY_SYSTEM_PROMPT },
+      { role: "user", content: userPrompt }
+    ],
+    temperature: 0.6,
+    response_format: { type: "json_object" }
+  });
+
+  const content = completion.choices[0]?.message?.content ?? "";
+  if (!content.trim()) {
+    return reply.status(502).send({ error: "OpenAI returned empty response" });
+  }
+
+  try {
+    return parseAiJsonResponse(content);
+  } catch (error) {
+    request.log.error({ error, content }, "AI suggestions parse failed");
+    return reply.status(502).send({ error: "Invalid AI response" });
+  }
 });
 
 app.get("/api/backup/server", async (request) => {

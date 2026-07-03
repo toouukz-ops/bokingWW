@@ -53,6 +53,7 @@ import {
   exportServerBackupData,
   getActiveDialogs,
   getAllChatBookingDrafts,
+  getAiReplySuggestions,
   getExpenseCategories,
   getExpenseEntries,
   getGuestContacts,
@@ -82,7 +83,7 @@ import {
   uploadRoomMedia
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
-import type { ActiveChat, ActiveDialog, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
+import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -1012,6 +1013,9 @@ export function BookingPanel() {
   const [draggedQuickPhraseIndex, setDraggedQuickPhraseIndex] = useState<number | null>(null);
   const [draggedObjectGalleryPhotoPath, setDraggedObjectGalleryPhotoPath] = useState("");
   const [quickPhraseSendState, setQuickPhraseSendState] = useState<"idle" | "sending" | "error">("idle");
+  const [aiReplyState, setAiReplyState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [aiReplySuggestions, setAiReplySuggestions] = useState<AiReplySuggestions | null>(null);
+  const [aiReplyError, setAiReplyError] = useState("");
   const [weatherLocationName, setWeatherLocationName] = useState("Алматы");
   const [weatherLatitude, setWeatherLatitude] = useState(43.2389);
   const [weatherLongitude, setWeatherLongitude] = useState(76.8897);
@@ -1724,6 +1728,12 @@ export function BookingPanel() {
     activeChatIdRef.current = activeChat?.id ?? "";
     activeChatRef.current = activeChat;
   }, [activeChat?.id, activeChat?.phone, activeChat?.title]);
+
+  useEffect(() => {
+    setAiReplyState("idle");
+    setAiReplySuggestions(null);
+    setAiReplyError("");
+  }, [activeChat?.id]);
 
   useEffect(() => {
     if (chatMessageStateLoadedRef.current) return;
@@ -4646,6 +4656,27 @@ export function BookingPanel() {
     }
   }
 
+  async function handleRequestAiReplySuggestions() {
+    if (!activeChat?.id || aiReplyState === "loading") return;
+    setAiReplyState("loading");
+    setAiReplyError("");
+    try {
+      const phone = buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || activeChat.phone || guestPhone;
+      const suggestions = await getAiReplySuggestions({
+        chatKey: activeChat.id,
+        chatTitle: activeChat.title,
+        guestName: guestFirstName,
+        phone
+      });
+      setAiReplySuggestions(suggestions);
+      setAiReplyState("ready");
+    } catch {
+      setAiReplySuggestions(null);
+      setAiReplyError("Не удалось получить варианты. Проверьте ключ OpenAI и сервер.");
+      setAiReplyState("error");
+    }
+  }
+
   async function handleCreateQuickPhrase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const phrase = newQuickPhrase.trim();
@@ -6522,6 +6553,35 @@ export function BookingPanel() {
           </button>
         </div>
         {quickPhraseSendState === "error" ? <small>Откройте нужный чат WhatsApp и попробуйте еще раз.</small> : null}
+        <div className="gpb-ai-reply-box">
+          <div className="gpb-ai-reply-header">
+            <button
+              type="button"
+              onClick={() => void handleRequestAiReplySuggestions()}
+              disabled={!activeChat?.id || aiReplyState === "loading"}
+            >
+              Что ответить?
+            </button>
+            {aiReplyState === "loading" ? <span>Анализирую чат...</span> : null}
+          </div>
+          {aiReplyError ? <small>{aiReplyError}</small> : null}
+          {aiReplySuggestions ? (
+            <div className="gpb-ai-reply-results">
+              {aiReplySuggestions.reason ? <p>{aiReplySuggestions.reason}</p> : null}
+              {aiReplySuggestions.answers.map((answer, index) => (
+                <div className={`gpb-ai-reply-option ${aiReplySuggestions.recommended === index + 1 ? "is-recommended" : ""}`} key={`${answer}-${index}`}>
+                  <span>
+                    {aiReplySuggestions.recommended === index + 1 ? <b>Рекомендуемый</b> : null}
+                    {answer}
+                  </span>
+                  <button type="button" onClick={() => void handleSendQuickPhrase(answer)} disabled={quickPhraseSendState === "sending"}>
+                    Отправить
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
       </section>
 
       <section

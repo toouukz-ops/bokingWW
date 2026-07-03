@@ -614,6 +614,108 @@ body.gpb-booking-panel-open #app {
   font-weight: 800;
 }
 
+.gpb-ai-reply-box {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #d8e5df;
+  border-radius: 8px;
+  background: #f6fbf8;
+  padding: 8px;
+}
+
+.gpb-ai-reply-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gpb-ai-reply-header button {
+  min-height: 30px;
+  border: 1px solid #0f6b57;
+  border-radius: 7px;
+  background: #0f6b57;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 0 10px;
+}
+
+.gpb-ai-reply-header button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.gpb-ai-reply-header span {
+  color: #66717f;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.gpb-ai-reply-results {
+  display: grid;
+  gap: 6px;
+}
+
+.gpb-ai-reply-results p {
+  margin: 0;
+  color: #66717f;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.gpb-ai-reply-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #d7e0e8;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 6px;
+}
+
+.gpb-ai-reply-option.is-recommended {
+  border-color: #0f6b57;
+  background: #eaf6f1;
+}
+
+.gpb-ai-reply-option span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: #17212b;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.gpb-ai-reply-option b {
+  color: #0f6b57;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.gpb-ai-reply-option button {
+  min-height: 28px;
+  border: 1px solid #0f6b57;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #0f6b57;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 0 8px;
+}
+
+.gpb-ai-reply-option button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .gpb-quick-phrase-modal {
   width: min(520px, calc(100vw - 36px));
 }

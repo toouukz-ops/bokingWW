@@ -20357,7 +20357,7 @@ function buildAdminBookingsExport(reservations: Reservation[], rooms: Room[], se
   lines.push("");
   lines.push(...formatAdminDaySection("ПРОЖИВАЮТ", lodging, "Проживающих нет."));
   lines.push("");
-  lines.push(`ИТОГО: срочная уборка ${urgentRoomIds.size}, заезды ${arrivals.length}, выезды ${departures.length}, проживают ${lodging.length}`);
+  lines.push(`ИТОГО: срочная уборка ${urgentRoomIds.size}, заезды ${groupAdminDayEntries(arrivals).length}, выезды ${groupAdminDayEntries(departures).length}, проживают ${groupAdminDayEntries(lodging).length}`);
 
   return lines.join("\n").trim();
 }
@@ -20393,28 +20393,69 @@ function getReservationItemDateStatus(item: Pick<ReservationItem, "checkIn" | "c
 
 function formatAdminDaySection(title: string, entries: AdminDayRoomEntry[], emptyText: string) {
   if (!entries.length) return [title, emptyText];
-  return [title, ...entries.map(formatAdminDayRoomLine)];
+  return [title, ...groupAdminDayEntries(entries).map(formatAdminDayGroupLine)];
 }
 
-function formatAdminDayRoomLine({ item, reservation, room, status }: AdminDayRoomEntry) {
+type AdminDayEntryGroup = {
+  entries: AdminDayRoomEntry[];
+  reservation: Reservation;
+  status: AdminDayRoomEntry["status"];
+};
+
+function groupAdminDayEntries(entries: AdminDayRoomEntry[]) {
+  const groups = new Map<string, AdminDayEntryGroup>();
+  entries.forEach((entry) => {
+    const time = entry.status === "check-in"
+      ? entry.item.checkInTime || entry.reservation.checkInTime || DEFAULT_CHECK_IN_TIME
+      : entry.status === "check-out"
+        ? entry.item.checkOutTime || entry.reservation.checkOutTime || DEFAULT_CHECK_OUT_TIME
+        : entry.item.checkOut;
+    const key = [entry.reservation.id, entry.status, time].join("|");
+    const group = groups.get(key);
+    if (group) {
+      group.entries.push(entry);
+    } else {
+      groups.set(key, { entries: [entry], reservation: entry.reservation, status: entry.status });
+    }
+  });
+
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    entries: group.entries.sort((left, right) => left.room.number.localeCompare(right.room.number, "ru", { numeric: true }))
+  }));
+}
+
+function formatAdminDayGroupLine(group: AdminDayEntryGroup) {
+  const { entries, reservation, status } = group;
+  const firstEntry = entries[0];
+  if (!firstEntry) return "";
   const guestCount = getReservationGuestTotal(reservation);
   const timeText = status === "check-in"
-    ? `заезд ${item.checkInTime || reservation.checkInTime || DEFAULT_CHECK_IN_TIME}`
+    ? `заезд ${firstEntry.item.checkInTime || reservation.checkInTime || DEFAULT_CHECK_IN_TIME}`
     : status === "check-out"
-      ? `выезд до ${item.checkOutTime || reservation.checkOutTime || DEFAULT_CHECK_OUT_TIME}`
-      : `до ${formatAdminShortDate(item.checkOut)}`;
-  const balance = getReservationBalance(reservation);
+      ? `выезд до ${firstEntry.item.checkOutTime || reservation.checkOutTime || DEFAULT_CHECK_OUT_TIME}`
+      : `до ${formatAdminShortDate(firstEntry.item.checkOut)}`;
+  const balance = getAdminDayGroupBalance(group);
   const paymentText = balance > 0 ? `ост. ${formatPrice(balance)}` : "оплачено";
-  const extraInventoryText = formatAdminRoomExtraInventory(reservation, [room]);
+  const groupRooms = entries.map((entry) => entry.room);
+  const extraInventoryText = formatAdminRoomExtraInventory(reservation, groupRooms);
   const comment = reservation.adminComment?.trim() || reservation.comment?.trim() || "";
   return [
-    `- ${formatAdminBookingObject(room)} - ${reservation.guestFirstName || "Гость"}`,
+    `- ${formatAdminBookingObjects(groupRooms)} - ${reservation.guestFirstName || "Гость"}`,
     timeText,
     guestCount ? `${guestCount} чел.` : "гости не указаны",
     paymentText,
     extraInventoryText ? `допместа: ${extraInventoryText}` : "",
     comment ? `комм.: ${comment}` : ""
   ].filter(Boolean).join(" | ");
+}
+
+function getAdminDayGroupBalance(group: AdminDayEntryGroup) {
+  const items = group.entries.map((entry) => entry.item);
+  if (items.length) {
+    return items.reduce((sum, item) => sum + getReservationItemBalance(item), 0);
+  }
+  return getReservationBalance(group.reservation);
 }
 
 function createChatDraftFromReservation(reservation: Reservation): ChatBookingDraft {
@@ -20543,6 +20584,12 @@ function formatAdminBookingObject(room: Room) {
   }
 
   return room.title || getObjectTypeLabel(room);
+}
+
+function formatAdminBookingObjects(rooms: Room[]) {
+  if (!rooms.length) return "не указан";
+  if (rooms.length === 1) return formatAdminBookingObject(rooms[0]);
+  return rooms.map((room) => room.number || formatAdminBookingObject(room)).join(", ");
 }
 
 function formatReservationGuestCountText(reservation: Reservation) {
@@ -21157,14 +21204,15 @@ function getReservationPaidAmount(
     total: number;
   }
 ) {
-  if (reservation.payments?.length) {
-    return getReservationPaymentsTotal(reservation.payments, reservation.total);
-  }
+  if (reservation.balancePaidAt) return reservation.total;
   if (typeof reservation.paidAmount === "number") {
     return clampNumber(reservation.paidAmount, 0, reservation.total);
   }
+  if (reservation.payments?.length) {
+    return getReservationPaymentsTotal(reservation.payments, reservation.total);
+  }
   const acceptedPrepayment = hasReservationPrepayment(reservation) ? reservation.prepayment : 0;
-  return reservation.balancePaidAt ? reservation.total : acceptedPrepayment;
+  return acceptedPrepayment;
 }
 
 function getReservationPaymentsTotal(payments: ReservationPayment[] = [], total: number) {

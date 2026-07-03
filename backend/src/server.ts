@@ -494,6 +494,48 @@ function parseAiJsonResponse(text: string): AiReplySuggestionPayload {
   return normalizeAiSuggestionPayload(JSON.parse(jsonText));
 }
 
+function isLikelyRussianAnswer(text: string) {
+  const normalized = text.toLowerCase();
+  return /\b(у нас|есть|нет|только|номера|номер|домиков|свободные|можем|предложить|выберите|помогу|бронированием|какой|интересует|к сожалению|вместо)\b/i.test(normalized);
+}
+
+function needsKazakhAnswerRepair(payload: AiReplySuggestionPayload) {
+  return payload.answers.some((answer) => isLikelyRussianAnswer(answer));
+}
+
+async function repairKazakhAiSuggestions(
+  client: ReturnType<typeof createOpenAiClient>,
+  payload: AiReplySuggestionPayload
+): Promise<AiReplySuggestionPayload> {
+  if (!client) return payload;
+  const repairPrompt = JSON.stringify({
+    task: "Translate answers to Kazakh language only. Do not leave Russian in answers. Keep answerTranslations in Russian.",
+    rules: [
+      "answers: Kazakh language only",
+      "answerTranslations: Russian translation only",
+      "reason: Russian only",
+      "Keep each answer under 8 words",
+      "Do not change meaning",
+      "Return strict JSON with recommended, reason, answers, answerTranslations"
+    ],
+    input: payload
+  }, null, 2);
+  const completion = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: "You are a strict Kazakh translator for WhatsApp sales replies. Russian text is forbidden in answers."
+      },
+      { role: "user", content: repairPrompt }
+    ],
+    temperature: 0.2,
+    response_format: { type: "json_object" }
+  });
+  const content = completion.choices[0]?.message?.content ?? "";
+  return content.trim() ? parseAiJsonResponse(content) : payload;
+}
+
 app.post("/api/ai/reply-suggestions", async (request, reply) => {
   const client = createOpenAiClient();
   if (!client) {
@@ -595,7 +637,11 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
   }
 
   try {
-    return parseAiJsonResponse(content);
+    const parsed = parseAiJsonResponse(content);
+    if (replyLanguage === "kk" && needsKazakhAnswerRepair(parsed)) {
+      return await repairKazakhAiSuggestions(client, parsed);
+    }
+    return parsed;
   } catch (error) {
     request.log.error({ error, content }, "AI suggestions parse failed");
     return reply.status(502).send({ error: "Invalid AI response" });

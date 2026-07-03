@@ -3033,14 +3033,16 @@ export function BookingPanel() {
       setSelectedBookingRoomIds(lastReservation.roomIds);
       return;
     }
-    const activeReservationRoomIds = new Set<string>();
+    const selectableIds = new Set(catalogPanelRooms
+      .filter((room) => isHourlyBookingObject(room) || !isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations))
+      .map((room) => room.id));
     setSelectedRoomId((currentId) =>
-      visibleIds.has(currentId) || activeReservationRoomIds.has(currentId)
+      visibleIds.has(currentId) && selectableIds.has(currentId)
         ? currentId
         : ""
     );
-    setSelectedBookingRoomIds((currentIds) => currentIds.filter((roomId) => visibleIds.has(roomId) || activeReservationRoomIds.has(roomId)));
-  }, [catalogPanelRooms, lastReservation]);
+    setSelectedBookingRoomIds((currentIds) => currentIds.filter((roomId) => visibleIds.has(roomId) && selectableIds.has(roomId)));
+  }, [catalogPanelRooms, checkIn, checkInTime, checkOut, checkOutTime, lastReservation, reservations]);
 
   useEffect(() => {
     if (lastReservation || !guestPhone.trim()) return;
@@ -3997,6 +3999,13 @@ export function BookingPanel() {
   function toggleBookingRoom(roomId: string) {
     if (isBookingPanelActiveReservation(lastReservation)) {
       setSelectedRoomId(roomId);
+      return;
+    }
+    const room = rooms.find((item) => item.id === roomId);
+    if (room && !isHourlyBookingObject(room) && isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations)) {
+      setBookingDateWarning(`${formatBookingPickerObjectLabel(room)} занят в выбранный период.`);
+      setSelectedBookingRoomIds((currentIds) => currentIds.filter((id) => id !== roomId));
+      setSelectedRoomId((currentId) => currentId === roomId ? "" : currentId);
       return;
     }
     setSelectedBookingRoomIds((currentIds) => {
@@ -6538,7 +6547,7 @@ export function BookingPanel() {
                       ].filter(Boolean).join(" ")}
                       key={room.id}
                       type="button"
-                      disabled={isBookingLocked}
+                      disabled={isBookingLocked || roomIsReserved}
                       onClick={() => {
                         if (roomIsReserved) {
                           setBookingDateWarning(`${formatBookingPickerObjectLabel(room)} занят в выбранный период.`);

@@ -712,6 +712,11 @@ body.gpb-booking-panel-open #app {
   color: #5b463b;
 }
 
+.gpb-panel-object-list button.is-reserved:disabled {
+  cursor: not-allowed;
+  opacity: 0.78;
+}
+
 .gpb-availability-conflicts {
   display: grid;
   gap: 8px;

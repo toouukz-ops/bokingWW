@@ -237,6 +237,7 @@ const AI_REPLY_SYSTEM_PROMPT = `Ты — помощник оператора п�
 2. Факты:
 — Не придумывай цены, наличие, услуги и расстояния.
 — Используй hotelData.rooms и hotelData.availability.
+— Учитывай hotelData.objectInfo.rules. Если правило там есть, отвечай уверенно.
 — Если в hotelData.availability есть requestedPeriod и availableRoomsCount больше 0, обязательно используй это: скажи, что на эти даты есть свободные номера.
 — Если в hotelData.availability есть requestedMonth, но requestedPeriod пустой, гость указал только месяц. Не утверждай наличие на конкретные даты; попроси точные даты и мягко предложи проверить номера на этот месяц.
 — Если гость указал количество людей, а availableTotalPlaces хватает, мягко веди к подбору/бронированию для этой группы.
@@ -342,6 +343,19 @@ function isIgnorableAiMessageText(value: unknown) {
     /исчезающие сообщения|disappearing messages|сообщения и звонки защищены|messages and calls are end-to-end encrypted/i.test(text);
 }
 
+function cleanAiMessageText(value: unknown) {
+  let text = toSafeString(value);
+  if (!text) return "";
+  text = text
+    .replace(/^\s*вы\s+(?:фото|видео|изображение|документ|номер|меню|объект|прайс|счет)\s*:\s*/i, "")
+    .replace(/^\s*(?:фото|видео|изображение|документ|номер|меню|объект|прайс|счет)\s*:\s*/i, "")
+    .trim();
+  text = text
+    .replace(/^(?:номер|комната)\s+\d{2,4}\s+[^\n?!?.]{0,80}(?=\s+[А-ЯЁA-ZӘҒҚҢӨҰҮҺІ])/i, "")
+    .trim();
+  return text;
+}
+
 const AI_MONTHS: Record<string, number> = {
   "январ": 1,
   "қаңтар": 1,
@@ -418,10 +432,10 @@ function extractAiBookingIntent(messages: Array<Record<string, unknown>>, body: 
   const panelCheckIn = toDateInput(body?.checkIn);
   const panelCheckOut = toDateInput(body?.checkOut);
   const panelGuests = toSafeNumber(body?.guestsTotal);
-  const bodyLastGuestMessage = isIgnorableAiMessageText(body?.lastGuestMessage) ? "" : toSafeString(body?.lastGuestMessage);
+  const bodyLastGuestMessage = isIgnorableAiMessageText(body?.lastGuestMessage) ? "" : cleanAiMessageText(body?.lastGuestMessage);
   const textParts = messages
     .slice(-12)
-    .map((message) => toSafeString(message.text))
+    .map((message) => cleanAiMessageText(message.text))
     .filter(Boolean);
   if (bodyLastGuestMessage && !textParts.includes(bodyLastGuestMessage)) {
     textParts.push(bodyLastGuestMessage);
@@ -639,7 +653,7 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
         .filter((message): message is Record<string, unknown> => Boolean(message && typeof message === "object" && !Array.isArray(message)))
         .map((message) => ({
           fromMe: Boolean(message.fromMe),
-          text: toSafeString(message.text),
+          text: cleanAiMessageText(message.text),
           timestamp: toSafeString(message.timestamp),
           type: toSafeString(message.type) || "visible"
         }))
@@ -647,7 +661,7 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
     : [];
   const savedMessagesForAi = messages.filter((message) => !isIgnorableAiMessageText(message.text));
   const baseMessagesForAi = visibleMessages.length ? visibleMessages : savedMessagesForAi;
-  const bodyLastGuestMessageForAi = isIgnorableAiMessageText(body?.lastGuestMessage) ? "" : toSafeString(body?.lastGuestMessage);
+  const bodyLastGuestMessageForAi = isIgnorableAiMessageText(body?.lastGuestMessage) ? "" : cleanAiMessageText(body?.lastGuestMessage);
   const messagesForAi = bodyLastGuestMessageForAi && !baseMessagesForAi.some((message) => toSafeString(message.text) === bodyLastGuestMessageForAi)
     ? [...baseMessagesForAi, { fromMe: false, text: bodyLastGuestMessageForAi, timestamp: "", type: "lastGuestMessage" }]
     : baseMessagesForAi;
@@ -660,12 +674,13 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
     .slice(-40)
     .map((message) => {
       const author = message.fromMe ? "Оператор" : "Гость";
-      return `${message.timestamp ? `[${message.timestamp}] ` : ""}${author}: ${toSafeString(message.text)}`.trim();
+      const text = cleanAiMessageText(message.text);
+      return text ? `${message.timestamp ? `[${message.timestamp}] ` : ""}${author}: ${text}`.trim() : "";
     })
     .filter(Boolean);
-  const bodyLastGuestMessage = isIgnorableAiMessageText(body?.lastGuestMessage) ? "" : toSafeString(body?.lastGuestMessage);
+  const bodyLastGuestMessage = isIgnorableAiMessageText(body?.lastGuestMessage) ? "" : cleanAiMessageText(body?.lastGuestMessage);
   const lastGuestMessage = bodyLastGuestMessage ||
-    [...messagesForAi].reverse().find((message) => !message.fromMe && toSafeString(message.text))?.text ||
+    cleanAiMessageText([...messagesForAi].reverse().find((message) => !message.fromMe && cleanAiMessageText(message.text))?.text) ||
     "";
   const compactRooms = rooms
     .filter((room) => room.bookable && room.status === "active" && !room.hideInBookingPanel)
@@ -675,6 +690,9 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
   const objectInfo = {
     paymentLink: toSafeString(settingsRecord.paymentLink),
     packageGiftText: toSafeString(settingsRecord.packageGiftText),
+    rules: {
+      pets: "С животными нельзя."
+    },
     customFoodOptions: Array.isArray(settingsRecord.customFoodOptions) ? settingsRecord.customFoodOptions.slice(0, 20) : [],
     includedCardPages: Array.isArray(settingsRecord.includedCardPages)
       ? settingsRecord.includedCardPages
@@ -727,6 +745,9 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
       ? await repairKazakhAiSuggestions(client, parsed)
       : null;
     const result = repaired ?? parsed;
+    if (replyLanguage === "ru") {
+      result.answerTranslations = [];
+    }
     saveAiReplyLogData({
       chatKey,
       chatTitle: toSafeString(body?.chatTitle),

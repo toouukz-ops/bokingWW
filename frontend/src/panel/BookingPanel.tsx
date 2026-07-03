@@ -767,7 +767,8 @@ function normalizePendingChatMessage(value: unknown): ChatMessageLogItem | null 
   if (!value || typeof value !== "object") return null;
   const item = value as Partial<ChatMessageLogItem>;
   const timestamp = String(item.timestamp || "");
-  const fromMe = Boolean(item.fromMe);
+  const rawText = String(item.text || "");
+  const fromMe = Boolean(item.fromMe) || isLikelyTechnicalOperatorDialogMessage(rawText);
   const text = normalizeDialogMessageForStorage(String(item.text || ""), fromMe);
   if (!text) return null;
   const id = String(item.messageKey || item.id || buildDialogMessageDedupeKey({ fromMe, text, timestamp }));
@@ -788,7 +789,7 @@ function getChatMessageLocalKey(message: Pick<ChatMessageLogItem, "fromMe" | "id
     message.messageKey ||
     message.id ||
     buildDialogMessageDedupeKey({
-      fromMe: Boolean(message.fromMe),
+            fromMe: Boolean(message.fromMe) || isLikelyTechnicalOperatorDialogMessage(message.text || ""),
       text: message.text || "",
       timestamp: message.timestamp || ""
     })
@@ -16520,7 +16521,7 @@ function normalizeDialogExportPayload(payload: WhatsAppDialogExportPayload | und
         messages: Array.isArray(dialog.messages)
           ? dialog.messages.map((message) => ({
             author: normalizeExtractedText(message.author || ""),
-            fromMe: Boolean(message.fromMe),
+            fromMe: Boolean(message.fromMe) || isLikelyTechnicalOperatorDialogMessage(message.text || ""),
             id: String(message.id || ""),
             text: normalizeDialogMessageForStorage(message.text || "", Boolean(message.fromMe)),
             timestamp: String(message.timestamp || ""),
@@ -16970,7 +16971,7 @@ function normalizeDialogMessageText(value: string) {
 }
 
 function normalizeChatMessageForDialogLog(message: ChatMessageLogItem): ChatMessageLogItem | null {
-  const fromMe = Boolean(message.fromMe);
+  const fromMe = Boolean(message.fromMe) || isLikelyTechnicalOperatorDialogMessage(message.text || "");
   const text = normalizeDialogMessageForStorage(message.text, fromMe);
   if (!text) return null;
   return {
@@ -16991,13 +16992,23 @@ function normalizeDialogMessageForStorage(value: string, fromMe: boolean) {
 function summarizeOperatorDialogMessage(text: string) {
   const normalized = normalizeExtractedText(text);
   if (!normalized) return "";
+  const technicalSummary = getTechnicalOperatorDialogSummary(normalized);
+  if (technicalSummary) return technicalSummary;
 
+  return normalized;
+}
+
+function getTechnicalOperatorDialogSummary(normalized: string) {
   if (/Бронирование\s+на согласование|на согласование/i.test(normalized) && /(?:Заезд|Выезд|Итого|Предоплата|К оплате)/i.test(normalized)) {
     return summarizeReservationDialogMessage(normalized, "Отправлена бронь на согласование");
   }
 
   if (/Подтверждение брони|Оплата поступила/i.test(normalized)) {
     return summarizeReservationDialogMessage(normalized, "Отправлено подтверждение брони");
+  }
+
+  if (/(?:pay\.kaspi\.kz|Оплата продавцу)/i.test(normalized) && /(?:Заезд|Выезд|Итого|Сумма)/i.test(normalized)) {
+    return summarizeReservationDialogMessage(normalized, "Отправлена ссылка на оплату");
   }
 
   if (/Прайс на|Предложение на согласование|В PDF выбранные объекты|Доступные номера|Бронируется на согласование/i.test(normalized)) {
@@ -17034,12 +17045,17 @@ function summarizeOperatorDialogMessage(text: string) {
       : "Отправлена служебная информация";
   }
 
-  return normalized;
+  return "";
+}
+
+function isLikelyTechnicalOperatorDialogMessage(value: string) {
+  const normalized = normalizeExtractedText(cleanVisibleDialogMessageText(normalizeDialogMessageText(value), true));
+  return Boolean(normalized && getTechnicalOperatorDialogSummary(normalized));
 }
 
 function summarizeReservationDialogMessage(text: string, prefix: string) {
   const roomNumbers = extractDialogRoomNumbers(text);
-  const guestCount = extractDialogLineValue(text, /Гости:\s*([^\n]+)/i);
+  const guestCount = extractDialogLineValue(text, /Гости:\s*([^|\n]+)/i);
   const total = extractDialogMoneyValue(text, /(?:Сумма со скидкой|Сумма|Итого):?\s*([0-9\s ]+тг)/i);
   const parts = [
     roomNumbers.length ? `номера ${roomNumbers.join(", ")}` : "",

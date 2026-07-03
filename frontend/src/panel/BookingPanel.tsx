@@ -766,10 +766,10 @@ function normalizeStoredPendingChatMessages(value: unknown): Record<string, Chat
 function normalizePendingChatMessage(value: unknown): ChatMessageLogItem | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Partial<ChatMessageLogItem>;
-  const text = normalizeDialogMessageText(String(item.text || ""));
-  if (!text) return null;
   const timestamp = String(item.timestamp || "");
   const fromMe = Boolean(item.fromMe);
+  const text = normalizeDialogMessageForStorage(String(item.text || ""), fromMe);
+  if (!text) return null;
   const id = String(item.messageKey || item.id || buildDialogMessageDedupeKey({ fromMe, text, timestamp }));
   return {
     author: normalizeExtractedText(String(item.author || "")),
@@ -1857,7 +1857,9 @@ export function BookingPanel() {
             text: message.text,
             timestamp: message.timestamp,
             type: message.type
-          } satisfies ChatMessageLogItem)) ?? [];
+          } satisfies ChatMessageLogItem))
+          .map((message) => normalizeChatMessageForDialogLog(message))
+          .filter((message): message is ChatMessageLogItem => Boolean(message)) ?? [];
         if (!messages.length) return;
 
         const savedKeys = new Set(chatMessageKeysRef.current[activeChat.id] ?? []);
@@ -16520,7 +16522,7 @@ function normalizeDialogExportPayload(payload: WhatsAppDialogExportPayload | und
             author: normalizeExtractedText(message.author || ""),
             fromMe: Boolean(message.fromMe),
             id: String(message.id || ""),
-            text: normalizeDialogMessageText(message.text || ""),
+            text: normalizeDialogMessageForStorage(message.text || "", Boolean(message.fromMe)),
             timestamp: String(message.timestamp || ""),
             type: String(message.type || "")
           })).filter((message) => message.text)
@@ -16846,7 +16848,8 @@ function buildDialogExportText(payload: WhatsAppDialogExportPayload) {
       ...dialog.messages.map((message) => {
         const side = message.fromMe ? "Оператор" : "Клиент";
         const time = message.timestamp ? `[${message.timestamp}] ` : "";
-        return `${time}${side}: ${message.text}`;
+        const text = normalizeDialogMessageForStorage(message.text, message.fromMe);
+        return text ? `${time}${side}: ${text}` : "";
       }),
       "",
       "-----",
@@ -16927,13 +16930,7 @@ function normalizeSavedChatMessages(messages: ChatMessageLogItem[]) {
 function normalizeSavedChatMessage(message: ChatMessageLogItem): ChatMessageLogItem | null {
   if (!message?.text) return null;
   const fromMe = message.fromMe || /^Вы\b/i.test(message.text);
-  const text = cleanVisibleDialogMessageText(message.text, fromMe);
-  if (!text) return null;
-  return {
-    ...message,
-    fromMe,
-    text
-  };
+  return normalizeChatMessageForDialogLog({ ...message, fromMe });
 }
 
 function buildSavedChatMessageDedupeKey(message: ChatMessageLogItem) {
@@ -16970,6 +16967,109 @@ function normalizeDialogMessageText(value: string) {
   return normalizeExtractedText(value)
     .replace(/\b\d{1,2}:\d{2}\b\s*$/g, "")
     .trim();
+}
+
+function normalizeChatMessageForDialogLog(message: ChatMessageLogItem): ChatMessageLogItem | null {
+  const fromMe = Boolean(message.fromMe);
+  const text = normalizeDialogMessageForStorage(message.text, fromMe);
+  if (!text) return null;
+  return {
+    ...message,
+    fromMe,
+    text,
+    type: fromMe && text !== cleanVisibleDialogMessageText(message.text, fromMe) ? "summary" : message.type
+  };
+}
+
+function normalizeDialogMessageForStorage(value: string, fromMe: boolean) {
+  const text = cleanVisibleDialogMessageText(normalizeDialogMessageText(value), fromMe);
+  if (!text || isDialogMediaMarker(text) || isLikelyWhatsAppSystemText(text) || isLikelyWhatsAppNonMessageText(text)) return "";
+  if (!fromMe) return text;
+  return summarizeOperatorDialogMessage(text);
+}
+
+function summarizeOperatorDialogMessage(text: string) {
+  const normalized = normalizeExtractedText(text);
+  if (!normalized) return "";
+
+  if (/Бронирование\s+на согласование|на согласование/i.test(normalized) && /(?:Заезд|Выезд|Итого|Предоплата|К оплате)/i.test(normalized)) {
+    return summarizeReservationDialogMessage(normalized, "Отправлена бронь на согласование");
+  }
+
+  if (/Подтверждение брони|Оплата поступила/i.test(normalized)) {
+    return summarizeReservationDialogMessage(normalized, "Отправлено подтверждение брони");
+  }
+
+  if (/Прайс на|Предложение на согласование|В PDF выбранные объекты|Доступные номера|Бронируется на согласование/i.test(normalized)) {
+    const roomNumbers = extractDialogRoomNumbers(normalized);
+    return roomNumbers.length
+      ? `Отправлен прайс: номера ${roomNumbers.join(", ")}`
+      : "Отправлен прайс";
+  }
+
+  if (/Меню Green Pine Burabay|Меню\b/i.test(normalized) && (normalized.length > 120 || /[0-9\s ]+тг/i.test(normalized))) {
+    return "Отправлено меню";
+  }
+
+  if (/Видео объекта/i.test(normalized)) return "Отправлено видео объекта";
+
+  if (/Сауна/i.test(normalized) && /(?:Минимум|Цена|Будни|Выходные|Праздник|тг)/i.test(normalized)) {
+    return "Отправлена сауна";
+  }
+
+  if (isLikelyRoomCardDialogMessage(normalized)) {
+    const roomNumbers = extractDialogRoomNumbers(normalized);
+    if (roomNumbers.length) {
+      return roomNumbers.length === 1
+        ? `Отправлен номер ${roomNumbers[0]}`
+        : `Отправлены номера ${roomNumbers.join(", ")}`;
+    }
+    return "Отправлена карточка номера";
+  }
+
+  if (normalized.length > 900 || normalized.split("\n").length > 14) {
+    const roomNumbers = extractDialogRoomNumbers(normalized);
+    return roomNumbers.length
+      ? `Отправлена служебная информация: номера ${roomNumbers.join(", ")}`
+      : "Отправлена служебная информация";
+  }
+
+  return normalized;
+}
+
+function summarizeReservationDialogMessage(text: string, prefix: string) {
+  const roomNumbers = extractDialogRoomNumbers(text);
+  const guestCount = extractDialogLineValue(text, /Гости:\s*([^\n]+)/i);
+  const total = extractDialogMoneyValue(text, /(?:Сумма со скидкой|Сумма|Итого):?\s*([0-9\s ]+тг)/i);
+  const parts = [
+    roomNumbers.length ? `номера ${roomNumbers.join(", ")}` : "",
+    guestCount ? `гости ${guestCount.replace(/^Гости:\s*/i, "")}` : "",
+    total ? `сумма ${total}` : ""
+  ].filter(Boolean);
+  return parts.length ? `${prefix}: ${parts.join("; ")}` : prefix;
+}
+
+function isLikelyRoomCardDialogMessage(text: string) {
+  return /(?:^|\n)(?:Номер\s+\d+|Сауна|Беседка)/i.test(text) &&
+    /(?:Цена|Питание|Удобства|Места|Заезд|выезд|Будни|Выходные|Праздник|тг)/i.test(text);
+}
+
+function extractDialogRoomNumbers(text: string) {
+  const numbers = new Set<string>();
+  for (const match of text.matchAll(/(?:Номер|№)\s*([0-9]{2,4})/gi)) {
+    numbers.add(match[1]);
+  }
+  return Array.from(numbers);
+}
+
+function extractDialogLineValue(text: string, pattern: RegExp) {
+  const match = text.match(pattern);
+  return normalizeExtractedText(match?.[1] || "");
+}
+
+function extractDialogMoneyValue(text: string, pattern: RegExp) {
+  const match = text.match(pattern);
+  return normalizeExtractedText(match?.[1] || "");
 }
 
 function extractVisibleMessageTimestamp(value: string) {

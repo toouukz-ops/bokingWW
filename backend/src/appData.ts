@@ -6,6 +6,7 @@ const expenseCategories = db.collection<Record<string, unknown> & { id: string }
 const expenseEntries = db.collection<Record<string, unknown> & { id: string }>("expenseEntries");
 const chatDrafts = db.collection<{ chatId: string; draft: unknown; updatedAt: Date }>("chatDrafts");
 const chatMessages = db.collection<Record<string, unknown> & { chatKey: string; messageKey: string; updatedAt: Date }>("chatMessages");
+const aiReplyLogs = db.collection<Record<string, unknown> & { createdAt: Date }>("aiReplyLogs");
 const roomHolds = db.collection<Record<string, unknown> & { id: string; expiresAt: string }>("roomHolds");
 const activeDialogs = db.collection<Record<string, unknown> & { chatKey: string; clientId: string; expiresAt: string }>("activeDialogs");
 
@@ -172,6 +173,23 @@ export async function saveChatMessagesData(chatKey: string, payload: Record<stri
     )
   ));
   return { saved: documents.length };
+}
+
+export async function saveAiReplyLogData(payload: Record<string, unknown>) {
+  const document = {
+    ...stripMongoIdFields(payload) as Record<string, unknown>,
+    createdAt: new Date()
+  };
+  await aiReplyLogs.insertOne(document);
+  return document;
+}
+
+export async function listAiReplyLogs(limit = 50) {
+  return aiReplyLogs
+    .find({})
+    .sort({ createdAt: -1 })
+    .limit(Math.max(1, Math.min(limit, 500)))
+    .toArray();
 }
 
 export async function listRoomHolds() {

@@ -13,6 +13,7 @@ import {
   getChatDraftData,
   listChatMessageDialogs,
   listChatMessages,
+  listAiReplyLogs,
   getPaymentSettingsData,
   listActiveDialogs,
   listExpenseCategories,
@@ -25,6 +26,7 @@ import {
   replaceExpenseEntries,
   replaceReservations,
   saveChatDraftData,
+  saveAiReplyLogData,
   saveChatMessagesData,
   savePaymentSettingsData,
   saveReservationData,
@@ -651,14 +653,35 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
 
   try {
     const parsed = parseAiJsonResponse(content);
-    if (replyLanguage === "kk" && needsKazakhAnswerRepair(parsed)) {
-      return await repairKazakhAiSuggestions(client, parsed);
-    }
-    return parsed;
+    const repaired = replyLanguage === "kk" && needsKazakhAnswerRepair(parsed)
+      ? await repairKazakhAiSuggestions(client, parsed)
+      : null;
+    const result = repaired ?? parsed;
+    saveAiReplyLogData({
+      chatKey,
+      chatTitle: toSafeString(body?.chatTitle),
+      phone: toSafeString(body?.phone),
+      guestName: toSafeString(body?.guestName),
+      lastGuestMessage,
+      replyLanguage,
+      repaired: Boolean(repaired),
+      intent,
+      availability,
+      messages: compactMessages,
+      result,
+      rawModelResponse: content
+    }).catch((error) => request.log.error({ error }, "AI reply log save failed"));
+    return result;
   } catch (error) {
     request.log.error({ error, content }, "AI suggestions parse failed");
     return reply.status(502).send({ error: "Invalid AI response" });
   }
+});
+
+app.get("/api/ai/reply-suggestions/logs", async (request) => {
+  const query = request.query as Record<string, string | undefined>;
+  const limit = Number.parseInt(query.limit ?? "50", 10);
+  return { logs: await listAiReplyLogs(Number.isFinite(limit) ? limit : 50) };
 });
 
 app.get("/api/backup/server", async (request) => {

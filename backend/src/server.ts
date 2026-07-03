@@ -238,7 +238,9 @@ const AI_REPLY_SYSTEM_PROMPT = `Ты — помощник оператора п�
 — Не придумывай цены, наличие, услуги и расстояния.
 — Используй hotelData.rooms и hotelData.availability.
 — Если в hotelData.availability есть requestedPeriod и availableRoomsCount больше 0, обязательно используй это: скажи, что на эти даты есть свободные номера.
+— Если в hotelData.availability есть requestedMonth, но requestedPeriod пустой, гость указал только месяц. Не утверждай наличие на конкретные даты; попроси точные даты и мягко предложи проверить номера на этот месяц.
 — Если гость указал количество людей, а availableTotalPlaces хватает, мягко веди к подбору/бронированию для этой группы.
+— Доступность номеров — поддерживающий факт, но не замена ответа на последнее сообщение гостя.
 
 3. Домики и номера:
 — Green Pine Burabay — гостиница с номерами, а не база с отдельными домиками.
@@ -252,6 +254,7 @@ const AI_REPLY_SYSTEM_PROMPT = `Ты — помощник оператора п�
 — Учитывай, что гость может менять даты, состав и требования.
 — Не обвиняй гостя и не спорь с ним.
 — Отвечай только на текущий вопрос или возражение.
+— Если последнее сообщение гостя — возражение, сомнение, раздражение или короткая реакция, сначала ответь на это по смыслу.
 — При недостатке данных задай один короткий уточняющий вопрос.
 — Мягко веди гостя к бронированию.
 — Если объект явно не подходит, честно сообщи это.
@@ -332,77 +335,130 @@ function dateRangesOverlap(leftStart: string, leftEnd: string, rightStart: strin
   return Boolean(leftStart && leftEnd && rightStart && rightEnd && leftStart < rightEnd && rightStart < leftEnd);
 }
 
+function isIgnorableAiMessageText(value: unknown) {
+  const text = toSafeString(value).toLowerCase();
+  return !text ||
+    /^(вы удалили это сообщение|сообщение удалено|deleted message|this message was deleted)$/i.test(text) ||
+    /исчезающие сообщения|disappearing messages|сообщения и звонки защищены|messages and calls are end-to-end encrypted/i.test(text);
+}
+
+const AI_MONTHS: Record<string, number> = {
+  "январ": 1,
+  "қаңтар": 1,
+  "феврал": 2,
+  "ақпан": 2,
+  "март": 3,
+  "наурыз": 3,
+  "апрел": 4,
+  "сәуір": 4,
+  "май": 5,
+  "мамыр": 5,
+  "июн": 6,
+  "маусым": 6,
+  "июл": 7,
+  "шілде": 7,
+  "август": 8,
+  "августа": 8,
+  "тамыз": 8,
+  "сентябр": 9,
+  "қыркүй": 9,
+  "октябр": 10,
+  "қазан": 10,
+  "ноябр": 11,
+  "қараша": 11,
+  "декабр": 12,
+  "желтоқсан": 12
+};
+
+function findLastAiMonthMention(text: string) {
+  let result: { month: number; monthName: string; index: number } | null = null;
+  for (const [name, month] of Object.entries(AI_MONTHS)) {
+    const index = text.lastIndexOf(name);
+    if (index >= 0 && (!result || index > result.index)) {
+      result = { month, monthName: name, index };
+    }
+  }
+  return result;
+}
+
+function findLastAiDateIntent(text: string) {
+  const monthPattern = Object.keys(AI_MONTHS).join("|");
+  const patterns = [
+    new RegExp(`(\\d{1,2})\\s*[-–—]\\s*(\\d{1,2})\\s*(?:не|на)?\\s*(${monthPattern})`, "gi"),
+    new RegExp(`(${monthPattern})\\s*(\\d{1,2})\\s*[-–—]\\s*(\\d{1,2})`, "gi")
+  ];
+  let matchData: { index: number; startDay: number; endDay: number; month: number } | null = null;
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const firstValue = match[1] || "";
+      const monthFirst = !/\d/.test(firstValue);
+      const monthText = Object.keys(AI_MONTHS).find((name) => (monthFirst ? firstValue : match[3] || "").toLowerCase().includes(name));
+      const month = monthText ? AI_MONTHS[monthText] : 0;
+      const startDay = Number.parseInt(monthFirst ? match[2] : match[1], 10);
+      const endDay = Number.parseInt(monthFirst ? match[3] : match[2], 10);
+      if (!month || !Number.isFinite(startDay) || !Number.isFinite(endDay)) continue;
+      if (!matchData || (match.index ?? 0) >= matchData.index) {
+        matchData = { index: match.index ?? 0, startDay, endDay, month };
+      }
+    }
+  }
+  if (!matchData) return null;
+  const year = new Date().getFullYear();
+  const checkIn = `${year}-${String(matchData.month).padStart(2, "0")}-${String(matchData.startDay).padStart(2, "0")}`;
+  const nightsMatch = text.slice(matchData.index).match(/(\d{1,2})\s*(?:күн|кун|дн|ноч|түн|тун)/);
+  const nights = nightsMatch ? Math.max(1, Number.parseInt(nightsMatch[1], 10)) : 0;
+  let checkOut = nights
+    ? addDaysInput(checkIn, nights)
+    : `${year}-${String(matchData.month).padStart(2, "0")}-${String(matchData.endDay).padStart(2, "0")}`;
+  if (checkOut <= checkIn) checkOut = addDaysInput(checkIn, Math.max(1, matchData.endDay - matchData.startDay || 1));
+  return { checkIn, checkOut };
+}
+
 function extractAiBookingIntent(messages: Array<Record<string, unknown>>, body: Record<string, unknown> | undefined) {
   const panelCheckIn = toDateInput(body?.checkIn);
   const panelCheckOut = toDateInput(body?.checkOut);
   const panelGuests = toSafeNumber(body?.guestsTotal);
-  const text = messages
+  const bodyLastGuestMessage = isIgnorableAiMessageText(body?.lastGuestMessage) ? "" : toSafeString(body?.lastGuestMessage);
+  const textParts = messages
     .slice(-12)
     .map((message) => toSafeString(message.text))
-    .join("\n")
-    .toLowerCase();
-  const months: Record<string, number> = {
-    "январ": 1,
-    "қаңтар": 1,
-    "феврал": 2,
-    "ақпан": 2,
-    "март": 3,
-    "наурыз": 3,
-    "апрел": 4,
-    "сәуір": 4,
-    "май": 5,
-    "мамыр": 5,
-    "июн": 6,
-    "маусым": 6,
-    "июл": 7,
-    "шілде": 7,
-    "август": 8,
-    "августа": 8,
-    "тамыз": 8,
-    "сентябр": 9,
-    "қыркүй": 9,
-    "октябр": 10,
-    "қазан": 10,
-    "ноябр": 11,
-    "қараша": 11,
-    "декабр": 12,
-    "желтоқсан": 12
-  };
-  const monthEntry = Object.entries(months).find(([name]) => text.includes(name));
-  const dateMatch = text.match(/(?:\b|[^\d])(\d{1,2})\s*[-–—]\s*(\d{1,2})(?:\b|[^\d])/);
-  const nightsMatch = text.match(/(\d{1,2})\s*(?:күн|кун|дн|ноч|түн|тун)/);
-  let checkIn = panelCheckIn;
-  let checkOut = panelCheckOut;
-  if ((!checkIn || !checkOut) && monthEntry && dateMatch) {
-    const year = new Date().getFullYear();
-    const month = monthEntry[1];
-    const startDay = Number.parseInt(dateMatch[1], 10);
-    const endDay = Number.parseInt(dateMatch[2], 10);
-    const nights = nightsMatch ? Math.max(1, Number.parseInt(nightsMatch[1], 10)) : 0;
-    checkIn = `${year}-${String(month).padStart(2, "0")}-${String(startDay).padStart(2, "0")}`;
-    checkOut = nights ? addDaysInput(checkIn, nights) : `${year}-${String(month).padStart(2, "0")}-${String(endDay).padStart(2, "0")}`;
-    if (checkOut <= checkIn) checkOut = addDaysInput(checkIn, Math.max(1, endDay - startDay || 1));
+    .filter(Boolean);
+  if (bodyLastGuestMessage && !textParts.includes(bodyLastGuestMessage)) {
+    textParts.push(bodyLastGuestMessage);
   }
+  const text = textParts.join("\n").toLowerCase();
+  const explicitDateIntent = findLastAiDateIntent(text);
+  const monthMention = findLastAiMonthMention(text);
+  const usePanelDates = !explicitDateIntent && !monthMention;
+  const checkIn = explicitDateIntent?.checkIn || (usePanelDates ? panelCheckIn : "");
+  const checkOut = explicitDateIntent?.checkOut || (usePanelDates ? panelCheckOut : "");
   const guestMatch = text.match(/(\d{1,2})\s*(?:адам|чел|гост)/);
   return {
     checkIn,
     checkOut,
-    guestsTotal: panelGuests || (guestMatch ? Number.parseInt(guestMatch[1], 10) : 0)
+    guestsTotal: panelGuests || (guestMatch ? Number.parseInt(guestMatch[1], 10) : 0),
+    requestedMonth: !explicitDateIntent && monthMention ? monthMention.month : 0
   };
 }
 
 function detectGuestReplyLanguage(messages: Array<Record<string, unknown>>) {
-  const lastGuestText = [...messages].reverse().find((message) => !message.fromMe && toSafeString(message.text))?.text ?? "";
+  const lastGuestText = toSafeString([...messages].reverse().find((message) => !message.fromMe && toSafeString(message.text))?.text);
+  const classifyText = (value: string) => {
+    const text = value.toLowerCase();
+    const hasLetters = /[a-zа-яёәғқңөұүһі]/i.test(text);
+    const hasKazakhLetters = /[әғқңөұүһі]/i.test(text);
+    const hasKazakhWords = /\b(салеметсіз|сәлеметсіз|салеметсиз|адамға|адамга|барма|бар ма|күнге|кунге|үй|уй|жоқ|иә|неше|қанша|канша)\b/i.test(text);
+    return { hasLetters, isKazakh: hasKazakhLetters || hasKazakhWords };
+  };
+  const lastLanguage = classifyText(lastGuestText);
+  if (lastLanguage.hasLetters) return lastLanguage.isKazakh ? "kk" : "ru";
   const recentGuestText = messages
     .slice(-8)
     .filter((message) => !message.fromMe)
     .map((message) => toSafeString(message.text))
     .join(" ")
     .toLowerCase();
-  const text = `${lastGuestText} ${recentGuestText}`.toLowerCase();
-  const hasKazakhLetters = /[әғқңөұүһі]/i.test(text);
-  const hasKazakhWords = /\b(салеметсіз|сәлеметсіз|салеметсиз|адамға|адамга|барма|бар ма|күнге|кунге|үй|уй|жоқ|иә|неше|қанша|канша)\b/i.test(text);
-  return hasKazakhLetters || hasKazakhWords ? "kk" : "ru";
+  return classifyText(recentGuestText).isKazakh ? "kk" : "ru";
 }
 
 function getReservationItemsForAi(reservation: Record<string, unknown>) {
@@ -421,13 +477,22 @@ function getReservationItemsForAi(reservation: Record<string, unknown>) {
 function buildAvailabilityForAi(
   rooms: Array<Record<string, unknown>>,
   reservations: Array<Record<string, unknown>>,
-  intent: { checkIn: string; checkOut: string; guestsTotal: number }
+  intent: { checkIn: string; checkOut: string; guestsTotal: number; requestedMonth?: number }
 ) {
   if (!intent.checkIn || !intent.checkOut) {
+    const activeRooms = rooms
+      .filter((room) => toSafeString(room.category) === "guest-room" && Boolean(room.bookable) && toSafeString(room.status) === "active" && !room.hideInBookingPanel)
+      .map((room) => compactRoomForAi(room))
+      .slice(0, 30);
     return {
       requestedPeriod: null,
-      note: "Даты из переписки не определены. Нужно уточнить даты.",
-      availableRooms: []
+      requestedMonth: intent.requestedMonth || null,
+      note: intent.requestedMonth
+        ? "Гость указал месяц без точных дат. Не используй дату из панели; уточни точные даты и предложи проверить номера на этот месяц."
+        : "Даты из переписки не определены. Нужно уточнить даты.",
+      availableRooms: activeRooms,
+      availableRoomsCount: activeRooms.length,
+      availableTotalPlaces: activeRooms.reduce((sum, room) => sum + toSafeNumber(room.places), 0)
     };
   }
   const bookedRoomIds = new Set<string>();
@@ -578,12 +643,16 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
           timestamp: toSafeString(message.timestamp),
           type: toSafeString(message.type) || "visible"
         }))
-        .filter((message) => message.text)
+        .filter((message) => !isIgnorableAiMessageText(message.text))
     : [];
-  const messagesForAi = visibleMessages.length ? visibleMessages : messages;
+  const savedMessagesForAi = messages.filter((message) => !isIgnorableAiMessageText(message.text));
+  const baseMessagesForAi = visibleMessages.length ? visibleMessages : savedMessagesForAi;
+  const bodyLastGuestMessageForAi = isIgnorableAiMessageText(body?.lastGuestMessage) ? "" : toSafeString(body?.lastGuestMessage);
+  const messagesForAi = bodyLastGuestMessageForAi && !baseMessagesForAi.some((message) => toSafeString(message.text) === bodyLastGuestMessageForAi)
+    ? [...baseMessagesForAi, { fromMe: false, text: bodyLastGuestMessageForAi, timestamp: "", type: "lastGuestMessage" }]
+    : baseMessagesForAi;
   const intent = extractAiBookingIntent(messagesForAi, body);
-  const bodyReplyLanguage = body?.replyLanguage === "kk" || body?.replyLanguage === "ru" ? body.replyLanguage : "";
-  const replyLanguage = bodyReplyLanguage || detectGuestReplyLanguage(messagesForAi);
+  const replyLanguage = detectGuestReplyLanguage(messagesForAi);
   const roomsForAi = rooms as unknown as Array<Record<string, unknown>>;
   const availability = buildAvailabilityForAi(roomsForAi, reservations as Array<Record<string, unknown>>, intent);
 
@@ -594,7 +663,8 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
       return `${message.timestamp ? `[${message.timestamp}] ` : ""}${author}: ${toSafeString(message.text)}`.trim();
     })
     .filter(Boolean);
-  const lastGuestMessage = toSafeString(body?.lastGuestMessage) ||
+  const bodyLastGuestMessage = isIgnorableAiMessageText(body?.lastGuestMessage) ? "" : toSafeString(body?.lastGuestMessage);
+  const lastGuestMessage = bodyLastGuestMessage ||
     [...messagesForAi].reverse().find((message) => !message.fromMe && toSafeString(message.text))?.text ||
     "";
   const compactRooms = rooms

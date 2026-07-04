@@ -519,8 +519,8 @@ function isReservationDateInPast(reservation: Pick<Reservation, "checkIn" | "che
 
 function reservationDateFieldsEqual(left: Pick<Reservation, "checkIn" | "checkOut" | "items">, right: Pick<Reservation, "checkIn" | "checkOut" | "items">) {
   if (left.checkIn !== right.checkIn || left.checkOut !== right.checkOut) return false;
-  const leftItems = [...(left.items ?? [])].sort((a, b) => a.roomId.localeCompare(b.roomId));
-  const rightItems = [...(right.items ?? [])].sort((a, b) => a.roomId.localeCompare(b.roomId));
+  const leftItems = [...(left.items ?? [])].sort((a, b) => String(a.roomId || "").localeCompare(String(b.roomId || "")));
+  const rightItems = [...(right.items ?? [])].sort((a, b) => String(a.roomId || "").localeCompare(String(b.roomId || "")));
   if (leftItems.length !== rightItems.length) return false;
   return leftItems.every((item, index) => {
     const other = rightItems[index];
@@ -2198,11 +2198,11 @@ export function BookingPanel() {
     repairedContacts.forEach((contact) => {
       const key = normalizePhoneSearch(contact.phone);
       const current = contactsByPhone.get(key);
-      if (!current || contact.inquiryDate.localeCompare(current.inquiryDate) >= 0) {
+      if (!current || String(contact.inquiryDate || "").localeCompare(String(current.inquiryDate || "")) >= 0) {
         contactsByPhone.set(key, contact);
       }
     });
-    return Array.from(contactsByPhone.values()).sort((left, right) => right.inquiryDate.localeCompare(left.inquiryDate));
+    return Array.from(contactsByPhone.values()).sort((left, right) => String(right.inquiryDate || "").localeCompare(String(left.inquiryDate || "")));
   }
 
   async function loadPanelExpenseEntries() {
@@ -2561,7 +2561,7 @@ export function BookingPanel() {
   function getRealtimeDraftEntryForActiveChat(drafts: Record<string, ChatBookingDraft>) {
     const entry = Object.entries(drafts)
       .filter(([chatId, draft]) => isRealtimeDraftForActiveChat(chatId, draft))
-      .sort(([, left], [, right]) => right.updatedAt.localeCompare(left.updatedAt))[0];
+      .sort(([, left], [, right]) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")))[0];
     return entry ? { chatId: entry[0], draft: entry[1] } : null;
   }
 
@@ -2642,7 +2642,7 @@ export function BookingPanel() {
     });
     const phoneGroups = new Set(matches.map((draft) => normalizePhoneSearch(draft.phone || draft.lastReservation?.phone || "")).filter(Boolean));
     if (phoneGroups.size > 1) return null;
-    return matches.sort((left, right) => getChatDraftLinkScore(right) - getChatDraftLinkScore(left) || right.updatedAt.localeCompare(left.updatedAt))[0] ?? null;
+    return matches.sort((left, right) => getChatDraftLinkScore(right) - getChatDraftLinkScore(left) || String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")))[0] ?? null;
   }
 
   function clearBookingContactFields() {
@@ -2768,8 +2768,8 @@ export function BookingPanel() {
 
     return matchingReservations
       .sort((left, right) =>
-        left.checkIn.localeCompare(right.checkIn) ||
-        right.createdAt.localeCompare(left.createdAt)
+        String(left.checkIn || "").localeCompare(String(right.checkIn || "")) ||
+        String(right.createdAt || "").localeCompare(String(left.createdAt || ""))
       )[0] ?? null;
   }
 
@@ -5361,7 +5361,7 @@ export function BookingPanel() {
         if (!left.prepaymentReceivedAt && right.prepaymentReceivedAt) return 1;
         if (left.status === "pending" && right.status !== "pending") return -1;
         if (left.status !== "pending" && right.status === "pending") return 1;
-        return right.createdAt.localeCompare(left.createdAt);
+        return String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
       })[0] ?? null;
   }
 
@@ -8954,7 +8954,7 @@ function GuestDatabaseModal({
           return phone !== normalizePhoneSearch(originalPhone) && phone !== normalizePhoneSearch(savedContact.phone);
         })
         .concat(savedContact)
-        .sort((left, right) => right.inquiryDate.localeCompare(left.inquiryDate))
+        .sort((left, right) => String(right.inquiryDate || "").localeCompare(String(left.inquiryDate || "")))
     );
     const reservation = row.reservationId ? reservations.find((item) => item.id === row.reservationId) : null;
     if (reservation) {
@@ -9309,13 +9309,13 @@ function buildGuestDatabaseRow(
       const reservationPhone = normalizePhoneSearch(reservation.phone);
       return Boolean(contactPhone && reservationPhone && contactPhone === reservationPhone);
     })
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
   const matchingDrafts = drafts
     .filter(({ draft }) => {
       const draftPhone = normalizePhoneSearch(draft.phone);
       return Boolean(contactPhone && draftPhone && contactPhone === draftPhone);
     })
-    .sort((left, right) => right.draft.updatedAt.localeCompare(left.draft.updatedAt));
+    .sort((left, right) => String(right.draft.updatedAt || "").localeCompare(String(left.draft.updatedAt || "")));
   const latestReservation = matchingReservations.find((reservation) => !reservation.isAddOnSale) ?? matchingReservations[0] ?? null;
   const latestDraftEntry = matchingDrafts[0] ?? null;
   const latestDraft = latestDraftEntry?.draft ?? null;
@@ -9572,7 +9572,7 @@ async function syncGuestDatabaseAddOnSales(
   const targetTotal = parsePriceInput(form.addOnSales);
   const activeAddOns = getMatchingGuestDatabaseAddOnReservations(row, form, reservations)
     .filter((reservation) => reservation.status !== "cancelled")
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
   const currentTotal = activeAddOns.reduce((sum, reservation) => sum + reservation.total, 0);
   if (targetTotal === currentTotal) return;
 
@@ -9815,7 +9815,7 @@ function getUniqueGuestContactsByPhone(contacts: GuestContact[]) {
     const phone = normalizePhoneSearch(contact.phone);
     if (!phone) return;
     const current = byPhone.get(phone);
-    if (!current || contact.inquiryDate.localeCompare(current.inquiryDate) >= 0) {
+    if (!current || String(contact.inquiryDate || "").localeCompare(String(current.inquiryDate || "")) >= 0) {
       byPhone.set(phone, contact);
     }
   });
@@ -9933,7 +9933,7 @@ function ExpensesModal({ reservations, onClose }: { reservations: Reservation[];
   const fixedGap = Math.max(0, fixedTotal - revenue);
   const profitAfterExpenses = revenue - totalExpenses;
   const sortedEntries = useMemo(
-    () => entries.slice().sort((left, right) => right.paymentDate.localeCompare(left.paymentDate) || right.createdAt.localeCompare(left.createdAt)),
+    () => entries.slice().sort((left, right) => String(right.paymentDate || "").localeCompare(String(left.paymentDate || "")) || String(right.createdAt || "").localeCompare(String(left.createdAt || ""))),
     [entries]
   );
   const categoryTotals = useMemo(() => {
@@ -12680,7 +12680,7 @@ function ReservationsModal({
   const timelineDays = useMemo(() => getMonthTimelineDays(monthDate), [monthDate]);
   const timelineRooms = useMemo(() => rooms
     .filter((room) => room.bookable && !room.hideInBookingPanel)
-    .sort((left, right) => left.sortOrder - right.sortOrder || left.number.localeCompare(right.number, "ru", { numeric: true })), [rooms]);
+    .sort((left, right) => left.sortOrder - right.sortOrder || String(left.number || "").localeCompare(String(right.number || ""), "ru", { numeric: true })), [rooms]);
   const filteredCalendarReservations = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     return reservations
@@ -12695,12 +12695,12 @@ function ReservationsModal({
           .toLowerCase();
         return `${reservation.guestFirstName} ${reservation.phone} ${roomText}`.toLowerCase().includes(normalizedSearch);
       })
-      .sort((left, right) => left.checkIn.localeCompare(right.checkIn));
+      .sort((left, right) => String(left.checkIn || "").localeCompare(String(right.checkIn || "")));
   }, [reservations, rooms, search, statusFilter]);
 
   const visibleReservations = useMemo(() => filteredCalendarReservations
     .filter((reservation) => !selectedDate || isReservationRelevantForCalendarDate(reservation, selectedDate))
-    .sort((left, right) => left.checkIn.localeCompare(right.checkIn)), [filteredCalendarReservations, selectedDate]);
+    .sort((left, right) => String(left.checkIn || "").localeCompare(String(right.checkIn || ""))), [filteredCalendarReservations, selectedDate]);
   const visibleReservationRows = useMemo(() => visibleReservations
     .map((reservation) => ({
       reservation,
@@ -16151,8 +16151,8 @@ function buildRoomAvailabilityConflicts(
 
   return reservationConflicts.concat(holdConflicts)
     .sort((left, right) =>
-      left.releaseDate.localeCompare(right.releaseDate) ||
-      formatBookingPickerObjectLabel(left.room).localeCompare(formatBookingPickerObjectLabel(right.room), "ru")
+      String(left.releaseDate || "").localeCompare(String(right.releaseDate || "")) ||
+      String(formatBookingPickerObjectLabel(left.room) || "").localeCompare(String(formatBookingPickerObjectLabel(right.room) || ""), "ru")
     );
 }
 
@@ -16203,7 +16203,7 @@ function buildHourlyBusySlotsByRoomId(rooms: Room[], reservations: Reservation[]
           reservation,
           to: getReservationHourlyEndTime(reservation)
         }))
-        .sort((left, right) => left.from.localeCompare(right.from));
+        .sort((left, right) => String(left.from || "").localeCompare(String(right.from || "")));
       if (slots.length) slotsByRoomId[room.id] = slots;
       return slotsByRoomId;
     }, {});
@@ -17094,7 +17094,7 @@ function mergeSavedChatDialogs(dialogs: ChatMessageDialog[]) {
     });
   }
   return Array.from(dialogMap.values()).sort((left, right) =>
-    getSavedChatDialogTitle(left).localeCompare(getSavedChatDialogTitle(right), "ru")
+    String(getSavedChatDialogTitle(left) || "").localeCompare(String(getSavedChatDialogTitle(right) || ""), "ru")
   );
 }
 
@@ -20338,7 +20338,7 @@ function buildAnalyticsSnapshot(
     prepayments,
     profitAfterExpenses,
     recentReservations: [...reservations]
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
       .slice(0, 50),
     revenue,
     roomSales
@@ -20708,8 +20708,8 @@ function getAdminDayRoomEntries(reservation: Reservation, date: string, rooms: R
     })
     .filter((entry): entry is AdminDayRoomEntry => Boolean(entry))
     .sort((left, right) =>
-      left.room.number.localeCompare(right.room.number, "ru", { numeric: true }) ||
-      left.reservation.guestFirstName.localeCompare(right.reservation.guestFirstName, "ru")
+      String(left.room.number || "").localeCompare(String(right.room.number || ""), "ru", { numeric: true }) ||
+      String(left.reservation.guestFirstName || "").localeCompare(String(right.reservation.guestFirstName || ""), "ru")
     );
 }
 
@@ -20750,7 +20750,7 @@ function groupAdminDayEntries(entries: AdminDayRoomEntry[]) {
 
   return Array.from(groups.values()).map((group) => ({
     ...group,
-    entries: group.entries.sort((left, right) => left.room.number.localeCompare(right.room.number, "ru", { numeric: true }))
+    entries: group.entries.sort((left, right) => String(left.room.number || "").localeCompare(String(right.room.number || ""), "ru", { numeric: true }))
   }));
 }
 
@@ -21018,12 +21018,14 @@ function buildAdminTomorrowArrivalsBlock(selectedDate: string, reservations: Res
   const tomorrow = formatDateInput(addDays(parseDateInput(baseDate), 1));
   const tomorrowArrivals = reservations
     .filter((reservation) => reservation.status === "booked" && reservation.checkIn === tomorrow)
-    .sort((left, right) => `${left.checkInTime || DEFAULT_CHECK_IN_TIME} ${left.guestFirstName}`.localeCompare(`${right.checkInTime || DEFAULT_CHECK_IN_TIME} ${right.guestFirstName}`, "ru"));
+    .sort((left, right) =>
+      `${left.checkInTime || DEFAULT_CHECK_IN_TIME} ${left.guestFirstName || ""}`.localeCompare(`${right.checkInTime || DEFAULT_CHECK_IN_TIME} ${right.guestFirstName || ""}`, "ru")
+    );
   const breakfastReservations = reservations
     .filter((reservation) => reservation.status === "booked")
     .filter((reservation) => reservation.breakfastIncluded !== false)
     .filter((reservation) => isBreakfastServedOnDate(reservation, tomorrow))
-    .sort((left, right) => `${left.checkOut} ${left.guestFirstName}`.localeCompare(`${right.checkOut} ${right.guestFirstName}`, "ru"));
+    .sort((left, right) => `${left.checkOut || ""} ${left.guestFirstName || ""}`.localeCompare(`${right.checkOut || ""} ${right.guestFirstName || ""}`, "ru"));
 
   if (!tomorrowArrivals.length && !breakfastReservations.length) return "";
 
@@ -21084,7 +21086,9 @@ function buildCookBreakfastExport(selectedDate: string, reservations: Reservatio
     .filter((reservation) => reservation.breakfastIncluded !== false)
     .filter((reservation) => isBreakfastServedOnDate(reservation, date))
     .filter((reservation) => getReservationBreakfastCountForDate(reservation, date, rooms) > 0)
-    .sort((left, right) => `${left.checkInTime || DEFAULT_CHECK_IN_TIME} ${left.guestFirstName}`.localeCompare(`${right.checkInTime || DEFAULT_CHECK_IN_TIME} ${right.guestFirstName}`, "ru"));
+    .sort((left, right) =>
+      `${left.checkInTime || DEFAULT_CHECK_IN_TIME} ${left.guestFirstName || ""}`.localeCompare(`${right.checkInTime || DEFAULT_CHECK_IN_TIME} ${right.guestFirstName || ""}`, "ru")
+    );
 
   if (!breakfastReservations.length) {
     return `Завтраки\nДата: ${formatAdminShortDate(date)}\nЗавтраков нет.`;
@@ -21161,7 +21165,7 @@ function getAdminPriorityCleaningRooms(arrivals: Reservation[], departures: Rese
   const arrivalRooms = arrivals
     .flatMap((reservation) => reservation.roomIds.map((roomId) => ({ reservation, room: rooms.find((item) => item.id === roomId) })))
     .filter((item): item is { reservation: Reservation; room: Room } => Boolean(item.room) && isStayBookingObject(item.room) && departureRoomIds.has(item.room.id))
-    .sort((left, right) => (left.reservation.checkInTime || DEFAULT_CHECK_IN_TIME).localeCompare(right.reservation.checkInTime || DEFAULT_CHECK_IN_TIME));
+    .sort((left, right) => String(left.reservation.checkInTime || DEFAULT_CHECK_IN_TIME).localeCompare(String(right.reservation.checkInTime || DEFAULT_CHECK_IN_TIME)));
 
   return Array.from(new Map(arrivalRooms.map(({ room }) => [room.id, formatAdminBookingObject(room)])).values()).join(", ");
 }
@@ -22004,7 +22008,7 @@ function applyTimelineSegmentOffsets<T extends {
   const assigned = segments.map(() => false);
   Array.from(eventsByDate.entries())
     .filter(([, events]) => events.checkInIndexes.length && events.checkOutIndexes.length)
-    .sort(([leftDate], [rightDate]) => leftDate.localeCompare(rightDate))
+    .sort(([leftDate], [rightDate]) => String(leftDate || "").localeCompare(String(rightDate || "")))
     .forEach(([, events]) => {
       const checkoutBase = events.checkOutIndexes.find((index) => assigned[index]);
       const checkoutOffset = checkoutBase !== undefined ? offsets[checkoutBase] : -14;
@@ -22200,7 +22204,9 @@ function buildReservationDailyReminders(reservations: Reservation[], rooms: Room
     .sort((left, right) => {
       const leftPriority = getReservationDailyReminderPriority(left);
       const rightPriority = getReservationDailyReminderPriority(right);
-      return leftPriority - rightPriority || left.reservation.checkIn.localeCompare(right.reservation.checkIn) || left.reservation.guestFirstName.localeCompare(right.reservation.guestFirstName);
+      return leftPriority - rightPriority ||
+        String(left.reservation.checkIn || "").localeCompare(String(right.reservation.checkIn || "")) ||
+        String(left.reservation.guestFirstName || "").localeCompare(String(right.reservation.guestFirstName || ""));
     });
 }
 
@@ -22542,7 +22548,7 @@ function getDefaultObjectType(category: Room["category"]): Room["objectType"] {
 
 function getGroupSuggestions(rooms: Room[]) {
   return Array.from(new Set(DEFAULT_GROUPS.concat(rooms.map((room) => room.group).filter(Boolean)))).sort((a, b) =>
-    a.localeCompare(b, "ru")
+    String(a || "").localeCompare(String(b || ""), "ru")
   );
 }
 

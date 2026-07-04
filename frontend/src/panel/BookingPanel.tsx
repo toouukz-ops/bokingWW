@@ -8182,6 +8182,16 @@ function ReservationDailyReminderOverlay({
     hasBalanceReminder ? "доплата" : "",
     hasPrepaymentReminder ? "предоплата" : ""
   ].filter(Boolean);
+  const itemPeriods = getReservationItems(reservation).map((item, index) => ({
+    label: reminder.roomLabels[index] || String(index + 1),
+    checkIn: item.checkIn,
+    checkOut: item.checkOut
+  }));
+  const periodLabel = reservationItemsHaveDifferentPeriods(itemPeriods)
+    ? itemPeriods
+      .map((item) => `${item.label}: ${formatReservationDateRange(item)}`)
+      .join("; ")
+    : formatReservationDateRange(reservation);
 
   return (
     <div className="gpb-inline-prepayment-overlay">
@@ -8204,7 +8214,7 @@ function ReservationDailyReminderOverlay({
             <span>Номера</span>
             <b>{reminder.roomLabels.join(", ") || "не указаны"}</b>
             <span>Период</span>
-            <b>{formatReservationDateRange(reservation)}</b>
+            <b>{periodLabel}</b>
             <span>Итого</span>
             <b>{formatPrice(reservation.total)}</b>
             <span>Получено</span>

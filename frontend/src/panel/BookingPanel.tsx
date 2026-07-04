@@ -489,14 +489,12 @@ function getMinimumCheckOutDate(checkIn: string) {
 
 function isRoomDateOverrideAlignedWithBooking(
   override: { checkIn: string; checkOut: string } | undefined,
-  checkIn: string,
-  checkOut: string
+  _checkIn: string,
+  _checkOut: string
 ) {
   return Boolean(
     override?.checkIn &&
     override?.checkOut &&
-    override.checkIn >= checkIn &&
-    override.checkOut <= checkOut &&
     override.checkOut > override.checkIn
   );
 }
@@ -5289,6 +5287,14 @@ export function BookingPanel() {
       guestChildren,
       lastReservation?.items ?? []
     );
+    const reservationCheckIn = reservationItems.reduce(
+      (earliestDate, item) => item.checkIn && item.checkIn < earliestDate ? item.checkIn : earliestDate,
+      checkIn
+    );
+    const reservationCheckOut = reservationItems.reduce(
+      (latestDate, item) => item.checkOut && item.checkOut > latestDate ? item.checkOut : latestDate,
+      checkOut
+    );
 
     return {
       id: lastReservation?.id ?? `reservation-${Date.now()}`,
@@ -5297,8 +5303,8 @@ export function BookingPanel() {
       payments: lastReservation?.payments ?? [],
       guestFirstName: reservationGuestName,
       phone: reservationPhone,
-      checkIn,
-      checkOut,
+      checkIn: reservationCheckIn,
+      checkOut: reservationCheckOut,
       checkInTime: reservationCheckInTime,
       checkOutTime: reservationCheckOutTime,
       comment: bookingComment,
@@ -23167,7 +23173,9 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     ? `\n*${fullPaymentMode ? "Оплата внесена" : "Предоплата внесена"}: ${formatPrice(reservation.prepayment)}*\nОстаток к оплате: ${formatPrice(balance)}`
     : `\n\n*${fullPaymentMode ? "К оплате 100%" : "Предоплата 50%"}: ${formatPrice(reservation.prepayment)}*${reservation.paymentLink ? `\n${reservation.paymentLink}` : ""}`;
   const stayDates = hasNightlyRooms
-    ? `\nЗаезд: ${formatKazakhDate(reservation.checkIn)} ${reservation.checkInTime}\nВыезд: ${formatKazakhDate(reservation.checkOut)} ${reservation.checkOutTime}`
+    ? hasDifferentRoomPeriods
+      ? ""
+      : `\nЗаезд: ${formatKazakhDate(reservation.checkIn)} ${reservation.checkInTime}\nВыезд: ${formatKazakhDate(reservation.checkOut)} ${reservation.checkOutTime}`
     : "";
   const breakfastLine = hasNightlyRooms
     ? foodSummary.header ? `\nПитание: ${foodSummary.header}` : ""
@@ -23357,13 +23365,14 @@ function buildReservationPaymentConfirmationMessage(reservation: Reservation, ro
   const balance = Math.max(0, reservation.total - paidAmount);
   const paymentLabel = getManualSalePaymentLabel(reservation.paymentMethod ?? "");
   const hasPayment = paidAmount > 0 || Boolean(reservation.prepaymentReceivedAt || reservation.balancePaidAt);
+  const hasDifferentPeriods = reservationItemsHaveDifferentPeriods(getReservationItems(reservation, rooms));
   return [
     reservation.guestFirstName || "Гость",
     hasPayment ? "Оплата поступила." : "Бронь подтверждена без предоплаты.",
     "Подтверждение брони",
     `Номера: ${formatReservationConfirmationRooms(reservation, rooms)}`,
-    `Заезд: ${formatKazakhDate(reservation.checkIn)} ${reservation.checkInTime}`,
-    `Выезд: ${formatKazakhDate(reservation.checkOut)} ${reservation.checkOutTime}`,
+    hasDifferentPeriods ? "" : `Заезд: ${formatKazakhDate(reservation.checkIn)} ${reservation.checkInTime}`,
+    hasDifferentPeriods ? "" : `Выезд: ${formatKazakhDate(reservation.checkOut)} ${reservation.checkOutTime}`,
     formatReservationGuestCountText(reservation),
     `Итого: ${formatPrice(reservation.total)}`,
     hasPayment ? `*Получено: ${formatPrice(paidAmount)}*` : "Оплата: 100% при заезде",

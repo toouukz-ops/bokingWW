@@ -21083,7 +21083,7 @@ function buildCookBreakfastExport(selectedDate: string, reservations: Reservatio
     .filter((reservation) => reservation.status === "booked")
     .filter((reservation) => reservation.breakfastIncluded !== false)
     .filter((reservation) => isBreakfastServedOnDate(reservation, date))
-    .filter((reservation) => getReservationGuestTotal(reservation) > 0)
+    .filter((reservation) => getReservationBreakfastCountForDate(reservation, date, rooms) > 0)
     .sort((left, right) => `${left.checkInTime || DEFAULT_CHECK_IN_TIME} ${left.guestFirstName}`.localeCompare(`${right.checkInTime || DEFAULT_CHECK_IN_TIME} ${right.guestFirstName}`, "ru"));
 
   if (!breakfastReservations.length) {
@@ -21093,18 +21093,27 @@ function buildCookBreakfastExport(selectedDate: string, reservations: Reservatio
   const totalAdults = breakfastReservations.reduce((sum, reservation) => sum + Math.max(0, reservation.adults || 0), 0);
   const totalTeenagers = breakfastReservations.reduce((sum, reservation) => sum + Math.max(0, reservation.teenagers || 0), 0);
   const totalChildren = breakfastReservations.reduce((sum, reservation) => sum + Math.max(0, reservation.children || 0), 0);
-  const totalGuests = totalAdults + totalTeenagers + totalChildren;
+  const totalFallbackBreakfasts = breakfastReservations.reduce((sum, reservation) => {
+    return getReservationGuestTotal(reservation) > 0 ? sum : sum + getReservationBreakfastFallbackCountForDate(reservation, date, rooms);
+  }, 0);
+  const totalBreakfasts = totalAdults + totalTeenagers + totalChildren + totalFallbackBreakfasts;
+  const fallbackText = totalFallbackBreakfasts > 0 ? ` / ${totalFallbackBreakfasts} по номерам` : "";
   const lines = [
     "Завтраки",
     `Дата: ${formatAdminShortDate(date)}`,
-    `ИТОГО: ${totalGuests} завтраков (${totalAdults} взр. / ${totalTeenagers} подрост. / ${totalChildren} дет.)`,
+    `ИТОГО: ${totalBreakfasts} ${getBreakfastWord(totalBreakfasts)} (${totalAdults} взр. / ${totalTeenagers} подрост. / ${totalChildren} дет.${fallbackText})`,
     ""
   ];
 
   breakfastReservations.forEach((reservation, index) => {
     const comment = reservation.adminComment?.trim();
     const roomNumbers = formatCookBreakfastRoomNumbers(reservation, date, rooms);
-    const guestText = `${getReservationGuestTotal(reservation)} завтраков (${Math.max(0, reservation.adults || 0)} взр. / ${Math.max(0, reservation.teenagers || 0)} подрост. / ${Math.max(0, reservation.children || 0)} дет.)`;
+    const guestTotal = getReservationGuestTotal(reservation);
+    const fallbackBreakfasts = getReservationBreakfastFallbackCountForDate(reservation, date, rooms);
+    const breakfastCount = guestTotal || fallbackBreakfasts;
+    const guestText = guestTotal > 0
+      ? `${breakfastCount} ${getBreakfastWord(breakfastCount)} (${Math.max(0, reservation.adults || 0)} взр. / ${Math.max(0, reservation.teenagers || 0)} подрост. / ${Math.max(0, reservation.children || 0)} дет.)`
+      : `${breakfastCount} ${getBreakfastWord(breakfastCount)} (гости не указаны, расчет по номеру)`;
     lines.push(
       `${index + 1}. ${roomNumbers ? `№${roomNumbers} - ` : ""}${reservation.guestFirstName || "Гость"}: ${guestText}`,
       comment ? `Комментарий: ${comment}` : ""
@@ -21115,13 +21124,36 @@ function buildCookBreakfastExport(selectedDate: string, reservations: Reservatio
 }
 
 function formatCookBreakfastRoomNumbers(reservation: Reservation, date: string, rooms: Room[]) {
-  const roomIds = getReservationCalendarRoomIdsForDate(reservation, date, rooms);
+  const roomIds = getReservationBreakfastRoomIdsForDate(reservation, date, rooms);
   return roomIds
     .map((roomId) => rooms.find((room) => room.id === roomId))
     .filter((room): room is Room => Boolean(room) && isStayBookingObject(room))
     .map((room) => room.number || room.title)
     .filter(Boolean)
     .join(", ");
+}
+
+function getReservationBreakfastRoomIdsForDate(reservation: Reservation, date: string, rooms: Room[] = []) {
+  if (!date) return reservation.roomIds;
+  const breakfastRoomIds = new Set(
+    getReservationItems(reservation, rooms)
+      .filter((item) => item.checkIn < date && item.checkOut >= date)
+      .map((item) => item.roomId)
+  );
+  const orderedRoomIds = reservation.roomIds.filter((roomId) => breakfastRoomIds.has(roomId));
+  const missingRoomIds = Array.from(breakfastRoomIds).filter((roomId) => !orderedRoomIds.includes(roomId));
+  return [...orderedRoomIds, ...missingRoomIds];
+}
+
+function getReservationBreakfastFallbackCountForDate(reservation: Reservation, date: string, rooms: Room[]) {
+  return getReservationBreakfastRoomIdsForDate(reservation, date, rooms).reduce((sum, roomId) => {
+    const room = rooms.find((item) => item.id === roomId);
+    return room && isStayBookingObject(room) ? sum + getRoomBreakfastCount(room) : sum;
+  }, 0);
+}
+
+function getReservationBreakfastCountForDate(reservation: Reservation, date: string, rooms: Room[]) {
+  return getReservationGuestTotal(reservation) || getReservationBreakfastFallbackCountForDate(reservation, date, rooms);
 }
 
 function getAdminPriorityCleaningRooms(arrivals: Reservation[], departures: Reservation[], rooms: Room[]) {

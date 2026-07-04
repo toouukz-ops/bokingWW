@@ -5472,7 +5472,7 @@ body.gpb-booking-panel-open #app {
   border: 1px solid #d8dee5;
   border-radius: 8px;
   background: #ffffff;
-  padding: 8px 12px;
+  padding: 6px 12px;
 }
 
 .gpb-reservation-filters label {
@@ -5571,7 +5571,7 @@ body.gpb-booking-panel-open #app {
 
 .gpb-reservations-layout {
   display: grid;
-  grid-template-rows: minmax(120px, 1fr) 12px minmax(140px, var(--gpb-reservation-list-height, 280px));
+  grid-template-rows: minmax(120px, 1fr) 12px minmax(0, var(--gpb-reservation-list-height, 280px));
   gap: 0;
   height: 100%;
   min-height: 0;

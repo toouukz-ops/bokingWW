@@ -585,7 +585,7 @@ function getStoredTimelineColor(key: string, fallback: string) {
 
 function clampReservationCalendarListHeight(value: number) {
   const maxHeight = Math.max(220, Math.floor(window.innerHeight * 0.92));
-  return Math.min(maxHeight, Math.max(140, Math.round(value)));
+  return Math.min(maxHeight, Math.max(0, Math.round(value)));
 }
 
 function getStoredReservationCalendarListHeight() {
@@ -12834,16 +12834,13 @@ function ReservationsModal({
         <main className="gpb-reservations-body">
           <section className="gpb-reservation-filters">
             <label>
-              Месяц
-              <input type="month" value={monthDate} onChange={(event) => setMonthDate(event.target.value)} />
+              <input aria-label="Месяц" title="Месяц" type="month" value={monthDate} onChange={(event) => setMonthDate(event.target.value)} />
             </label>
             <label>
-              Дата
-              <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
+              <input aria-label="Дата" title="Дата" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
             </label>
             <label>
-              Статус
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+              <select aria-label="Статус" title="Статус" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
                 <option value="booked">Подтвержденные</option>
                 <option value="pending">Согласования</option>
                 <option value="cancelled">Отмененные</option>
@@ -12851,8 +12848,7 @@ function ReservationsModal({
               </select>
             </label>
             <label>
-              Поиск
-              <input placeholder="Имя, телефон, номер" value={search} onChange={(event) => setSearch(event.target.value)} />
+              <input aria-label="Поиск" placeholder="Имя, телефон, номер" title="Поиск" value={search} onChange={(event) => setSearch(event.target.value)} />
             </label>
             <div className="gpb-reservation-layer-toggles" aria-label="Что показывать в календаре">
               <button

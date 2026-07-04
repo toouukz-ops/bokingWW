@@ -13303,7 +13303,8 @@ function ReservationCard({
   const bookedRooms = displayRoomIds
     .map((roomId) => rooms.find((room) => room.id === roomId))
     .filter((room): room is Room => Boolean(room));
-  const balance = getReservationBalance(reservation);
+  const finance = getReservationFinance(reservation);
+  const balance = finance.displayBalance;
   const dateStatus = getReservationDateListStatus(reservation, selectedDate);
   const rowColor = dateStatus === "check-in"
     ? timelineCheckInColor
@@ -13336,7 +13337,9 @@ function ReservationCard({
         <span>{formatReservationRowRooms(bookedRooms)}</span>
         <span>{formatReservationCompactGuestCountText(reservation)}</span>
         <b>{formatPrice(reservation.total)}</b>
-        <span className={reservation.prepaymentReceivedAt ? "is-done" : "is-muted"}>Пред. {formatPrice(reservation.prepayment)}</span>
+        <span className={finance.displayPrepayment > 0 ? "is-done" : "is-muted"}>
+          Пред. {formatReservationPaymentAmount(finance.displayPrepayment)}
+        </span>
         <span className={reservation.balancePaidAt ? "is-done" : balance > 0 ? "" : "is-muted"}>Ост. {formatReservationPaymentAmount(balance)}</span>
         {reservation.checkedInAt ? <span className="is-done">Въезд</span> : null}
         {reservation.checkedOutAt ? <span className="is-done">Выезд</span> : null}
@@ -22099,8 +22102,14 @@ function formatNumericDayMonth(date: string) {
   }).format(parseDateInput(date));
 }
 
-function hasReservationPrepayment(reservation: Pick<Reservation, "status" | "prepaymentReceivedAt" | "noShowAt">) {
-  return Boolean(reservation.prepaymentReceivedAt || reservation.noShowAt || reservation.status === "booked");
+function hasReservationPrepayment(
+  reservation: Pick<Reservation, "prepaymentReceivedAt" | "noShowAt"> & { paidAmount?: number; prepayment?: number }
+) {
+  return Boolean(
+    reservation.prepaymentReceivedAt ||
+    ((reservation.paidAmount ?? 0) > 0 && (reservation.prepayment ?? 0) > 0) ||
+    (reservation.noShowAt && (reservation.prepayment ?? 0) > 0)
+  );
 }
 
 function getReservationStatusLabel(reservation: Pick<Reservation, "status" | "checkedInAt" | "checkedOutAt" | "checkOut" | "checkOutTime" | "extendedAt" | "noShowAt" | "prepaymentReceivedAt">) {

@@ -361,7 +361,7 @@ function getOnlyMatchingStatus(matches: Array<{ status: ChatStatusItem }>) {
 }
 
 function getLatestMatchingStatus(matches: Array<{ status: ChatStatusItem }>) {
-  return matches.sort((left, right) => right.status.updatedAt.localeCompare(left.status.updatedAt))[0]?.status ?? null;
+  return matches.sort((left, right) => getStatusUpdatedAt(right.status).localeCompare(getStatusUpdatedAt(left.status)))[0]?.status ?? null;
 }
 
 function updateChatStatusDebug(rows: number, applied: number) {
@@ -420,9 +420,13 @@ function createEmptyChatStatusIndex(): ChatStatusIndex {
 function setLatestStatus(map: Map<string, ChatStatusItem>, key: string, status: ChatStatusItem) {
   if (!key) return;
   const current = map.get(key);
-  if (!current || status.updatedAt.localeCompare(current.updatedAt) >= 0) {
+  if (!current || getStatusUpdatedAt(status).localeCompare(getStatusUpdatedAt(current)) >= 0) {
     map.set(key, status);
   }
+}
+
+function getStatusUpdatedAt(status: ChatStatusItem | null | undefined) {
+  return typeof status?.updatedAt === "string" ? status.updatedAt : "";
 }
 
 function setForcedStatus(map: Map<string, ChatStatusItem>, key: string, status: ChatStatusItem) {

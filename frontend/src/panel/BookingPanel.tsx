@@ -22076,7 +22076,7 @@ function applyTimelineSegmentOffsets<T extends {
     .sort(([leftDate], [rightDate]) => String(leftDate || "").localeCompare(String(rightDate || "")))
     .forEach(([, events]) => {
       const checkoutBase = events.checkOutIndexes.find((index) => assigned[index]);
-      const checkoutOffset = checkoutBase !== undefined ? offsets[checkoutBase] : -14;
+      const checkoutOffset = checkoutBase !== undefined ? offsets[checkoutBase] : -8;
       events.checkOutIndexes.forEach((index) => {
         if (!assigned[index]) {
           offsets[index] = checkoutOffset;

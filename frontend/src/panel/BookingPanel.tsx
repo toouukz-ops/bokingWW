@@ -2571,7 +2571,8 @@ export function BookingPanel() {
     if (chatId === activeChat.id) return true;
     const activePhone = formatPhoneDigits(activeChat.phone || "");
     const draftPhone = formatPhoneDigits(draft.phone || draft.lastReservation?.phone || "");
-    return Boolean(activePhone && draftPhone && phonesMatchForContactLookup(activePhone, draftPhone));
+    if (activePhone && draftPhone && phonesMatchForContactLookup(activePhone, draftPhone)) return true;
+    return isChatDraftLinkedToActiveTitle(draft, activeChat);
   }
 
   async function deleteCachedChatBookingDraft(chatId: string) {
@@ -2634,14 +2635,16 @@ export function BookingPanel() {
   async function findFallbackChatDraftForActiveChat(chat: ActiveChat, cachedDrafts?: Record<string, ChatBookingDraft>, fallbackPhone = "") {
     const drafts = cachedDrafts ?? draftCacheRef.current;
     const chatPhone = normalizePhoneSearch(chat.phone || fallbackPhone);
-    if (!chatPhone) return null;
+    const chatTitle = normalizeContactLookupText(chat.title || "");
+    if (!chatPhone && !chatTitle) return null;
     const matches = Object.values(drafts).filter((draft) => {
       const draftPhone = normalizePhoneSearch(draft.phone || draft.lastReservation?.phone || "");
       if (chatPhone && draftPhone && phonesMatchForContactLookup(chatPhone, draftPhone)) return true;
+      if (chatTitle && isChatDraftLinkedToActiveTitle(draft, chat)) return true;
       return false;
     });
     const phoneGroups = new Set(matches.map((draft) => normalizePhoneSearch(draft.phone || draft.lastReservation?.phone || "")).filter(Boolean));
-    if (phoneGroups.size > 1) return null;
+    if (phoneGroups.size > 1 && !chatTitle) return null;
     return matches.sort((left, right) => getChatDraftLinkScore(right) - getChatDraftLinkScore(left) || String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")))[0] ?? null;
   }
 
@@ -21784,6 +21787,9 @@ function sanitizeChatDraftReservationLink(draft: ChatBookingDraft, activeChat: A
   if (!reservationPhone || !expectedPhone || phonesMatchForContactLookup(reservationPhone, expectedPhone)) {
     return draft;
   }
+  if (isDraftReservationLinkedByGuestName(draft, activeChat)) {
+    return draft;
+  }
 
   return {
     ...draft,
@@ -21793,6 +21799,30 @@ function sanitizeChatDraftReservationLink(draft: ChatBookingDraft, activeChat: A
     selectedBookingRoomIds: [],
     selectedRoomId: ""
   };
+}
+
+function isDraftReservationLinkedByGuestName(draft: ChatBookingDraft, activeChat: ActiveChat | null) {
+  const reservationName = normalizeContactLookupText(draft.lastReservation?.guestFirstName || "");
+  if (!reservationName || !isGuestFallbackName(reservationName)) return false;
+
+  const candidates = [
+    draft.guestFirstName,
+    activeChat?.title ?? ""
+  ].map((value) => normalizeContactLookupText(value || "")).filter(Boolean);
+
+  return candidates.some((value) => value === reservationName);
+}
+
+function isChatDraftLinkedToActiveTitle(draft: ChatBookingDraft, activeChat: ActiveChat | null) {
+  const activeTitle = normalizeContactLookupText(activeChat?.title || "");
+  if (!activeTitle) return false;
+
+  const candidates = [
+    draft.guestFirstName,
+    draft.lastReservation?.guestFirstName ?? ""
+  ].map((value) => normalizeContactLookupText(value || "")).filter(Boolean);
+
+  return candidates.some((value) => value === activeTitle);
 }
 
 function normalizeReservationPhoneIdentity(reservation: Reservation): Reservation {

@@ -20981,13 +20981,29 @@ function formatReservationAveragePerPersonLine(reservation: Reservation, nights:
 }
 
 function formatReservationConfirmationRooms(reservation: Reservation, rooms: Room[]) {
-  const bookedRooms = reservation.roomIds
-    .map((roomId) => rooms.find((room) => room.id === roomId))
-    .filter((room): room is Room => Boolean(room));
+  const reservationItems = getReservationItems(reservation, rooms);
+  const bookedItems = reservationItems
+    .map((item) => ({
+      item,
+      room: rooms.find((room) => room.id === item.roomId)
+    }))
+    .filter((entry): entry is { item: ReservationItem; room: Room } => Boolean(entry.room));
 
-  if (!bookedRooms.length) return "не указаны";
+  if (!bookedItems.length) return "не указаны";
 
-  return bookedRooms.map((room) => {
+  const hasDifferentPeriods = reservationItemsHaveDifferentPeriods(
+    bookedItems.map(({ item }) => ({ checkIn: item.checkIn, checkOut: item.checkOut }))
+  );
+
+  if (hasDifferentPeriods) {
+    return `\n${bookedItems.map(({ item, room }) => {
+      const number = room.number ? `${getObjectTypeLabel(room)} ${room.number}` : getObjectTypeLabel(room);
+      const roomTitle = [number, room.title].filter(Boolean).join(" | ");
+      return `- ${roomTitle} | ${formatShortDayMonth(item.checkIn)}-${formatShortDayMonth(item.checkOut)}`;
+    }).join("\n")}`;
+  }
+
+  return bookedItems.map(({ room }) => {
     const number = room.number ? `${getObjectTypeLabel(room)} ${room.number}` : getObjectTypeLabel(room);
     return [number, room.title].filter(Boolean).join(" | ");
   }).join(", ");
@@ -23035,6 +23051,11 @@ function buildWhatsAppPreview(room: Room, checkInTime = DEFAULT_CHECK_IN_TIME, c
 
 function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
   const reservationItems = getReservationItems(reservation, rooms);
+  const nightlyReservationItemsForDates = reservationItems.filter((item) => {
+    const room = rooms.find((candidate) => candidate.id === item.roomId);
+    return room && !isHourlyBookingObject(room);
+  });
+  const hasDifferentRoomPeriods = reservationItemsHaveDifferentPeriods(nightlyReservationItemsForDates);
   const bookedRooms = reservationItems
     .map((item) => rooms.find((room) => room.id === item.roomId))
     .filter((room): room is Room => Boolean(room));
@@ -23063,8 +23084,8 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     ].filter(Boolean);
     const hasCustomDates = item.checkIn !== reservation.checkIn || item.checkOut !== reservation.checkOut;
     const dateLines = [
-      ...(hasCustomDates ? [
-      `| Заезд: ${formatKazakhDate(item.checkIn)} ${item.checkInTime || reservation.checkInTime}`,
+      ...(hasDifferentRoomPeriods || hasCustomDates ? [
+        `| Заезд: ${formatKazakhDate(item.checkIn)} ${item.checkInTime || reservation.checkInTime}`,
         `| Выезд: ${formatKazakhDate(item.checkOut)} ${item.checkOutTime || reservation.checkOutTime}`
       ] : [])
     ];

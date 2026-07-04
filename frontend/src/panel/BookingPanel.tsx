@@ -584,7 +584,7 @@ function getStoredTimelineColor(key: string, fallback: string) {
 }
 
 function clampReservationCalendarListHeight(value: number) {
-  const maxHeight = Math.max(220, Math.floor(window.innerHeight * 0.72));
+  const maxHeight = Math.max(220, Math.floor(window.innerHeight * 0.92));
   return Math.min(maxHeight, Math.max(140, Math.round(value)));
 }
 

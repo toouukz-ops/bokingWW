@@ -508,6 +508,49 @@ export async function getPaymentSettings(): Promise<PaymentSettings> {
   return normalizePaymentSettings(localSettings);
 }
 
+const DEFAULT_CHAT_BOT_PROMPT = `Ты — помощник оператора по продажам гостиницы Green Pine Burabay.
+
+Тебе передаются история переписки, последнее сообщение гостя, актуальные номера, цены, доступность и справочная информация.
+
+Задача: предложи 5 коротких вариантов ответа оператору.
+
+Правила:
+— Отвечай на языке последнего сообщения гостя.
+— Если гость пишет на казахском, answers должны быть на казахском, а answerTranslations на русском для оператора.
+— Если гость начал с приветствия, начни лучший ответ с короткого приветствия.
+— Не задавай повторно вопросы, на которые гость уже ответил.
+— Не придумывай цены, наличие, услуги и расстояния.
+— Если гость указал даты, людей или возражение, обязательно учитывай именно их.
+— Green Pine Burabay — отель с номерами, не домики и не коттеджи.
+— Если спрашивают домик, честно скажи, что домиков нет, но предложи номера, если они доступны.
+— С животными нельзя.
+— Мягко веди к бронированию без давления.
+— Каждый вариант не более 8 слов.
+
+Формат ответа строго JSON:
+{
+  "recommended": 2,
+  "reason": "Кратко объясни оператору причину выбора",
+  "answers": ["...", "...", "...", "...", "..."],
+  "answerTranslations": ["...", "...", "...", "...", "..."]
+}`;
+
+const DEFAULT_CHAT_BOT_OBJECT_DESCRIPTION = `Green Pine Burabay — гостиница в Бурабае с гостиничными номерами.
+Домиков и отдельных коттеджей нет.
+Если гость спрашивает домик, отвечаем честно: домиков нет, но можем предложить номера.
+С животными нельзя.
+Если гость указал даты и количество гостей, нужно проверить доступность по базе и предложить свободные номера.`;
+
+const DEFAULT_CHAT_BOT_EXAMPLES = `Вопрос: Салеметсізба 7адамга домик барма август 12-13не 2кунге
+Ответ: Сәлеметсіз бе! Домик жоқ, бірақ 7 адамға нөмірлерді қарап берейін.
+Перевод: Здравствуйте! Домиков нет, но проверю номера на 7 человек.
+
+Вопрос: Есть домик на август?
+Ответ: Домиков нет, но есть гостиничные номера.
+
+Вопрос: Можно с собакой?
+Ответ: К сожалению, с животными нельзя.`;
+
 function normalizePaymentSettings(settings: any): PaymentSettings {
       const paymentMethods = settings?.paymentMethods && typeof settings.paymentMethods === "object" && !Array.isArray(settings.paymentMethods)
         ? settings.paymentMethods
@@ -599,6 +642,9 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
         customAmenityOptions,
         customFoodOptions,
         customSleepingPlaceOptions,
+        chatBotPrompt: typeof settings?.chatBotPrompt === "string" && settings.chatBotPrompt.trim() ? settings.chatBotPrompt : DEFAULT_CHAT_BOT_PROMPT,
+        chatBotObjectDescription: typeof settings?.chatBotObjectDescription === "string" && settings.chatBotObjectDescription.trim() ? settings.chatBotObjectDescription : DEFAULT_CHAT_BOT_OBJECT_DESCRIPTION,
+        chatBotExamples: typeof settings?.chatBotExamples === "string" && settings.chatBotExamples.trim() ? settings.chatBotExamples : DEFAULT_CHAT_BOT_EXAMPLES,
         defaultCheckInTime: typeof settings?.defaultCheckInTime === "string" ? settings.defaultCheckInTime : "15:00",
         defaultCheckOutTime: typeof settings?.defaultCheckOutTime === "string" ? settings.defaultCheckOutTime : "12:00",
         weatherLocationName: typeof settings?.weatherLocationName === "string" ? settings.weatherLocationName : "Алматы",

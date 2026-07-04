@@ -233,11 +233,13 @@ const AI_REPLY_SYSTEM_PROMPT = `Ты — помощник оператора п�
 — Если поле replyLanguage равно "ru", все 5 answers должны быть на русском языке.
 — Поле reason всегда пиши на русском языке.
 — Если answers не на русском языке, добавь русский перевод каждого варианта в answerTranslations.
+— Если последнее сообщение гостя начинается с приветствия, лучший ответ тоже должен начинаться с короткого приветствия на языке гостя.
 
 2. Факты:
 — Не придумывай цены, наличие, услуги и расстояния.
 — Используй hotelData.rooms и hotelData.availability.
 — Учитывай hotelData.objectInfo.rules. Если правило там есть, отвечай уверенно.
+— Учитывай hotelData.objectInfo.description и hotelData.objectInfo.examples как рабочую инструкцию владельца.
 — Если в hotelData.availability есть requestedPeriod и availableRoomsCount больше 0, обязательно используй это: скажи, что на эти даты есть свободные номера.
 — Если в hotelData.availability есть requestedMonth, но requestedPeriod пустой, гость указал только месяц. Не утверждай наличие на конкретные даты; попроси точные даты и мягко предложи проверить номера на этот месяц.
 — Если гость указал количество людей, а availableTotalPlaces хватает, мягко веди к подбору/бронированию для этой группы.
@@ -289,6 +291,13 @@ const AI_REPLY_SYSTEM_PROMPT = `Ты — помощник оператора п�
 }
 
 Поле reason и answerTranslations видит только оператор. Гостю они не отправляются.`;
+
+const AI_REPLY_OUTPUT_CONTRACT = `Техническое требование:
+Ответ верни строго JSON-объектом с полями recommended, reason, answers, answerTranslations.
+answers всегда ровно 5 коротких вариантов.
+reason всегда на русском языке.
+Если answers не на русском, answerTranslations содержит русский перевод каждого варианта.
+Гостю отправляется только выбранный текст из answers.`;
 
 function toSafeString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -420,11 +429,7 @@ function findLastAiDateIntent(text: string) {
   if (!matchData) return null;
   const year = new Date().getFullYear();
   const checkIn = `${year}-${String(matchData.month).padStart(2, "0")}-${String(matchData.startDay).padStart(2, "0")}`;
-  const nightsMatch = text.slice(matchData.index).match(/(\d{1,2})\s*(?:күн|кун|дн|ноч|түн|тун)/);
-  const nights = nightsMatch ? Math.max(1, Number.parseInt(nightsMatch[1], 10)) : 0;
-  let checkOut = nights
-    ? addDaysInput(checkIn, nights)
-    : `${year}-${String(matchData.month).padStart(2, "0")}-${String(matchData.endDay).padStart(2, "0")}`;
+  let checkOut = `${year}-${String(matchData.month).padStart(2, "0")}-${String(matchData.endDay).padStart(2, "0")}`;
   if (checkOut <= checkIn) checkOut = addDaysInput(checkIn, Math.max(1, matchData.endDay - matchData.startDay || 1));
   return { checkIn, checkOut };
 }
@@ -447,11 +452,12 @@ function extractAiBookingIntent(messages: Array<Record<string, unknown>>, body: 
   const usePanelDates = !explicitDateIntent && !monthMention;
   const checkIn = explicitDateIntent?.checkIn || (usePanelDates ? panelCheckIn : "");
   const checkOut = explicitDateIntent?.checkOut || (usePanelDates ? panelCheckOut : "");
-  const guestMatch = text.match(/(\d{1,2})\s*(?:адам|чел|гост)/);
+  const guestMatches = [...text.matchAll(/(\d{1,2})\s*(?:адам(?:ға|га)?|адам|чел(?:овек)?|гост(?:я|ей|ь)?)/gi)];
+  const guestMatch = guestMatches.length ? guestMatches[guestMatches.length - 1] : null;
   return {
     checkIn,
     checkOut,
-    guestsTotal: panelGuests || (guestMatch ? Number.parseInt(guestMatch[1], 10) : 0),
+    guestsTotal: guestMatch ? Number.parseInt(guestMatch[1], 10) : panelGuests,
     requestedMonth: !explicitDateIntent && monthMention ? monthMention.month : 0
   };
 }
@@ -688,7 +694,13 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
     .map((room) => compactRoomForAi(room as unknown as Record<string, unknown>))
     .slice(0, 40);
   const settingsRecord = settings && typeof settings === "object" && !Array.isArray(settings) ? settings as Record<string, unknown> : {};
+  const customChatBotPrompt = toSafeString(settingsRecord.chatBotPrompt);
+  const chatBotSystemPrompt = `${customChatBotPrompt || AI_REPLY_SYSTEM_PROMPT}\n\n${AI_REPLY_OUTPUT_CONTRACT}`;
+  const chatBotObjectDescription = toSafeString(settingsRecord.chatBotObjectDescription);
+  const chatBotExamples = toSafeString(settingsRecord.chatBotExamples);
   const objectInfo = {
+    description: chatBotObjectDescription,
+    examples: chatBotExamples,
     paymentLink: toSafeString(settingsRecord.paymentLink),
     packageGiftText: toSafeString(settingsRecord.packageGiftText),
     rules: {
@@ -728,7 +740,7 @@ app.post("/api/ai/reply-suggestions", async (request, reply) => {
   const completion = await client.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
-      { role: "system", content: AI_REPLY_SYSTEM_PROMPT },
+      { role: "system", content: chatBotSystemPrompt },
       { role: "user", content: userPrompt }
     ],
     temperature: 0.6,

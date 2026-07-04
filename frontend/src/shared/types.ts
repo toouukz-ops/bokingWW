@@ -198,6 +198,9 @@ export interface PaymentSettings {
   customAmenityOptions: string[];
   customFoodOptions: string[];
   customSleepingPlaceOptions: string[];
+  chatBotPrompt: string;
+  chatBotObjectDescription: string;
+  chatBotExamples: string;
   defaultCheckInTime: string;
   defaultCheckOutTime: string;
   weatherLocationName: string;

@@ -2,6 +2,7 @@ import {
   Banknote,
   BarChart3,
   BedDouble,
+  Bot,
   CalendarDays,
   Car,
   ClipboardPaste,
@@ -1008,6 +1009,9 @@ export function BookingPanel() {
   const [customAmenityOptions, setCustomAmenityOptions] = useState<string[]>([]);
   const [customFoodOptions, setCustomFoodOptions] = useState<string[]>([]);
   const [customSleepingPlaceOptions, setCustomSleepingPlaceOptions] = useState<string[]>([]);
+  const [chatBotPrompt, setChatBotPrompt] = useState("");
+  const [chatBotObjectDescription, setChatBotObjectDescription] = useState("");
+  const [chatBotExamples, setChatBotExamples] = useState("");
   const [newQuickPhrase, setNewQuickPhrase] = useState("");
   const [isQuickPhraseFormOpen, setIsQuickPhraseFormOpen] = useState(false);
   const [draggedQuickPhraseIndex, setDraggedQuickPhraseIndex] = useState<number | null>(null);
@@ -2294,6 +2298,9 @@ export function BookingPanel() {
     setCustomAmenityOptions(settings.customAmenityOptions);
     setCustomFoodOptions(settings.customFoodOptions);
     setCustomSleepingPlaceOptions(settings.customSleepingPlaceOptions);
+    setChatBotPrompt(settings.chatBotPrompt);
+    setChatBotObjectDescription(settings.chatBotObjectDescription);
+    setChatBotExamples(settings.chatBotExamples);
     saveCustomCatalogOptionsToLocal(settings.customAmenityOptions, settings.customFoodOptions);
     setDefaultCheckInTime(settings.defaultCheckInTime);
     setWeatherLocationName(settings.weatherLocationName);
@@ -2350,6 +2357,9 @@ export function BookingPanel() {
       customAmenityOptions,
       customFoodOptions,
       customSleepingPlaceOptions,
+      chatBotPrompt,
+      chatBotObjectDescription,
+      chatBotExamples,
       defaultCheckInTime,
       defaultCheckOutTime: DEFAULT_CHECK_OUT_TIME,
       weatherLocationName,
@@ -4587,6 +4597,17 @@ export function BookingPanel() {
     const nextFields = removeRecordKey(packageCustomFields, fieldId);
     setPackageCustomFields(nextFields);
     await savePaymentSettings(buildPaymentSettingsPatch({ packageCustomFields: nextFields }));
+  }
+
+  async function handleChatBotSettingsSave(settings: { examples: string; objectDescription: string; prompt: string }) {
+    setChatBotPrompt(settings.prompt);
+    setChatBotObjectDescription(settings.objectDescription);
+    setChatBotExamples(settings.examples);
+    await savePaymentSettings(buildPaymentSettingsPatch({
+      chatBotPrompt: settings.prompt,
+      chatBotObjectDescription: settings.objectDescription,
+      chatBotExamples: settings.examples
+    }));
   }
 
   async function handleServicePasswordChange(value: string) {
@@ -7793,6 +7814,9 @@ export function BookingPanel() {
           packageGiftText={packageGiftText}
           packageIncludeAmenities={packageIncludeAmenities}
           packageMinRooms={packageMinRooms}
+          chatBotPrompt={chatBotPrompt}
+          chatBotObjectDescription={chatBotObjectDescription}
+          chatBotExamples={chatBotExamples}
           servicePassword={servicePassword}
           agreementHoldMinutes={agreementHoldMinutes}
           reservationReminderTime={reservationReminderTime}
@@ -7834,6 +7858,7 @@ export function BookingPanel() {
           onPackageSettingsChange={handlePackageSettingsChange}
           onPackageCustomFieldChange={handlePackageCustomFieldChange}
           onPackageCustomFieldDelete={handlePackageCustomFieldDelete}
+          onChatBotSettingsSave={handleChatBotSettingsSave}
           onServicePasswordChange={handleServicePasswordChange}
           onOperatorNameSave={handleOperatorNameSave}
           onAgreementHoldMinutesChange={handleAgreementHoldMinutesChange}
@@ -11327,6 +11352,9 @@ function SettingsModal({
   packageGiftText,
   packageIncludeAmenities,
   packageMinRooms,
+  chatBotPrompt,
+  chatBotObjectDescription,
+  chatBotExamples,
   servicePassword,
   agreementHoldMinutes,
   reservationReminderTime,
@@ -11368,6 +11396,7 @@ function SettingsModal({
   onPackageSettingsChange,
   onPackageCustomFieldChange,
   onPackageCustomFieldDelete,
+  onChatBotSettingsSave,
   onServicePasswordChange,
   onOperatorNameSave,
   onAgreementHoldMinutesChange,
@@ -11409,6 +11438,9 @@ function SettingsModal({
   packageGiftText: string;
   packageIncludeAmenities: boolean;
   packageMinRooms: number;
+  chatBotPrompt: string;
+  chatBotObjectDescription: string;
+  chatBotExamples: string;
   servicePassword: string;
   agreementHoldMinutes: number;
   reservationReminderTime: string;
@@ -11462,6 +11494,7 @@ function SettingsModal({
   }) => void;
   onPackageCustomFieldChange: (fieldId: string, value: string) => void;
   onPackageCustomFieldDelete: (fieldId: string) => void;
+  onChatBotSettingsSave: (settings: { examples: string; objectDescription: string; prompt: string }) => Promise<void>;
   onServicePasswordChange: (value: string) => void;
   onOperatorNameSave: (value: string) => Promise<void>;
   onAgreementHoldMinutesChange: (value: number) => void;
@@ -11486,6 +11519,10 @@ function SettingsModal({
   const [localPackageGift, setLocalPackageGift] = useState(packageGiftText);
   const [localPackageMinRooms, setLocalPackageMinRooms] = useState(String(packageMinRooms));
   const [localPackageIncludeAmenities, setLocalPackageIncludeAmenities] = useState(packageIncludeAmenities);
+  const [localChatBotPrompt, setLocalChatBotPrompt] = useState(chatBotPrompt);
+  const [localChatBotObjectDescription, setLocalChatBotObjectDescription] = useState(chatBotObjectDescription);
+  const [localChatBotExamples, setLocalChatBotExamples] = useState(chatBotExamples);
+  const [chatBotSaveState, setChatBotSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [localOperatorName, setLocalOperatorName] = useState(operatorName);
   const [operatorSaveState, setOperatorSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [menuBulkPricePercent, setMenuBulkPricePercent] = useState(0);
@@ -11508,7 +11545,7 @@ function SettingsModal({
     rooms: true
   });
   const [activeSettingsSection, setActiveSettingsSection] = useState<
-    "payment" | "company" | "links" | "gallery" | "menu" | "dialogs" | "package" | "inventory" | "weather" | "backup" | "service" | "users"
+    "payment" | "company" | "links" | "gallery" | "menu" | "dialogs" | "chatbot" | "package" | "inventory" | "weather" | "backup" | "service" | "users"
   >("payment");
   const [customFieldRequest, setCustomFieldRequest] = useState<{
     existingValues: Record<string, string>;
@@ -11526,6 +11563,7 @@ function SettingsModal({
     { id: "gallery", label: "Галерея", icon: Image },
     { id: "menu", label: "Меню", icon: Utensils },
     { id: "dialogs", label: "Диалоги", icon: Copy },
+    { id: "chatbot", label: "Чат-бот", icon: Bot },
     { id: "package", label: "Прайс / пакет", icon: Hotel },
     { id: "inventory", label: "Допместа", icon: BedDouble },
     { id: "weather", label: "Погода и время", icon: CloudSun },
@@ -11538,6 +11576,18 @@ function SettingsModal({
   useEffect(() => {
     setLocalOperatorName(operatorName);
   }, [operatorName]);
+
+  useEffect(() => {
+    setLocalChatBotPrompt(chatBotPrompt);
+  }, [chatBotPrompt]);
+
+  useEffect(() => {
+    setLocalChatBotObjectDescription(chatBotObjectDescription);
+  }, [chatBotObjectDescription]);
+
+  useEffect(() => {
+    setLocalChatBotExamples(chatBotExamples);
+  }, [chatBotExamples]);
 
   useEffect(() => {
     setLocalExtraPlaceAdultPercent(String(inventoryExtraPlaceAdultPercent));
@@ -11648,6 +11698,21 @@ function SettingsModal({
       includeAmenities: localPackageIncludeAmenities,
       minRooms: toNumber(localPackageMinRooms, packageMinRooms)
     });
+  }
+
+  async function saveChatBotSettings() {
+    setChatBotSaveState("saving");
+    try {
+      await onChatBotSettingsSave({
+        prompt: localChatBotPrompt.trim(),
+        objectDescription: localChatBotObjectDescription.trim(),
+        examples: localChatBotExamples.trim()
+      });
+      setChatBotSaveState("saved");
+      window.setTimeout(() => setChatBotSaveState("idle"), 1800);
+    } catch {
+      setChatBotSaveState("error");
+    }
   }
 
   async function loadSavedChatDialogs() {
@@ -11820,6 +11885,53 @@ function SettingsModal({
             ) : (
               <p className="gpb-settings-note">Диалогов пока нет. Они появятся здесь после открытия чатов в WhatsApp.</p>
             )}
+          </section>
+          <section className={`gpb-settings-panel ${activeSettingsSection === "chatbot" ? "" : "is-hidden"}`}>
+            <div className="gpb-editor-title">
+              <Bot size={20} />
+              <h2>Чат-бот</h2>
+            </div>
+            <p className="gpb-settings-note">Эти тексты отправляются агенту вместе с перепиской, базой номеров и доступностью. Меняйте их, если нужно скорректировать стиль продаж или правила объекта.</p>
+            <label className="gpb-wide-label">
+              Промпт
+              <textarea
+                rows={16}
+                value={localChatBotPrompt}
+                onChange={(event) => {
+                  setLocalChatBotPrompt(event.target.value);
+                  if (chatBotSaveState !== "idle") setChatBotSaveState("idle");
+                }}
+              />
+            </label>
+            <label className="gpb-wide-label">
+              Описание объекта
+              <textarea
+                rows={7}
+                value={localChatBotObjectDescription}
+                onChange={(event) => {
+                  setLocalChatBotObjectDescription(event.target.value);
+                  if (chatBotSaveState !== "idle") setChatBotSaveState("idle");
+                }}
+              />
+            </label>
+            <label className="gpb-wide-label">
+              Примеры вопросов и ответов
+              <textarea
+                rows={10}
+                value={localChatBotExamples}
+                onChange={(event) => {
+                  setLocalChatBotExamples(event.target.value);
+                  if (chatBotSaveState !== "idle") setChatBotSaveState("idle");
+                }}
+              />
+            </label>
+            <div className="gpb-settings-panel-actions">
+              <button className="gpb-primary" type="button" onClick={saveChatBotSettings} disabled={chatBotSaveState === "saving"}>
+                {chatBotSaveState === "saving" ? "Сохраняю..." : "Сохранить чат-бота"}
+              </button>
+              {chatBotSaveState === "saved" ? <span className="gpb-settings-save-status">Сохранено</span> : null}
+              {chatBotSaveState === "error" ? <span className="gpb-settings-save-status is-error">Ошибка сохранения</span> : null}
+            </div>
           </section>
           <div className="gpb-settings-column gpb-settings-links-column">
             <section className={`gpb-settings-panel ${activeSettingsSection === "payment" ? "" : "is-hidden"}`}>

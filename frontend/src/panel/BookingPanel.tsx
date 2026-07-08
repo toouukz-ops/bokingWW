@@ -20221,9 +20221,17 @@ function canAddExtraPlaceToRoom(roomId: string, currentMap: Record<string, Extra
 function calculateReservationExtraPlacesCharge(reservation: Reservation, rooms: Room[]) {
   const inventoryByRoomId = reservation.extraInventoryByRoomId ?? {};
   const items = getReservationItems(reservation, rooms);
+  const stayItems = items.filter((item) => {
+    const room = rooms.find((candidate) => candidate.id === item.roomId);
+    return room && !isHourlyBookingObject(room);
+  });
+  const useReservationPeriod = stayItems.length > 0 && !reservationItemsHaveDifferentPeriods(stayItems);
   return items.reduce((sum, item) => {
     const room = rooms.find((candidate) => candidate.id === item.roomId);
-    return room ? sum + calculateRoomExtraPlacesCharge(inventoryByRoomId[room.id], room, item.checkIn, item.checkOut, reservation) : sum;
+    if (!room) return sum;
+    const checkIn = useReservationPeriod && !isHourlyBookingObject(room) ? reservation.checkIn : item.checkIn;
+    const checkOut = useReservationPeriod && !isHourlyBookingObject(room) ? reservation.checkOut : item.checkOut;
+    return sum + calculateRoomExtraPlacesCharge(inventoryByRoomId[room.id], room, checkIn, checkOut, reservation);
   }, 0);
 }
 
@@ -21234,12 +21242,12 @@ function getReservationGuestCount(reservation: Reservation) {
   return adults + teenagers + children;
 }
 
-function formatReservationAveragePerPersonLine(reservation: Reservation, nights: number) {
+function formatReservationAveragePerPersonLine(reservation: Reservation, nights: number, total = reservation.total) {
   const guests = getReservationGuestCount(reservation);
   const stayNights = Math.max(0, nights);
-  if (!guests || !stayNights || !reservation.total) return "";
+  if (!guests || !stayNights || !total) return "";
 
-  const average = Math.round(reservation.total / guests / stayNights);
+  const average = Math.round(total / guests / stayNights);
   return `*| Средняя на человека: ${formatPrice(average)}*`;
 }
 
@@ -23373,6 +23381,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     const room = rooms.find((candidate) => candidate.id === item.roomId);
     return room && isHourlyBookingObject(room) ? sum + item.total : sum;
   }, 0);
+  const messageFinancials = calculateReservationMessageFinancials(reservation, bookedRooms, reservationItems);
   const hourlyReservationLines = hourlyRooms
     .map((room) => {
       const item = reservationItems.find((candidate) => candidate.roomId === room.id);
@@ -23402,7 +23411,8 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     reservation,
     uniqueNightlyPeriods.length <= 1
       ? getNightsCount(nightlyReservationItems[0]?.checkIn ?? reservation.checkIn, nightlyReservationItems[0]?.checkOut ?? reservation.checkOut)
-      : getNightsCount(reservation.checkIn, reservation.checkOut)
+      : getNightsCount(reservation.checkIn, reservation.checkOut),
+    messageFinancials.total
   );
   const summaryLines = hasOnlyHourlyRooms ? "" : [
     "*Итого:*",
@@ -23412,18 +23422,19 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     sleepingPlaceTotal > 0 ? `| Спальных мест: ${formatPlaceCount(sleepingPlaceTotal)}` : "",
     reservation.breakfastIncluded === false && reservation.breakfastDiscountAmount ? `| Без завтрака: -${formatPrice(reservation.breakfastDiscountAmount)}` : "",
     hourlyRoomTotal > 0 ? `| Сауна с бассейном: ${formatPrice(hourlyRoomTotal)}` : "",
-    `| Сумма: ${formatPrice(reservation.subtotal)}`,
-    reservation.discountPercent && reservation.discountAmount > 0 ? `| Скидка: ${reservation.discountPercent}% (${formatPrice(reservation.discountAmount)})` : "",
-    reservation.discountPercent && reservation.discountAmount > 0 ? `*| Сумма со скидкой: ${formatPrice(reservation.total)}*` : "",
+    `| Сумма: ${formatPrice(messageFinancials.subtotal)}`,
+    reservation.discountPercent && messageFinancials.discountAmount > 0 ? `| Скидка: ${reservation.discountPercent}% (${formatPrice(messageFinancials.discountAmount)})` : "",
+    reservation.discountPercent && messageFinancials.discountAmount > 0 ? `*| Сумма со скидкой: ${formatPrice(messageFinancials.total)}*` : "",
     averagePerPersonLine
   ].filter(Boolean).join("\n");
   const extraBed = reservation.extraBed && !extraInventoryTotalCount ? "\nДоп. кровать: по согласованию включена" : "";
   const comment = formatReservationComment(reservation.comment);
-  const balance = Math.max(0, reservation.total - reservation.prepayment);
-  const fullPaymentMode = reservation.prepayment >= reservation.total;
+  const paymentAmount = reservation.prepaymentReceivedAt ? reservation.prepayment : messageFinancials.prepayment;
+  const balance = Math.max(0, messageFinancials.total - paymentAmount);
+  const fullPaymentMode = paymentAmount >= messageFinancials.total;
   const payment = reservation.prepaymentReceivedAt
-    ? `\n*${fullPaymentMode ? "Оплата внесена" : "Предоплата внесена"}: ${formatPrice(reservation.prepayment)}*\nОстаток к оплате: ${formatPrice(balance)}`
-    : `\n\n*${fullPaymentMode ? "К оплате 100%" : "Предоплата 50%"}: ${formatPrice(reservation.prepayment)}*${reservation.paymentLink ? `\n${reservation.paymentLink}` : ""}`;
+    ? `\n*${fullPaymentMode ? "Оплата внесена" : "Предоплата внесена"}: ${formatPrice(paymentAmount)}*\nОстаток к оплате: ${formatPrice(balance)}`
+    : `\n\n*${fullPaymentMode ? "К оплате 100%" : "Предоплата 50%"}: ${formatPrice(paymentAmount)}*${reservation.paymentLink ? `\n${reservation.paymentLink}` : ""}`;
   const stayDates = hasNightlyRooms
     ? hasDifferentRoomPeriods
       ? ""
@@ -23447,6 +23458,51 @@ ${stayDates}
 ${breakfastLine ? breakfastLine.trim() : ""}
 ${petLine ? petLine.trim() : ""}
 ${[roomLines, hourlyReservationLines].filter(Boolean).join("\n\n")}${extraBed}${extraInventory}${comment}${summaryLines ? `\n\n${summaryLines}` : ""}${payment}${bookingCondition ? `\n\n${bookingCondition}` : ""}`;
+}
+
+function calculateReservationMessageFinancials(reservation: Reservation, rooms: Room[], reservationItems: ReservationItem[]) {
+  const inventoryByRoomId = filterExtraInventoryByRooms(
+    reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation),
+    rooms
+  );
+  const extraInventoryTotalCount = getExtraInventoryTotalCount(inventoryByRoomId);
+  if (!extraInventoryTotalCount) {
+    return {
+      discountAmount: reservation.discountAmount,
+      prepayment: reservation.prepayment,
+      subtotal: reservation.subtotal,
+      total: reservation.total
+    };
+  }
+
+  const stayItems = reservationItems.filter((item) => {
+    const room = rooms.find((candidate) => candidate.id === item.roomId);
+    return room && !isHourlyBookingObject(room);
+  });
+  const useReservationPeriod = stayItems.length > 0 && !reservationItemsHaveDifferentPeriods(stayItems);
+  const roomTotal = reservationItems.reduce((sum, item) => {
+    const room = rooms.find((candidate) => candidate.id === item.roomId);
+    if (!room) return sum;
+    const checkIn = useReservationPeriod && !isHourlyBookingObject(room) ? reservation.checkIn : item.checkIn;
+    const checkOut = useReservationPeriod && !isHourlyBookingObject(room) ? reservation.checkOut : item.checkOut;
+    return sum + calculateRoomStayPrice(room, checkIn, checkOut, reservation.hourlyHours);
+  }, 0);
+  const extraInventoryTotal = calculateReservationExtraPlacesCharge(
+    { ...reservation, extraInventoryByRoomId: inventoryByRoomId },
+    rooms
+  );
+  const breakfastDiscountAmount = reservation.breakfastIncluded === false ? Math.max(0, reservation.breakfastDiscountAmount || 0) : 0;
+  const subtotal = Math.max(0, roomTotal + extraInventoryTotal - breakfastDiscountAmount);
+  const discountPercent = clampNumber(reservation.discountPercent || 0, 0, 100);
+  const discountAmount = Math.round(subtotal * discountPercent / 100);
+  const total = Math.max(0, subtotal - discountAmount);
+
+  return {
+    discountAmount,
+    prepayment: Math.round(total * 0.5),
+    subtotal,
+    total
+  };
 }
 
 function getReservationFoodSummary(rooms: Room[], breakfastIncluded: boolean, extraInventoryCount = 0, guestBreakfastCount = 0) {

@@ -20239,7 +20239,7 @@ function createLegacyExtraInventoryPlacement(typeId: string, label: string, inde
 function getRoomExtraPlaceDailyPrice(room: Room, date: string, guestType: ExtraGuestType, adultPercent = 100, teenPercent = 50, childPercent = 0) {
   const roomPrice = Math.max(0, getRoomPriceForDate(room, date));
   const basePlaces = Math.max(1, calculateRoomSleepingPlacesTotal(room));
-  const percent = guestType === "child" ? childPercent : guestType === "teen" ? teenPercent : Math.max(100, adultPercent);
+  const percent = guestType === "child" ? childPercent : guestType === "teen" ? teenPercent : adultPercent;
   return Math.round(roomPrice / basePlaces * clampNumber(percent, 0, 300) / 100);
 }
 

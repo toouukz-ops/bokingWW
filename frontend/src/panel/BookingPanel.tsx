@@ -25137,16 +25137,28 @@ async function sendRoomPhotosToActiveWhatsAppChat(room: Room, checkInTime = DEFA
 }
 
 async function sendRoomVideoToActiveWhatsAppChat(room: Room) {
-  const firstVideo = room.videoPaths[0];
-  if (!firstVideo) {
+  if (!room.videoPaths.length) {
     return false;
   }
 
-  const videoFile = await createRawMediaFileFromPath(firstVideo);
   const caption = shouldShowObjectNumber(room)
     ? `Видео: ${room.number ? `${getObjectTypeLabel(room)} ${room.number}` : getObjectTypeLabel(room)}\n${room.title}`
     : room.title || getObjectTypeLabel(room);
-  return sendImageFileToActiveWhatsAppChat(videoFile, caption);
+
+  for (let index = 0; index < room.videoPaths.length; index += 1) {
+    const videoFile = await createRawMediaFileFromPath(room.videoPaths[index]);
+    const sent = await sendImageFileToActiveWhatsAppChat(videoFile, index === 0 ? caption : "");
+    if (!sent) {
+      return false;
+    }
+
+    if (index < room.videoPaths.length - 1) {
+      await waitForElement(findWhatsAppMessageInput, 8000);
+      await waitForDelay(1400);
+    }
+  }
+
+  return true;
 }
 
 function buildObjectGallerySinglePhotoCaption(path: string, title: string, descriptions: Record<string, string>) {

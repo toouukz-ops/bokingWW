@@ -21227,18 +21227,19 @@ function formatReservationSummaryGuestLine(reservation: Reservation) {
   return `| Гости: ${adults} взр. / ${teenagers} подрост. / ${children} дет. / всего ${total}`;
 }
 
-function getReservationWeightedGuestCount(reservation: Reservation) {
+function getReservationGuestCount(reservation: Reservation) {
   const adults = Math.max(0, reservation.adults || 0);
   const teenagers = Math.max(0, reservation.teenagers || 0);
-  return adults + teenagers * 0.5;
+  const children = Math.max(0, reservation.children || 0);
+  return adults + teenagers + children;
 }
 
 function formatReservationAveragePerPersonLine(reservation: Reservation, nights: number) {
-  const weightedGuests = getReservationWeightedGuestCount(reservation);
+  const guests = getReservationGuestCount(reservation);
   const stayNights = Math.max(0, nights);
-  if (!weightedGuests || !stayNights || !reservation.total) return "";
+  if (!guests || !stayNights || !reservation.total) return "";
 
-  const average = Math.round(reservation.total / weightedGuests / stayNights);
+  const average = Math.round(reservation.total / guests / stayNights);
   return `*| Средняя на человека: ${formatPrice(average)}*`;
 }
 

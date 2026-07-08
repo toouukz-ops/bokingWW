@@ -1119,6 +1119,7 @@ export function BookingPanel() {
   const activeChatRef = useRef<ActiveChat | null>(null);
   const isRestoringChatDraftRef = useRef(false);
   const suppressActiveChatSyncRef = useRef(false);
+  const clearedBookingPhoneRef = useRef("");
   const recentContactExtractionAtRef = useRef(0);
   const saveChatDraftTimerRef = useRef<number | null>(null);
   const draftCacheRef = useRef<Record<string, ChatBookingDraft>>({});
@@ -2979,11 +2980,14 @@ export function BookingPanel() {
   async function clearCurrentBooking() {
     const nextCheckIn = getDefaultCheckInDate();
     const nextCheckOut = getDefaultCheckOutDate();
+    const currentPhone = normalizePhoneSearch(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
     setClearBookingState("clearing");
     if (saveChatDraftTimerRef.current) {
       window.clearTimeout(saveChatDraftTimerRef.current);
     }
+    clearedBookingPhoneRef.current = currentPhone;
     setSelectedBookingRoomIds([]);
+    setSelectedRoomId("");
     setRoomDateOverrides({});
     setCheckIn(nextCheckIn);
     setCheckOut(nextCheckOut);
@@ -3015,12 +3019,13 @@ export function BookingPanel() {
     setChatStartedAt("");
     setLastReservation(null);
     setAgreementSent(false);
+    setAgreementEverSent(false);
     setCatalogStatus(undefined);
     setCatalogStatusAt("");
     setSendState("idle");
     if (activeChat) {
       await saveCachedChatBookingDraft(activeChat.id, {
-        selectedRoomId,
+        selectedRoomId: "",
         selectedBookingRoomIds: [],
         roomDateOverrides: {},
         checkIn: nextCheckIn,
@@ -3058,7 +3063,7 @@ export function BookingPanel() {
         catalogStatus: undefined,
         catalogStatusAt: undefined,
         agreementSent: false,
-        agreementEverSent,
+        agreementEverSent: false,
         lastReservation: null,
         updatedAt: new Date().toISOString()
       });
@@ -3094,6 +3099,7 @@ export function BookingPanel() {
     if (lastReservation || !guestPhone.trim()) return;
     const currentPhone = normalizePhoneSearch(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
     if (!currentPhone) return;
+    if (clearedBookingPhoneRef.current && clearedBookingPhoneRef.current === currentPhone) return;
     const matchingReservation = findBestActiveReservationForPhone(currentPhone);
     if (!matchingReservation) return;
     const matchingOverrides = buildRoomDateOverridesFromReservation(matchingReservation);

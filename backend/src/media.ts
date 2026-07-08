@@ -1,7 +1,7 @@
 import type { MultipartFile } from "@fastify/multipart";
 import { execFile } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir, stat, unlink } from "node:fs/promises";
+import { mkdir, rename, stat, unlink } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
@@ -47,36 +47,33 @@ export async function saveRoomMediaFile(roomId: string, file: MultipartFile) {
   const roomFolder = join(uploadsRoot, "rooms", sanitizeSegment(roomId));
   await mkdir(roomFolder, { recursive: true });
 
-  const normalizedExtension = mediaType === "photo" && isHeicExtension(extension)
-    ? ".jpg"
-    : mediaType === "video"
-      ? ".mp4"
-      : extension;
+  const normalizedExtension = mediaType === "photo" && isHeicExtension(extension) ? ".jpg" : extension;
   const filename = `${mediaType}-${Date.now()}-${sanitizeSegment(basename(file.filename, extension))}${normalizedExtension}`;
   const destination = join(roomFolder, filename);
+
+  let publicFilename = filename;
+  let storedDestination = destination;
 
   if (mediaType === "photo" && isHeicExtension(extension)) {
     const originalPath = join(roomFolder, `original-${Date.now()}-${sanitizeSegment(file.filename)}`);
     await pipeline(file.file, createWriteStream(originalPath));
     try {
       await convertHeicToJpeg(originalPath, destination);
-    } finally {
       await unlink(originalPath).catch(() => undefined);
+    } catch {
+      publicFilename = `${mediaType}-${Date.now()}-${sanitizeSegment(basename(file.filename, extension))}${extension}`;
+      storedDestination = join(roomFolder, publicFilename);
+      await unlink(destination).catch(() => undefined);
+      await renameUploadFile(originalPath, storedDestination);
     }
   } else if (mediaType === "video") {
-    const originalPath = join(roomFolder, `original-${Date.now()}-${sanitizeSegment(file.filename)}`);
-    await pipeline(file.file, createWriteStream(originalPath));
-    try {
-      await convertVideoToWhatsappMp4(originalPath, destination);
-    } finally {
-      await unlink(originalPath).catch(() => undefined);
-    }
+    await pipeline(file.file, createWriteStream(destination));
   } else {
     await pipeline(file.file, createWriteStream(destination));
   }
 
-  const publicPath = `/uploads/rooms/${sanitizeSegment(roomId)}/${filename}`;
-  await saveStoredMediaFile(publicPath, destination);
+  const publicPath = `/uploads/rooms/${sanitizeSegment(roomId)}/${publicFilename}`;
+  await saveStoredMediaFile(publicPath, storedDestination);
 
   return {
     mediaType,
@@ -98,6 +95,10 @@ export async function ensureWhatsappVideoFile(publicPath: string) {
     throw new Error("Invalid media path");
   }
 
+  if (isMp4LikeExtension(extname(sourcePath).toLowerCase())) {
+    return publicPath;
+  }
+
   const folder = dirname(sourcePath);
   const filename = `whatsapp-${sanitizeSegment(basename(publicPath, extname(publicPath)))}.mp4`;
   const destination = join(folder, filename);
@@ -108,9 +109,14 @@ export async function ensureWhatsappVideoFile(publicPath: string) {
     return publicDestination;
   }
 
-  await convertVideoToWhatsappMp4(sourcePath, destination);
-  await saveStoredMediaFile(publicDestination, destination);
-  return publicDestination;
+  try {
+    await convertVideoToWhatsappMp4(sourcePath, destination);
+    await saveStoredMediaFile(publicDestination, destination);
+    return publicDestination;
+  } catch {
+    await unlink(destination).catch(() => undefined);
+    return publicPath;
+  }
 }
 
 async function convertVideoToWhatsappMp4(sourcePath: string, destination: string) {
@@ -222,6 +228,14 @@ export function getLocalUploadPath(publicPath: string) {
 
 function isHeicExtension(extension: string) {
   return extension === ".heic" || extension === ".heif" || extension === ".hec";
+}
+
+async function renameUploadFile(sourcePath: string, destination: string) {
+  await rename(sourcePath, destination);
+}
+
+function isMp4LikeExtension(extension: string) {
+  return extension === ".mp4" || extension === ".m4v";
 }
 
 function clamp(value: number, min: number, max: number) {

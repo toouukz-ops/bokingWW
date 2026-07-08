@@ -312,7 +312,8 @@ export async function uploadRoomMedia(room: Room, file: File): Promise<Room> {
   });
 
   if (!response.ok) {
-    throw new Error(`Media upload failed: ${response.status}`);
+    const details = await response.text().catch(() => "");
+    throw new Error(`Media upload failed: ${response.status}${details ? ` ${details.slice(0, 500)}` : ""}`);
   }
 
   const updatedRoom = (await response.json()) as Room;

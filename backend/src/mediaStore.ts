@@ -60,6 +60,8 @@ export function getMediaContentType(publicPath: string) {
   if (extension === ".png") return "image/png";
   if (extension === ".webp") return "image/webp";
   if (extension === ".gif") return "image/gif";
+  if (extension === ".heic" || extension === ".hec") return "image/heic";
+  if (extension === ".heif") return "image/heif";
   if (extension === ".mp4" || extension === ".m4v") return "video/mp4";
   if (extension === ".mov") return "video/quicktime";
   return "application/octet-stream";

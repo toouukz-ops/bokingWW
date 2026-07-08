@@ -1032,7 +1032,8 @@ app.post("/api/rooms/:id/media", async (request, reply) => {
     return updatedRoom;
   } catch (error) {
     request.log.error(error);
-    return reply.status(400).send({ error: "Media upload failed" });
+    const details = error instanceof Error ? error.message : "Unknown upload error";
+    return reply.status(400).send({ error: "Media upload failed", details });
   }
 });
 

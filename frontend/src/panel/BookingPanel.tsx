@@ -14552,9 +14552,10 @@ function RoomCatalogModal({
       await preloadMediaBlobs(addedPaths);
       setRooms((currentRooms) => currentRooms.map((room) => (room.id === updatedRoom.id ? updatedRoom : room)));
       setSaveState("saved");
-    } catch {
+    } catch (error) {
       setSaveState("error");
-      setMediaError("Не удалось загрузить файл. Проверьте, что backend запущен: npm run dev:backend");
+      const details = error instanceof Error ? error.message : "";
+      setMediaError(`Не удалось загрузить файл.${details ? ` ${details}` : ""}`);
     } finally {
       if (photoInputRef.current) photoInputRef.current.value = "";
       if (videoInputRef.current) videoInputRef.current.value = "";

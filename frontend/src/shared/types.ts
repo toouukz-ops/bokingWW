@@ -194,6 +194,7 @@ export interface PaymentSettings {
   pricePdfLinkIds: string[];
   pricePdfIncludeGallery: boolean;
   pricePdfGroupPeriodTotals: boolean;
+  quickReplyButtons: QuickReplyButton[];
   quickPhrases: string[];
   customAmenityOptions: string[];
   customFoodOptions: string[];
@@ -233,6 +234,12 @@ export interface PaymentSettings {
   agreementHoldMinutes: number;
   reservationReminderTime: string;
   reservationReminderRepeatHours: number;
+}
+
+export interface QuickReplyButton {
+  id: string;
+  title: string;
+  text: string;
 }
 
 export type IncludedCardTemplate = "hero-thumbs-description" | "photo-description";
@@ -342,7 +349,7 @@ export type RoomStatus = "active" | "hidden" | "repair";
 export type CatalogItemCategory = "guest-room" | "staff-room" | "amenity";
 export type CatalogObjectType = "room" | "house" | "amenity" | "staff" | "sauna" | "gazebo" | "bbq" | "firepit" | "parking" | "dining";
 export type BathroomType = "inside-room" | "private-on-floor" | "shared-on-floor" | "none";
-export type SleepingPlaceType = "double-bed" | "single-bed" | "sofa" | "fixed-sofa" | "sofa-bed" | "rollaway" | "air-bed" | "custom";
+export type SleepingPlaceType = "double-bed" | "three-quarter-bed" | "single-bed" | "sofa" | "fixed-sofa" | "sofa-bed" | "rollaway" | "air-bed" | "custom";
 
 export interface SleepingPlace {
   id: string;

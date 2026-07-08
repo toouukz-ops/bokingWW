@@ -3,12 +3,12 @@ import { db } from "./db.js";
 
 const sleepingPlaceSchema = z.object({
   id: z.string().min(1),
-  type: z.enum(["double-bed", "single-bed", "sofa", "fixed-sofa", "sofa-bed", "rollaway", "air-bed", "custom"]),
+  type: z.enum(["double-bed", "three-quarter-bed", "single-bed", "sofa", "fixed-sofa", "sofa-bed", "rollaway", "air-bed", "custom"]),
   title: z.string().min(1),
   count: z.number().int().min(1),
-  placesCount: z.number().int().min(0).optional(),
-  normalCapacity: z.number().int().min(0),
-  denseCapacity: z.number().int().min(0),
+  placesCount: z.number().min(0).optional(),
+  normalCapacity: z.number().min(0),
+  denseCapacity: z.number().min(0),
   isMain: z.boolean().default(true),
   allowSharedSameGender: z.boolean().default(false),
   pairOnly: z.boolean().default(false),

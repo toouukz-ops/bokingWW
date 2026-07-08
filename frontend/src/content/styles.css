@@ -388,6 +388,14 @@ body.gpb-booking-panel-open #app {
 
 .gpb-guest-count-grid input {
   padding: 0 4px;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.gpb-guest-count-grid input::-webkit-outer-spin-button,
+.gpb-guest-count-grid input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
 }
 
 .gpb-guest-count-grid button {
@@ -542,6 +550,38 @@ body.gpb-booking-panel-open #app {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+}
+
+.gpb-info-reply-button-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border: 1px solid #d6e0e8;
+  border-radius: 8px;
+  background: #f7fafc;
+  padding: 7px;
+}
+
+.gpb-info-reply-button-panel button {
+  min-height: 30px;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #0f6b57;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #0f6b57;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 0 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gpb-info-reply-button-panel button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .gpb-quick-phrase-chip {
@@ -6419,6 +6459,74 @@ body.gpb-reservation-split-resizing {
 
 .gpb-settings-input-grid .gpb-payment-method-row {
   min-width: 0;
+}
+
+.gpb-quick-reply-settings-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.gpb-quick-reply-settings-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.gpb-quick-reply-settings-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gpb-quick-reply-settings-card header strong {
+  color: #1d2833;
+  font-size: 13px;
+}
+
+.gpb-quick-reply-settings-card header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 6px;
+  background: #eef2f5;
+  color: #53606d;
+  cursor: pointer;
+  padding: 0;
+}
+
+.gpb-quick-reply-format-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+
+.gpb-quick-reply-format-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  border: 1px solid #cfd8e3;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #25313d;
+  cursor: pointer;
+  padding: 0;
+}
+
+.gpb-quick-reply-format-toolbar button:hover {
+  border-color: #0f6b57;
+  color: #0f6b57;
 }
 
 .gpb-payment-method-row button {

@@ -267,13 +267,14 @@ export async function getRooms(): Promise<Room[]> {
   }
 }
 
-export async function saveRoom(room: Room): Promise<Room> {
+export async function saveRoom(room: Room, options: { requireServer?: boolean } = {}): Promise<Room> {
   const localRooms = await getLocalRooms();
   await saveLocalRooms(localRooms.filter((item) => item.id !== room.id).concat(room));
 
   try {
     return await saveRoomToServer(room);
-  } catch {
+  } catch (error) {
+    if (options.requireServer) throw error;
     return room;
   }
 }
@@ -577,6 +578,11 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
       const quickPhrases = Array.isArray(settings?.quickPhrases)
         ? settings.quickPhrases.filter((phrase: unknown): phrase is string => typeof phrase === "string" && phrase.trim().length > 0)
         : ["Здравствуйте!", "Вам на какое число?", "На сколько ночей?", "Сколько человек?", "Одну минуту..."];
+      const quickReplyButtons = Array.isArray(settings?.quickReplyButtons)
+        ? settings.quickReplyButtons
+          .map((item: unknown) => normalizeQuickReplyButton(item))
+          .filter((item): item is PaymentSettings["quickReplyButtons"][number] => Boolean(item))
+        : [];
       const customAmenityOptions = Array.isArray(settings?.customAmenityOptions)
         ? settings.customAmenityOptions.filter((item: unknown): item is string => typeof item === "string" && item.trim().length > 0)
         : [];
@@ -638,6 +644,7 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
         pricePdfLinkIds,
         pricePdfIncludeGallery: typeof settings?.pricePdfIncludeGallery === "boolean" ? settings.pricePdfIncludeGallery : false,
         pricePdfGroupPeriodTotals: typeof settings?.pricePdfGroupPeriodTotals === "boolean" ? settings.pricePdfGroupPeriodTotals : true,
+        quickReplyButtons,
         quickPhrases,
         customAmenityOptions,
         customFoodOptions,
@@ -953,7 +960,8 @@ async function saveRoomToServer(room: Room): Promise<Room> {
   });
 
   if (!response.ok) {
-    throw new Error(`Room save failed: ${response.status}`);
+    const details = await response.text().catch(() => "");
+    throw new Error(`Room save failed: ${response.status}${details ? ` ${details.slice(0, 500)}` : ""}`);
   }
 
   return response.json();
@@ -1003,8 +1011,18 @@ function mergeSettings(currentValue: unknown, incomingValue: unknown) {
     pricePdfLinkIds: mergeStringArrays(currentValue.pricePdfLinkIds, incomingValue.pricePdfLinkIds),
     pricePdfRoomIds: mergeStringArrays(currentValue.pricePdfRoomIds, incomingValue.pricePdfRoomIds),
     pricePdfSummaryOptions: mergeStringArrays(currentValue.pricePdfSummaryOptions, incomingValue.pricePdfSummaryOptions),
+    quickReplyButtons: mergeById(currentValue.quickReplyButtons, incomingValue.quickReplyButtons),
     quickPhrases: Array.isArray(currentValue.quickPhrases) ? currentValue.quickPhrases : incomingValue.quickPhrases
   };
+}
+
+function normalizeQuickReplyButton(item: unknown): PaymentSettings["quickReplyButtons"][number] | null {
+  if (!isPlainObject(item)) return null;
+  const title = typeof item.title === "string" ? item.title.trim() : "";
+  const text = typeof item.text === "string" ? item.text.trim() : "";
+  if (!title && !text) return null;
+  const id = typeof item.id === "string" && item.id.trim() ? item.id : `quick-reply-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  return { id, title, text };
 }
 
 function normalizeIncludedCardPage(page: unknown, photoPaths: string[]): PaymentSettings["includedCardPages"][number] | null {

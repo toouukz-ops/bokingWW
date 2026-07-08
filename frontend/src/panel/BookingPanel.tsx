@@ -2,11 +2,13 @@ import {
   Banknote,
   BarChart3,
   BedDouble,
+  Bold,
   Bot,
   CalendarDays,
   Car,
   ClipboardPaste,
   CloudSun,
+  Code2,
   Copy,
   Crop,
   Download,
@@ -15,6 +17,7 @@ import {
   Plus,
   Hotel,
   Image,
+  Italic,
   ChevronLeft,
   ChevronRight,
   Flame,
@@ -29,8 +32,10 @@ import {
   Send,
   Settings,
   Share2,
+  Strikethrough,
   Timer,
   Trash2,
+  Underline,
   Utensils,
   Users,
   Video,
@@ -84,7 +89,7 @@ import {
   uploadRoomMedia
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
-import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, PaymentSettings, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
+import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, PaymentSettings, QuickReplyButton, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -118,6 +123,10 @@ const TIMELINE_CHECKOUT_COLOR_KEY = "gpb-timeline-checkout-color";
 const DEFAULT_TIMELINE_CHECKOUT_COLOR = "#64748b";
 const TIMELINE_CLEANING_COLOR_KEY = "gpb-timeline-cleaning-color";
 const DEFAULT_TIMELINE_CLEANING_COLOR = "#7c3aed";
+
+function createQuickReplyButtonId() {
+  return `quick-reply-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
 const TIMELINE_REPAIR_COLOR_KEY = "gpb-timeline-repair-color";
 const DEFAULT_TIMELINE_REPAIR_COLOR = "#d12b2b";
 const RESERVATION_CALENDAR_LIST_HEIGHT_KEY = "gpb-reservation-calendar-list-height";
@@ -311,6 +320,7 @@ const PHONE_COUNTRY_OPTIONS = [
   { code: "+995", label: "Грузия" },
   { code: "+90", label: "Турция" },
   { code: "+971", label: "ОАЭ" },
+  { code: "+34", label: "Испания" },
   { code: "+49", label: "Германия" },
   { code: "+1", label: "США / Канада" }
 ];
@@ -443,6 +453,7 @@ const CREATE_TYPE_OPTIONS: Array<{ category: Room["category"]; objectType: Room[
 ];
 const SLEEPING_PLACE_OPTIONS: Array<{ value: SleepingPlaceType; label: string; title: string; capacity: number }> = [
   { value: "double-bed", label: "Двуспальная кровать", title: "Двуспальная кровать", capacity: 2 },
+  { value: "three-quarter-bed", label: "Полутораспальная кровать", title: "Полутораспальная кровать", capacity: 1.5 },
   { value: "single-bed", label: "Односпальная кровать", title: "Односпальная кровать", capacity: 1 },
   { value: "sofa", label: "Диван", title: "Диван", capacity: 1 },
   { value: "fixed-sofa", label: "Нераскладной диван", title: "Нераскладной диван", capacity: 0 },
@@ -1003,6 +1014,7 @@ export function BookingPanel() {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [menuUploadItemId, setMenuUploadItemId] = useState("");
   const [menuUploadError, setMenuUploadError] = useState("");
+  const [quickReplyButtons, setQuickReplyButtons] = useState<QuickReplyButton[]>([]);
   const [quickPhrases, setQuickPhrases] = useState<string[]>(DEFAULT_QUICK_PHRASES);
   const [customAmenityOptions, setCustomAmenityOptions] = useState<string[]>([]);
   const [customFoodOptions, setCustomFoodOptions] = useState<string[]>([]);
@@ -1133,14 +1145,17 @@ export function BookingPanel() {
     }),
     [checkIn, dynamicPricingEnabled, dynamicPricingMarginPercent, dynamicPricingSeasonEnd, expenseEntries, reservations, rooms]
   );
+  const reservationReminderRunKey = useMemo(
+    () => getReservationReminderRunKey(reservationReminderTime, reservationReminderRepeatHours, reservationReminderNowMs),
+    [reservationReminderNowMs, reservationReminderRepeatHours, reservationReminderTime]
+  );
   const reservationDailyReminders = useMemo(
     () => {
-      const runKey = getReservationReminderRunKey(reservationReminderTime, reservationReminderRepeatHours, reservationReminderNowMs);
-      if (!runKey) return [];
-      return buildReservationDailyReminders(reservations, pricedRooms, reservationReminderToday, runKey)
+      if (!reservationReminderRunKey) return [];
+      return buildReservationDailyReminders(reservations, pricedRooms, reservationReminderToday, reservationReminderRunKey)
         .filter((reminder) => !reservationReminderDismissals[reminder.id]);
     },
-    [pricedRooms, reservationReminderDismissals, reservationReminderNowMs, reservationReminderRepeatHours, reservationReminderTime, reservationReminderToday, reservations]
+    [pricedRooms, reservationReminderDismissals, reservationReminderRunKey, reservationReminderToday, reservations]
   );
   const manualReservationDailyReminders = useMemo(
     () => buildReservationDailyReminders(reservations, pricedRooms, reservationReminderToday, `manual-${reservationReminderToday}`),
@@ -1362,7 +1377,9 @@ export function BookingPanel() {
     [checkIn, checkInTime, checkOutTime, proposalRooms, reservations]
   );
   const hasHourlyBookingObject = proposalRooms.some(isHourlyBookingObject);
-  const extraInventoryCount = getExtraInventoryTotalCount(extraInventoryByRoomId);
+  const activeExtraInventoryByRoomId = filterExtraInventoryByRooms(extraInventoryByRoomId, proposalRooms);
+  const extraInventoryCount = getExtraInventoryTotalCount(activeExtraInventoryByRoomId);
+  const activeNeedsExtraBed = needsExtraBed && extraInventoryCount > 0;
   const extraInventoryPricingEnabled = extraInventoryCount > 0;
   const availableExtraGuestTypes = getAvailableExtraGuestTypes(guestAdults, guestTeenagers, guestChildren);
   const extraInventoryCatalogItems = useMemo(() => buildExtraInventoryCatalogItems(inventoryCustomFields), [inventoryCustomFields]);
@@ -1372,8 +1389,8 @@ export function BookingPanel() {
     checkIn,
     checkOut,
     roomDateOverrides,
-    needsExtraBed,
-    extraInventoryByRoomId,
+    activeNeedsExtraBed,
+    activeExtraInventoryByRoomId,
     extraInventoryCount,
     hourlyHours,
     discountPercent,
@@ -2020,7 +2037,7 @@ export function BookingPanel() {
     defaultCheckInTime,
     extraBedType,
     extraInventoryPricingEnabled,
-    extraInventoryByRoomId,
+    activeExtraInventoryByRoomId,
     roomDateOverrides,
     rollawayCount,
     breakfastIncluded,
@@ -2292,6 +2309,7 @@ export function BookingPanel() {
     setPricePdfLinkIds(settings.pricePdfLinkIds);
     setIncludeGalleryInPricePdf(settings.pricePdfIncludeGallery);
     setPricePdfGroupPeriodTotals(settings.pricePdfGroupPeriodTotals);
+    setQuickReplyButtons(settings.quickReplyButtons);
     setQuickPhrases(settings.quickPhrases);
     setCustomAmenityOptions(settings.customAmenityOptions);
     setCustomFoodOptions(settings.customFoodOptions);
@@ -2351,6 +2369,7 @@ export function BookingPanel() {
       pricePdfLinkIds,
       pricePdfIncludeGallery: includeGalleryInPricePdf,
       pricePdfGroupPeriodTotals,
+      quickReplyButtons,
       quickPhrases,
       customAmenityOptions,
       customFoodOptions,
@@ -2416,11 +2435,11 @@ export function BookingPanel() {
       teenagers: guestTeenagers,
       children: guestChildren,
       hasPet,
-      extraBed: needsExtraBed,
+      extraBed: activeNeedsExtraBed,
       extraBedType,
       airMattressCount,
       rollawayCount,
-      extraInventoryByRoomId,
+      extraInventoryByRoomId: activeExtraInventoryByRoomId,
       extraInventoryChargeEnabled: extraInventoryPricingEnabled,
       inventoryAirBedPrice,
       inventoryRollawayPrice,
@@ -2428,7 +2447,7 @@ export function BookingPanel() {
       inventoryExtraPlaceAdultPercent,
       inventoryExtraPlaceTeenPercent,
       inventoryExtraPlaceChildPercent,
-      extraInventoryManual,
+      extraInventoryManual: extraInventoryManual && extraInventoryCount > 0,
       hourlyHours,
       discountPercent,
       packageDiscountEnabled,
@@ -2493,6 +2512,7 @@ export function BookingPanel() {
     const chatPhone = formatPhoneDigits(chat.phone || "");
     const phoneBelongsToChat = !normalizedPhone || !chatPhone || phonesMatchForContactLookup(chatPhone, normalizedPhone);
     const phoneChatId = normalizedPhone ? createChatId(`phone:${normalizedPhone}`) : "";
+    const shouldSaveOnlyPhoneAlias = Boolean(normalizedPhone && phoneChatId && !chatPhone && chat.id.startsWith("title:"));
 
     if (!phoneBelongsToChat) {
       void sendDebugLog("chat-draft-save-blocked-phone-mismatch", {
@@ -2508,7 +2528,9 @@ export function BookingPanel() {
       return;
     }
 
-    await saveCachedChatBookingDraft(chat.id, draft);
+    if (!shouldSaveOnlyPhoneAlias) {
+      await saveCachedChatBookingDraft(chat.id, draft);
+    }
     if (phoneChatId && phoneChatId !== chat.id) {
       const existingPhoneDraft = getCachedChatBookingDraft(phoneChatId) ?? await getChatBookingDraft(phoneChatId);
       const mergedDraft = mergeChatDraftForPhoneAlias(existingPhoneDraft ?? undefined, draft);
@@ -4678,6 +4700,11 @@ export function BookingPanel() {
     }
   }
 
+  async function handleSendQuickReplyButton(button: QuickReplyButton) {
+    if (!button.text.trim()) return;
+    await handleSendQuickPhrase(button.text);
+  }
+
   async function handleRequestAiReplySuggestions() {
     if (!activeChat?.id || aiReplyState === "loading") return;
     setAiReplyState("loading");
@@ -4725,6 +4752,18 @@ export function BookingPanel() {
     setNewQuickPhrase("");
     setIsQuickPhraseFormOpen(false);
     await savePaymentSettings(buildPaymentSettingsPatch({ quickPhrases: nextPhrases }));
+  }
+
+  async function handleQuickReplyButtonsSave(nextButtons: QuickReplyButton[]) {
+    const normalizedButtons = nextButtons
+      .map((button) => ({
+        id: button.id || createQuickReplyButtonId(),
+        title: button.title.trim(),
+        text: button.text.trim()
+      }))
+      .filter((button) => button.title || button.text);
+    setQuickReplyButtons(normalizedButtons);
+    await savePaymentSettings(buildPaymentSettingsPatch({ quickReplyButtons: normalizedButtons }));
   }
 
   async function handleDeleteQuickPhrase(phrase: string) {
@@ -4942,7 +4981,7 @@ export function BookingPanel() {
     try {
       const templateName = getGuestNameFallbackFromPhone(normalizedPhone);
       const safeName = getSafeGuestName(guestFirstName, normalizedPhone);
-      const contactName = resolveGuestNameForPhone(guestFirstName, normalizedPhone) || templateName || safeName || guestFirstName;
+      const contactName = templateName || safeName || guestFirstName;
       if (contactName && contactName !== guestFirstName) setGuestFirstName(contactName);
       debugContactFlow("save-contact-name-resolved", { templateName, safeName, contactName });
 
@@ -5264,6 +5303,7 @@ export function BookingPanel() {
       : paymentReceivedAt
         ? reservationPrepayment
         : lastReservation?.paidAmount ?? 0;
+    const reservationExtraInventoryByRoomId = activeExtraInventoryByRoomId;
     const reservationItems = buildReservationItemsFromRooms(
       proposalRooms,
       checkIn,
@@ -5271,7 +5311,7 @@ export function BookingPanel() {
       reservationCheckInTime,
       reservationCheckOutTime,
       roomDateOverrides,
-      extraInventoryByRoomId,
+      reservationExtraInventoryByRoomId,
       hourlyHours,
       reservationTotals.subtotal,
       reservationTotals.discountAmount,
@@ -5313,11 +5353,11 @@ export function BookingPanel() {
       teenagers: guestTeenagers,
       children: guestChildren,
       hasPet,
-      extraBed: needsExtraBed,
+      extraBed: activeNeedsExtraBed,
       extraBedType,
       airMattressCount,
       rollawayCount,
-      extraInventoryByRoomId,
+      extraInventoryByRoomId: reservationExtraInventoryByRoomId,
       extraInventoryChargeEnabled: extraInventoryPricingEnabled,
       inventoryAirBedPrice,
       inventoryRollawayPrice,
@@ -5325,7 +5365,7 @@ export function BookingPanel() {
       inventoryExtraPlaceAdultPercent,
       inventoryExtraPlaceTeenPercent,
       inventoryExtraPlaceChildPercent,
-      extraInventoryManual,
+      extraInventoryManual: extraInventoryManual && extraInventoryCount > 0,
       hourlyHours,
       discountPercent: reservationDiscountPercent,
       subtotal: reservationTotals.subtotal,
@@ -5481,6 +5521,7 @@ export function BookingPanel() {
     const fallbackName = getSafeGuestName(guestFirstName, salePhone);
     const saleGuestName = fallbackName || guestFirstName;
     const manualComment = [`Продажа оформлена`, `Оплата: ${paymentLabel}`, bookingComment.trim()].filter(Boolean).join(". ");
+    const reservationExtraInventoryByRoomId = activeExtraInventoryByRoomId;
     const reservation: Reservation = {
       id: `reservation-${Date.now()}`,
       roomIds: proposalRooms.map((room) => room.id),
@@ -5491,7 +5532,7 @@ export function BookingPanel() {
         checkInTime,
         checkOutTime,
         roomDateOverrides,
-        extraInventoryByRoomId,
+        reservationExtraInventoryByRoomId,
         hourlyHours,
         effectiveBookingTotals.subtotal,
         effectiveBookingTotals.discountAmount,
@@ -5531,11 +5572,11 @@ export function BookingPanel() {
       teenagers: guestTeenagers,
       children: guestChildren,
       hasPet,
-      extraBed: needsExtraBed,
+      extraBed: activeNeedsExtraBed,
       extraBedType,
       airMattressCount,
       rollawayCount,
-      extraInventoryByRoomId,
+      extraInventoryByRoomId: reservationExtraInventoryByRoomId,
       extraInventoryChargeEnabled: extraInventoryPricingEnabled,
       inventoryAirBedPrice,
       inventoryRollawayPrice,
@@ -5543,7 +5584,7 @@ export function BookingPanel() {
       inventoryExtraPlaceAdultPercent,
       inventoryExtraPlaceTeenPercent,
       inventoryExtraPlaceChildPercent,
-      extraInventoryManual,
+      extraInventoryManual: extraInventoryManual && extraInventoryCount > 0,
       hourlyHours,
       discountPercent,
       subtotal: effectiveBookingTotals.subtotal,
@@ -5585,7 +5626,9 @@ export function BookingPanel() {
       ...reservation,
       status: "booked" as const
     }, existingReservation);
-    await updateReservation(confirmedReservation);
+    const saved = await updateReservation(confirmedReservation);
+    if (!saved) return;
+    dismissReservationDailyReminderForReservation(confirmedReservation.id);
     await clearRoomHoldsForReservation(confirmedReservation, true);
     setSelectedRoomId(confirmedReservation.roomIds[0] || selectedRoomId);
     setSelectedBookingRoomIds(confirmedReservation.roomIds);
@@ -5601,8 +5644,10 @@ export function BookingPanel() {
       comment: cancellationNote ? [reservation.comment, cancellationNote].filter(Boolean).join("\n") : reservation.comment,
       status: "cancelled" as const
     };
-    await updateReservation(cancelledReservation);
+    const saved = await updateReservation(cancelledReservation, { respectActiveDialogOwner: false });
+    if (!saved) return false;
     await saveAgreementDraftForReservation(cancelledReservation);
+    return true;
   }
 
   async function handleCancelReservationWithReason(reason: string) {
@@ -5612,8 +5657,10 @@ export function BookingPanel() {
       setCancelReservationTarget(null);
       return;
     }
-    await cancelReservation(cancelReservationTarget, reason);
-    setCancelReservationTarget(null);
+    const saved = await cancelReservation(cancelReservationTarget, reason);
+    if (saved) {
+      setCancelReservationTarget(null);
+    }
   }
 
   async function deleteReservationCascade(reservationId: string) {
@@ -5644,15 +5691,16 @@ export function BookingPanel() {
     setDeleteReservationTarget(null);
   }
 
-  async function updateReservation(reservation: Reservation) {
-    if (blockIfCurrentDialogOwnedByOther("reservation-save")) return;
+  async function updateReservation(reservation: Reservation, options: { respectActiveDialogOwner?: boolean } = {}) {
+    const respectActiveDialogOwner = options.respectActiveDialogOwner ?? true;
+    if (respectActiveDialogOwner && blockIfCurrentDialogOwnedByOther("reservation-save")) return false;
     const normalizedReservation = normalizeReservationPhoneIdentity(reservation);
     const existingReservation = reservations.find((item) => item.id === normalizedReservation.id)
       ?? (lastReservation?.id === normalizedReservation.id ? lastReservation : undefined);
     const dateChanged = existingReservation ? !reservationDateFieldsEqual(existingReservation, normalizedReservation) : true;
     if ((normalizedReservation.status === "pending" || normalizedReservation.status === "booked") && !normalizedReservation.isAddOnSale && dateChanged && isReservationDateInPast(normalizedReservation)) {
       setBookingDateWarning(buildPastReservationWarning(normalizedReservation));
-      return;
+      return false;
     }
     try {
       await saveReservation(normalizedReservation, { requireRemote: true });
@@ -5660,7 +5708,7 @@ export function BookingPanel() {
       const message = error instanceof Error ? error.message : String(error);
       setBookingDateWarning("Не удалось сохранить бронь на сервере. Проверьте интернет/Render и повторите действие.");
       void sendDebugLog("reservation-save-remote-error", { message, reservationId: normalizedReservation.id });
-      return;
+      return false;
     }
     await ensureGuestContactForReservation(normalizedReservation);
     setReservations((currentReservations) => currentReservations.filter((item) => item.id !== normalizedReservation.id).concat(normalizedReservation));
@@ -5668,11 +5716,23 @@ export function BookingPanel() {
       setLastReservation(normalizedReservation);
     }
     await syncReservationDraftForStatus(normalizedReservation);
+    return true;
   }
 
   function dismissReservationDailyReminder(reminder: ReservationDailyReminder) {
     setReservationReminderDismissals((currentDismissals) => {
       const nextDismissals = { ...currentDismissals, [reminder.id]: true };
+      saveStoredReservationReminderDismissals(nextDismissals);
+      return nextDismissals;
+    });
+  }
+
+  function dismissReservationDailyReminderForReservation(reservationId: string) {
+    if (!reservationReminderRunKey || !reservationId) return;
+    const reminderId = `${reservationReminderRunKey}:${reservationId}`;
+    setReservationReminderDismissals((currentDismissals) => {
+      if (currentDismissals[reminderId]) return currentDismissals;
+      const nextDismissals = { ...currentDismissals, [reminderId]: true };
       saveStoredReservationReminderDismissals(nextDismissals);
       return nextDismissals;
     });
@@ -6573,6 +6633,21 @@ export function BookingPanel() {
       </section>
 
       <section className="gpb-section gpb-quick-phrases-section">
+        {quickReplyButtons.length ? (
+          <div className="gpb-info-reply-button-panel" aria-label="Информационные быстрые ответы">
+            {quickReplyButtons.map((button) => (
+              <button
+                key={button.id}
+                type="button"
+                onClick={() => void handleSendQuickReplyButton(button)}
+                disabled={!button.text.trim() || quickPhraseSendState === "sending"}
+                title={button.text.trim() || "Текст не заполнен"}
+              >
+                {button.title.trim() || "Без названия"}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="gpb-quick-phrase-list">
           {quickPhrases.map((phrase, index) => (
             <span
@@ -7823,6 +7898,7 @@ export function BookingPanel() {
           packageGiftText={packageGiftText}
           packageIncludeAmenities={packageIncludeAmenities}
           packageMinRooms={packageMinRooms}
+          quickReplyButtons={quickReplyButtons}
           chatBotPrompt={chatBotPrompt}
           chatBotObjectDescription={chatBotObjectDescription}
           chatBotExamples={chatBotExamples}
@@ -7867,6 +7943,7 @@ export function BookingPanel() {
           onPackageSettingsChange={handlePackageSettingsChange}
           onPackageCustomFieldChange={handlePackageCustomFieldChange}
           onPackageCustomFieldDelete={handlePackageCustomFieldDelete}
+          onQuickReplyButtonsSave={handleQuickReplyButtonsSave}
           onChatBotSettingsSave={handleChatBotSettingsSave}
           onServicePasswordChange={handleServicePasswordChange}
           onOperatorNameSave={handleOperatorNameSave}
@@ -11232,7 +11309,7 @@ function getPricePdfSummaryOptionRows(summary: CatalogAvailabilitySummary): Arra
     { key: "period", label: "Период" },
     { key: "rooms", label: "Доступные номера", value: `${summary.rooms}` },
     { key: "saunas", label: "Сауна", value: `${summary.saunas}` },
-    { key: "sleepingPlaces", label: "Спальных мест", value: `${summary.sleepingPlaces}` },
+    { key: "sleepingPlaces", label: "Спальных мест", value: formatPlaceCount(summary.sleepingPlaces) },
     { key: "airBeds", label: "Надувные матрасы", value: `${summary.airBeds}` },
     { key: "rollaways", label: "Раскладушки", value: `${summary.rollaways}` },
     { key: "subtotal", label: "Стоимость до скидки" },
@@ -11371,6 +11448,7 @@ function SettingsModal({
   packageGiftText,
   packageIncludeAmenities,
   packageMinRooms,
+  quickReplyButtons,
   chatBotPrompt,
   chatBotObjectDescription,
   chatBotExamples,
@@ -11415,6 +11493,7 @@ function SettingsModal({
   onPackageSettingsChange,
   onPackageCustomFieldChange,
   onPackageCustomFieldDelete,
+  onQuickReplyButtonsSave,
   onChatBotSettingsSave,
   onServicePasswordChange,
   onOperatorNameSave,
@@ -11457,6 +11536,7 @@ function SettingsModal({
   packageGiftText: string;
   packageIncludeAmenities: boolean;
   packageMinRooms: number;
+  quickReplyButtons: QuickReplyButton[];
   chatBotPrompt: string;
   chatBotObjectDescription: string;
   chatBotExamples: string;
@@ -11513,6 +11593,7 @@ function SettingsModal({
   }) => void;
   onPackageCustomFieldChange: (fieldId: string, value: string) => void;
   onPackageCustomFieldDelete: (fieldId: string) => void;
+  onQuickReplyButtonsSave: (buttons: QuickReplyButton[]) => Promise<void>;
   onChatBotSettingsSave: (settings: { examples: string; objectDescription: string; prompt: string }) => Promise<void>;
   onServicePasswordChange: (value: string) => void;
   onOperatorNameSave: (value: string) => Promise<void>;
@@ -11538,6 +11619,8 @@ function SettingsModal({
   const [localPackageGift, setLocalPackageGift] = useState(packageGiftText);
   const [localPackageMinRooms, setLocalPackageMinRooms] = useState(String(packageMinRooms));
   const [localPackageIncludeAmenities, setLocalPackageIncludeAmenities] = useState(packageIncludeAmenities);
+  const [localQuickReplyButtons, setLocalQuickReplyButtons] = useState<QuickReplyButton[]>(quickReplyButtons);
+  const [quickReplyButtonsSaveState, setQuickReplyButtonsSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [localChatBotPrompt, setLocalChatBotPrompt] = useState(chatBotPrompt);
   const [localChatBotObjectDescription, setLocalChatBotObjectDescription] = useState(chatBotObjectDescription);
   const [localChatBotExamples, setLocalChatBotExamples] = useState(chatBotExamples);
@@ -11564,7 +11647,7 @@ function SettingsModal({
     rooms: true
   });
   const [activeSettingsSection, setActiveSettingsSection] = useState<
-    "payment" | "company" | "links" | "gallery" | "menu" | "dialogs" | "chatbot" | "package" | "inventory" | "weather" | "backup" | "service" | "users"
+    "payment" | "company" | "links" | "gallery" | "menu" | "dialogs" | "chatbot" | "quickReplies" | "package" | "inventory" | "weather" | "backup" | "service" | "users"
   >("payment");
   const [customFieldRequest, setCustomFieldRequest] = useState<{
     existingValues: Record<string, string>;
@@ -11582,6 +11665,7 @@ function SettingsModal({
     { id: "gallery", label: "Галерея", icon: Image },
     { id: "menu", label: "Меню", icon: Utensils },
     { id: "dialogs", label: "Диалоги", icon: Copy },
+    { id: "quickReplies", label: "Быстрые ответы", icon: ClipboardPaste },
     { id: "chatbot", label: "Чат-бот", icon: Bot },
     { id: "package", label: "Прайс / пакет", icon: Hotel },
     { id: "inventory", label: "Допместа", icon: BedDouble },
@@ -11599,6 +11683,10 @@ function SettingsModal({
   useEffect(() => {
     setLocalChatBotPrompt(chatBotPrompt);
   }, [chatBotPrompt]);
+
+  useEffect(() => {
+    setLocalQuickReplyButtons(quickReplyButtons);
+  }, [quickReplyButtons]);
 
   useEffect(() => {
     setLocalChatBotObjectDescription(chatBotObjectDescription);
@@ -11656,6 +11744,62 @@ function SettingsModal({
 
   function addPackageField() {
     openCustomFieldOverlay("Новое поле пакета", "Например: Бонус для группы", packageCustomFields, (fieldId) => onPackageCustomFieldChange(fieldId, ""));
+  }
+
+  function addQuickReplyButton() {
+    setLocalQuickReplyButtons((current) => current.concat({
+      id: createQuickReplyButtonId(),
+      title: "",
+      text: ""
+    }));
+    setQuickReplyButtonsSaveState("idle");
+  }
+
+  function updateQuickReplyButton(buttonId: string, patch: Partial<QuickReplyButton>) {
+    setLocalQuickReplyButtons((current) => current.map((button) => button.id === buttonId ? { ...button, ...patch } : button));
+    if (quickReplyButtonsSaveState !== "idle") setQuickReplyButtonsSaveState("idle");
+  }
+
+  function deleteQuickReplyButton(buttonId: string) {
+    setLocalQuickReplyButtons((current) => current.filter((button) => button.id !== buttonId));
+    setQuickReplyButtonsSaveState("idle");
+  }
+
+  function formatQuickReplyText(buttonId: string, format: "bold" | "italic" | "strike" | "mono" | "underline") {
+    const textarea = document.getElementById(`gpb-quick-reply-text-${buttonId}`) as HTMLTextAreaElement | null;
+    const currentButton = localQuickReplyButtons.find((button) => button.id === buttonId);
+    if (!currentButton) return;
+
+    const currentText = currentButton.text;
+    const start = textarea?.selectionStart ?? currentText.length;
+    const end = textarea?.selectionEnd ?? currentText.length;
+    const selectedText = currentText.slice(start, end) || "текст";
+    const formattedText = format === "underline"
+      ? underlineText(selectedText)
+      : wrapQuickReplyText(selectedText, format);
+    const nextText = `${currentText.slice(0, start)}${formattedText}${currentText.slice(end)}`;
+
+    setLocalQuickReplyButtons((current) => current.map((button) => button.id === buttonId ? { ...button, text: nextText } : button));
+    if (quickReplyButtonsSaveState !== "idle") setQuickReplyButtonsSaveState("idle");
+
+    window.setTimeout(() => {
+      const nextTextarea = document.getElementById(`gpb-quick-reply-text-${buttonId}`) as HTMLTextAreaElement | null;
+      if (!nextTextarea) return;
+      const cursorPosition = start + formattedText.length;
+      nextTextarea.focus();
+      nextTextarea.setSelectionRange(cursorPosition, cursorPosition);
+    }, 0);
+  }
+
+  function wrapQuickReplyText(text: string, format: "bold" | "italic" | "strike" | "mono") {
+    if (format === "bold") return `*${text}*`;
+    if (format === "italic") return `_${text}_`;
+    if (format === "strike") return `~${text}~`;
+    return `\`\`\`${text}\`\`\``;
+  }
+
+  function underlineText(text: string) {
+    return Array.from(text).map((char) => char.trim() ? `${char}\u0332` : char).join("");
   }
 
   function openCustomFieldOverlay(
@@ -11731,6 +11875,17 @@ function SettingsModal({
       window.setTimeout(() => setChatBotSaveState("idle"), 1800);
     } catch {
       setChatBotSaveState("error");
+    }
+  }
+
+  async function saveQuickReplyButtons() {
+    setQuickReplyButtonsSaveState("saving");
+    try {
+      await onQuickReplyButtonsSave(localQuickReplyButtons);
+      setQuickReplyButtonsSaveState("saved");
+      window.setTimeout(() => setQuickReplyButtonsSaveState("idle"), 1800);
+    } catch {
+      setQuickReplyButtonsSaveState("error");
     }
   }
 
@@ -11904,6 +12059,74 @@ function SettingsModal({
             ) : (
               <p className="gpb-settings-note">Диалогов пока нет. Они появятся здесь после открытия чатов в WhatsApp.</p>
             )}
+          </section>
+          <section className={`gpb-settings-panel ${activeSettingsSection === "quickReplies" ? "" : "is-hidden"}`}>
+            <div className="gpb-editor-title">
+              <ClipboardPaste size={20} />
+              <h2>Быстрые ответы</h2>
+            </div>
+            <p className="gpb-settings-note">Эти кнопки появятся сверху блока «Шаблоны ответов» и будут отправлять гостю заранее заданный текст.</p>
+            {localQuickReplyButtons.length ? (
+              <div className="gpb-quick-reply-settings-list">
+                {localQuickReplyButtons.map((button, index) => (
+                  <article className="gpb-quick-reply-settings-card" key={button.id}>
+                    <header>
+                      <strong>Кнопка {index + 1}</strong>
+                      <button type="button" onClick={() => deleteQuickReplyButton(button.id)} title="Удалить кнопку">
+                        <Trash2 size={15} />
+                      </button>
+                    </header>
+                    <label>
+                      Название кнопки
+                      <input
+                        value={button.title}
+                        onChange={(event) => updateQuickReplyButton(button.id, { title: event.target.value })}
+                        placeholder="Например: Правила отеля"
+                      />
+                    </label>
+                    <label>
+                      Текстовое поле
+                      <div className="gpb-quick-reply-format-toolbar" aria-label="Форматирование текста">
+                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => formatQuickReplyText(button.id, "bold")} title="Жирный">
+                          <Bold size={14} />
+                        </button>
+                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => formatQuickReplyText(button.id, "italic")} title="Курсив">
+                          <Italic size={14} />
+                        </button>
+                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => formatQuickReplyText(button.id, "underline")} title="Подчеркнуть">
+                          <Underline size={14} />
+                        </button>
+                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => formatQuickReplyText(button.id, "strike")} title="Зачеркнуть">
+                          <Strikethrough size={14} />
+                        </button>
+                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => formatQuickReplyText(button.id, "mono")} title="Моноширинный">
+                          <Code2 size={14} />
+                        </button>
+                      </div>
+                      <textarea
+                        id={`gpb-quick-reply-text-${button.id}`}
+                        rows={6}
+                        value={button.text}
+                        onChange={(event) => updateQuickReplyButton(button.id, { text: event.target.value })}
+                        placeholder="Текст, который отправится гостю при нажатии кнопки"
+                      />
+                    </label>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="gpb-settings-note">Кнопок пока нет.</p>
+            )}
+            <div className="gpb-settings-panel-actions">
+              <button className="gpb-settings-add-button" type="button" onClick={addQuickReplyButton}>
+                Создать кнопку
+              </button>
+              <button className="gpb-primary" type="button" onClick={() => void saveQuickReplyButtons()} disabled={quickReplyButtonsSaveState === "saving"}>
+                {quickReplyButtonsSaveState === "saving" ? "Сохраняю..." : "Сохранить"}
+              </button>
+              {quickReplyButtonsSaveState === "saved" ? <span className="gpb-settings-save-status">Сохранено</span> : null}
+              {quickReplyButtonsSaveState === "error" ? <span className="gpb-settings-save-status is-error">Ошибка сохранения</span> : null}
+            </div>
           </section>
           <section className={`gpb-settings-panel ${activeSettingsSection === "chatbot" ? "" : "is-hidden"}`}>
             <div className="gpb-editor-title">
@@ -14129,7 +14352,7 @@ function RoomCatalogModal({
 
       setSaveState("saving");
       try {
-        await Promise.all(withSortOrder(rooms).map((room) => saveRoom(room)));
+        await Promise.all(withSortOrder(rooms).map((room) => saveRoom(room, { requireServer: true })));
         setSaveState("saved");
       } catch {
         setSaveState("error");
@@ -14282,7 +14505,7 @@ function RoomCatalogModal({
     setSaveState("saving");
     try {
       const roomsToSave = withSortOrder(rooms);
-      const savedRooms = await Promise.all(roomsToSave.map((room) => saveRoom(room)));
+      const savedRooms = await Promise.all(roomsToSave.map((room) => saveRoom(room, { requireServer: true })));
       setRooms(withSortOrder(savedRooms));
       setSaveState("saved");
     } catch {
@@ -15460,7 +15683,7 @@ function CreateSleepingPlaceModal({
           </label>
           <label>
             Мест
-            <input min="0" type="number" value={placesCount} onChange={(event) => setPlacesCount(toNumber(event.target.value, 0))} />
+            <input inputMode="decimal" value={formatDecimalInput(placesCount)} onChange={(event) => setPlacesCount(toNumber(event.target.value, 0))} />
           </label>
         </div>
         <footer className="gpb-create-footer">
@@ -15849,8 +16072,12 @@ function mergeRooms(loadedRooms: Room[]) {
 }
 
 function toNumber(value: string, fallback: number) {
-  const parsed = Number(value);
+  const parsed = Number(value.replace(",", "."));
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function formatDecimalInput(value: number) {
+  return Number.isInteger(value) ? String(value) : String(value).replace(".", ",");
 }
 
 function createRoomId(number: string) {
@@ -17355,8 +17582,10 @@ function ensureWhatsAppStoreBridge() {
 
 
 function formatPhoneDigits(value: string) {
+  const trimmed = value.trim();
   const digits = value.replace(/\D/g, "");
   if (!digits) return "";
+  if (trimmed.startsWith("+") && digits.length >= 8 && digits.length <= 15) return `+${digits}`;
   if (/^8\d{10}$/.test(digits)) return digits.replace(/^8/, "+7");
   if (/^7\d{10}$/.test(digits)) return `+${digits}`;
   if (/^\d{10}$/.test(digits)) return `+7${digits}`;
@@ -17419,7 +17648,10 @@ function formatLocalPhoneInput(value: string) {
 function getPhoneForContactForm(phone: string) {
   const normalizedPhone = formatPhoneDigits(phone);
   const digits = normalizedPhone.replace(/\D/g, "");
-  if (/^7\d{10}$/.test(digits)) return digits.slice(1);
+  const matchedPrefix = [...PHONE_COUNTRY_OPTIONS]
+    .sort((left, right) => right.code.replace(/\D/g, "").length - left.code.replace(/\D/g, "").length)
+    .find((option) => digits.startsWith(option.code.replace(/\D/g, "")));
+  if (matchedPrefix) return digits.slice(matchedPrefix.code.replace(/\D/g, "").length);
   return normalizedPhone;
 }
 
@@ -19383,16 +19615,17 @@ function calculateBookingTotals(
   extraInventoryByRoomId: Record<string, ExtraInventoryItem> = {}
 ) {
   const nights = getNightsCount(checkIn, checkOut);
+  const activeExtraInventoryByRoomId = filterExtraInventoryByRooms(extraInventoryByRoomId, rooms);
   const roomTotal = rooms.reduce((sum, room) => sum + calculateRoomStayPrice(room, checkIn, checkOut, hourlyHours), 0);
   const extraBedTotal = needsExtraBed && extraInventoryCount <= 0
     ? rooms.reduce((sum, room) => sum + (room.extraBedEnabled ? room.extraBedPrice * nights : 0), 0)
     : 0;
   const extraInventoryTotal = extraInventoryChargeEnabled
-    ? calculateExtraInventoryChargeTotal(rooms, extraInventoryByRoomId, checkIn, checkOut, inventoryAirBedPrice, inventoryRollawayPrice, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceTeenPercent, inventoryExtraPlaceChildPercent, adults, teenagers, children)
+    ? calculateExtraInventoryChargeTotal(rooms, activeExtraInventoryByRoomId, checkIn, checkOut, inventoryAirBedPrice, inventoryRollawayPrice, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceTeenPercent, inventoryExtraPlaceChildPercent, adults, teenagers, children)
     : 0;
   const breakfastDiscountAmount = breakfastIncluded
     ? 0
-    : calculateBreakfastDiscountAmount(rooms, nights, getExtraInventoryMealCount(extraInventoryByRoomId), breakfastPricePerPerson);
+    : calculateBreakfastDiscountAmount(rooms, nights, getExtraInventoryMealCount(activeExtraInventoryByRoomId), breakfastPricePerPerson, adults + teenagers + children);
   const subtotal = Math.max(0, roomTotal + extraBedTotal + extraInventoryTotal - breakfastDiscountAmount);
   const discountAmount = Math.round(subtotal * clampNumber(discountPercent, 0, 100) / 100);
   const total = Math.max(0, subtotal - discountAmount);
@@ -19679,6 +19912,7 @@ function calculateBookingTotalsWithRoomDates(
   teenagers = 0,
   children = 0
 ) {
+  const activeExtraInventoryByRoomId = filterExtraInventoryByRooms(extraInventoryByRoomId, rooms);
   const hasOverrides = Object.keys(roomDateOverrides).length > 0;
   if (!hasOverrides) {
     return calculateBookingTotals(
@@ -19700,7 +19934,7 @@ function calculateBookingTotalsWithRoomDates(
       adults,
       teenagers,
       children,
-      extraInventoryByRoomId
+      activeExtraInventoryByRoomId
     );
   }
 
@@ -19716,7 +19950,7 @@ function calculateBookingTotalsWithRoomDates(
     : 0;
   const extraInventoryTotal = rooms.reduce((sum, room) => {
     const range = getRoomDateRange(room.id, checkIn, checkOut, roomDateOverrides);
-    const inventory = extraInventoryByRoomId[room.id];
+    const inventory = activeExtraInventoryByRoomId[room.id];
     return sum + (extraInventoryChargeEnabled
       ? calculateExtraInventoryItemCharge(inventory, room, range.checkIn, getNightsCount(range.checkIn, range.checkOut), inventoryAirBedPrice, inventoryRollawayPrice, inventoryExtraPlaceAdultPercent, inventoryExtraPlaceTeenPercent, inventoryExtraPlaceChildPercent, adults, teenagers, children)
       : 0);
@@ -19724,7 +19958,7 @@ function calculateBookingTotalsWithRoomDates(
   const fallbackNights = getNightsCount(checkIn, checkOut);
   const breakfastDiscountAmount = breakfastIncluded
     ? 0
-    : calculateBreakfastDiscountAmount(rooms, fallbackNights, getExtraInventoryMealCount(extraInventoryByRoomId), breakfastPricePerPerson);
+    : calculateBreakfastDiscountAmount(rooms, fallbackNights, getExtraInventoryMealCount(activeExtraInventoryByRoomId), breakfastPricePerPerson, adults + teenagers + children);
   const subtotal = Math.max(0, roomTotal + extraBedTotal + extraInventoryTotal - breakfastDiscountAmount);
   const discountAmount = Math.round(subtotal * clampNumber(discountPercent, 0, 100) / 100);
   const total = Math.max(0, subtotal - discountAmount);
@@ -19883,12 +20117,13 @@ function getDynamicTypePrice(room: Room, pricesByDate: Record<string, number>, t
   return room.weekdayPrice || room.basePrice || 0;
 }
 
-function calculateBreakfastDiscountAmount(rooms: Room[], nights: number, extraInventoryCount: number, breakfastPricePerPerson: number) {
+function calculateBreakfastDiscountAmount(rooms: Room[], nights: number, extraInventoryCount: number, breakfastPricePerPerson: number, guestCount = 0) {
   const price = Math.max(0, breakfastPricePerPerson || 0);
   if (!price || !nights) return 0;
   const stayRooms = rooms.filter(isStayBookingObject);
-  const sleepingPlaces = stayRooms.reduce((sum, room) => sum + calculateRoomSleepingPlacesTotal(room), 0) + Math.max(0, extraInventoryCount);
-  return sleepingPlaces * nights * price;
+  const fallbackBreakfastCount = stayRooms.reduce((sum, room) => sum + calculateRoomSleepingPlacesTotal(room), 0) + Math.max(0, extraInventoryCount);
+  const breakfastCount = guestCount > 0 ? guestCount : fallbackBreakfastCount;
+  return breakfastCount * nights * price;
 }
 
 function getExtraInventoryTotalCount(extraInventoryByRoomId: Record<string, ExtraInventoryItem>) {
@@ -19899,6 +20134,11 @@ function getExtraInventoryTotalCount(extraInventoryByRoomId: Record<string, Extr
 function getExtraInventoryMealCount(extraInventoryByRoomId: Record<string, ExtraInventoryItem>) {
   return Object.values(extraInventoryByRoomId).reduce((sum, item) =>
     sum + getExtraInventoryPlacements(item).filter((placement) => placement.guestType !== "child").length, 0);
+}
+
+function filterExtraInventoryByRooms(extraInventoryByRoomId: Record<string, ExtraInventoryItem>, rooms: Array<Pick<Room, "id">>) {
+  const roomIds = new Set(rooms.map((room) => room.id));
+  return Object.fromEntries(Object.entries(extraInventoryByRoomId).filter(([roomId]) => roomIds.has(roomId)));
 }
 
 function getExtraInventoryPlacements(item?: ExtraInventoryItem): ExtraInventoryPlacement[] {
@@ -20259,9 +20499,14 @@ function createSleepingPlacePatch(type: SleepingPlaceType): Partial<SleepingPlac
 function getSleepingPlaceCapacity(place: Pick<SleepingPlace, "type" | "normalCapacity">) {
   if (place.type === "fixed-sofa") return 0;
   if (place.type === "double-bed") return 2;
+  if (place.type === "three-quarter-bed") return 1.5;
   if (place.type === "sofa-bed") return 2;
   if (place.type === "custom") return Math.max(1, place.normalCapacity || 1);
   return 1;
+}
+
+function formatPlaceCount(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toLocaleString("ru-RU", { maximumFractionDigits: 1 });
 }
 
 function getSleepingPlacePlacesCount(place: Pick<SleepingPlace, "count" | "normalCapacity" | "placesCount" | "type">) {
@@ -20882,7 +21127,11 @@ function calculateReservationSleepingPlacesTotal(reservation: Reservation, rooms
   const basePlaces = rooms
     .filter(isStayBookingObject)
     .reduce((sum, room) => sum + calculateRoomSleepingPlacesTotal(room), 0);
-  return basePlaces + getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation));
+  const inventoryByRoomId = filterExtraInventoryByRooms(
+    reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation),
+    rooms
+  );
+  return basePlaces + getExtraInventoryTotalCount(inventoryByRoomId);
 }
 
 function calculateRoomSleepingPlacesTotal(room: Room) {
@@ -22972,7 +23221,7 @@ function getSocialPriceObjectMeta(room: Room, checkIn: string, checkOut: string)
   const parts = [];
   if (room.title && shouldShowObjectNumber(room)) parts.push(room.title);
   if (room.floor) parts.push(room.floor);
-  if (isStayBookingObject(room)) parts.push(`${calculateRoomSleepingPlacesTotal(room)} мест`);
+  if (isStayBookingObject(room)) parts.push(`${formatPlaceCount(calculateRoomSleepingPlacesTotal(room))} мест`);
   if (isHourlyBookingObject(room)) parts.push("по часам");
   if (isStayBookingObject(room)) parts.push(`${getNightsCount(checkIn, checkOut)} ноч.`);
   return parts.filter(Boolean).join(" · ");
@@ -22997,7 +23246,8 @@ function getRoomTotalSleepingCapacity(room: Room) {
 }
 
 function formatCapacityTitle(capacity: number) {
-  const normalizedCapacity = Math.max(1, Math.round(capacity));
+  const normalizedCapacity = Math.max(1, capacity);
+  if (!Number.isInteger(normalizedCapacity)) return `${formatPlaceCount(normalizedCapacity)}-местный`;
   const labels: Record<number, string> = {
     1: "Одноместный",
     2: "Двухместный",
@@ -23079,7 +23329,11 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
   const foodSummary = getReservationFoodSummary(
     nightlyRooms,
     reservation.breakfastIncluded !== false,
-    getExtraInventoryMealCount(reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation))
+    getExtraInventoryMealCount(filterExtraInventoryByRooms(
+      reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation),
+      bookedRooms
+    )),
+    getReservationGuestTotal(reservation)
   );
   const roomLines = reservationItems.map((item) => {
     const room = rooms.find((candidate) => candidate.id === item.roomId);
@@ -23130,7 +23384,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
       : `Сауна: ${formatKazakhDate(reservation.checkIn)} с ${reservation.checkInTime} по ${reservation.checkOutTime}, ${hourlyHours} ч.`;
     })
     .join("\n\n");
-  const extraInventoryTotalCount = getExtraInventoryTotalCount(reservation.extraInventoryByRoomId ?? {});
+  const extraInventoryTotalCount = getExtraInventoryTotalCount(filterExtraInventoryByRooms(reservation.extraInventoryByRoomId ?? {}, bookedRooms));
   const extraInventorySummaryLine = formatReservationExtraInventorySummaryLine(reservation, bookedRooms);
   const extraInventory = extraInventorySummaryLine ? `\n\n${extraInventorySummaryLine}` : "";
   const sleepingPlaceTotal = calculateReservationSleepingPlacesTotal(reservation, bookedRooms);
@@ -23153,7 +23407,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     `| Сутки: ${summaryNightsText}`,
     `| Номера: ${nightlyRooms.length}`,
     formatReservationSummaryGuestLine(reservation),
-    sleepingPlaceTotal > 0 ? `| Спальных мест: ${sleepingPlaceTotal}` : "",
+    sleepingPlaceTotal > 0 ? `| Спальных мест: ${formatPlaceCount(sleepingPlaceTotal)}` : "",
     reservation.breakfastIncluded === false && reservation.breakfastDiscountAmount ? `| Без завтрака: -${formatPrice(reservation.breakfastDiscountAmount)}` : "",
     hourlyRoomTotal > 0 ? `| Сауна с бассейном: ${formatPrice(hourlyRoomTotal)}` : "",
     `| Сумма: ${formatPrice(reservation.subtotal)}`,
@@ -23193,19 +23447,27 @@ ${petLine ? petLine.trim() : ""}
 ${[roomLines, hourlyReservationLines].filter(Boolean).join("\n\n")}${extraBed}${extraInventory}${comment}${summaryLines ? `\n\n${summaryLines}` : ""}${payment}${bookingCondition ? `\n\n${bookingCondition}` : ""}`;
 }
 
-function getReservationFoodSummary(rooms: Room[], breakfastIncluded: boolean, extraInventoryCount = 0) {
+function getReservationFoodSummary(rooms: Room[], breakfastIncluded: boolean, extraInventoryCount = 0, guestBreakfastCount = 0) {
   if (!breakfastIncluded) {
     return { header: "без завтрака", mode: "header" as const };
   }
 
-  const extraFoodSuffix = extraInventoryCount > 0 ? ` + ${extraInventoryCount}` : "";
+  const normalizedGuestBreakfastCount = Math.max(0, Math.round(guestBreakfastCount || 0));
   const breakfastCount = rooms.reduce((sum, room) => sum + getRoomBreakfastCount(room), 0);
-  const totalBreakfastCount = breakfastCount + Math.max(0, extraInventoryCount);
+  const totalBreakfastCount = normalizedGuestBreakfastCount > 0
+    ? normalizedGuestBreakfastCount
+    : breakfastCount + Math.max(0, extraInventoryCount);
+  const extraFoodSuffix = normalizedGuestBreakfastCount > 0 ? "" : extraInventoryCount > 0 ? ` + ${extraInventoryCount}` : "";
   const breakfastCountSuffix = totalBreakfastCount > 0 ? ` = ${totalBreakfastCount} ${getBreakfastWord(totalBreakfastCount)}` : "";
   const foodLabels = rooms
     .map(formatReservationRoomFood)
     .filter(Boolean);
   const uniqueFoodLabels = Array.from(new Set(foodLabels));
+
+  if (normalizedGuestBreakfastCount > 0) {
+    const sourceLabel = uniqueFoodLabels.length === 1 ? uniqueFoodLabels[0] : "Завтрак";
+    return { header: formatBreakfastFoodLabelForCount(sourceLabel, normalizedGuestBreakfastCount), mode: "header" as const };
+  }
 
   if (!uniqueFoodLabels.length) {
     return { header: `завтрак включен${extraFoodSuffix}${breakfastCountSuffix}`, mode: "header" as const };
@@ -23216,6 +23478,25 @@ function getReservationFoodSummary(rooms: Room[], breakfastIncluded: boolean, ex
   }
 
   return { header: "", mode: "per-room" as const };
+}
+
+function formatBreakfastFoodLabelForCount(label: string, count: number) {
+  const sourceLabel = /завтрак/i.test(label) ? label : "Завтрак";
+  const prefix = sourceLabel
+    .replace(/\s*=\s*\d+\s*завтрак\w*/i, "")
+    .replace(/\s+на\s+(одного|одну|один|двоих|двух|двое|троих|трех|трёх|трое|четверых|четырех|четырёх|четверо|пятерых|пяти|пятеро|шестерых|шести|шестеро|\d+\s*(?:чел|человека|человек|персон|мест|завтрак\w*)).*$/i, "")
+    .trim() || "Завтрак";
+  return `${prefix} ${getBreakfastPersonPhrase(count)} = ${count} ${getBreakfastWord(count)}`;
+}
+
+function getBreakfastPersonPhrase(count: number) {
+  if (count === 1) return "на одного";
+  if (count === 2) return "на двоих";
+  if (count === 3) return "на троих";
+  if (count === 4) return "на четверых";
+  if (count === 5) return "на пятерых";
+  if (count === 6) return "на шестерых";
+  return `на ${count} чел.`;
 }
 
 function getRoomBreakfastCount(room: Room) {
@@ -23340,7 +23621,7 @@ function buildReservationTotalMessage(reservation: Reservation, rooms: Room[]) {
     `| Сутки: ${nights}`,
     `| Номера: ${nightlyRooms.length}`,
     ...(guestSummaryLine ? [guestSummaryLine] : []),
-    ...(sleepingPlaceTotal > 0 ? [`| Спальных мест: ${sleepingPlaceTotal}`] : []),
+    ...(sleepingPlaceTotal > 0 ? [`| Спальных мест: ${formatPlaceCount(sleepingPlaceTotal)}`] : []),
     `| Сумма: ${formatPrice(reservation.subtotal)}`,
     ...(discountLine ? [discountLine] : []),
     ...(discountLine ? [`*| Сумма со скидкой: ${formatPrice(reservation.total)}*`] : []),
@@ -24310,7 +24591,7 @@ function drawPdfOfferSummary(
     ...extraInventoryLines,
     reservation && reservation.breakfastIncluded !== undefined ? `Питание: ${reservation.breakfastIncluded === false ? "без завтрака" : "завтрак включен"}` : "",
     reservation?.breakfastIncluded === false && reservation.breakfastDiscountAmount ? `Без завтрака: -${formatPrice(reservation.breakfastDiscountAmount)}` : "",
-    selectedSummaryOptions.has("sleepingPlaces") && sleepingPlacesTotal > 0 ? `Всего спальных мест: ${sleepingPlacesTotal}` : "",
+    selectedSummaryOptions.has("sleepingPlaces") && sleepingPlacesTotal > 0 ? `Всего спальных мест: ${formatPlaceCount(sleepingPlacesTotal)}` : "",
     selectedSummaryOptions.has("subtotal") ? `Стоимость до скидки: ${formatPrice(subtotal)}` : "",
     selectedSummaryOptions.has("discount") && discountPercent > 0 ? `Скидка: ${discountPercent}% (-${formatPrice(discountAmount)})` : "",
     selectedSummaryOptions.has("total") ? `Итого: ${formatPrice(total)}` : "",
@@ -24538,7 +24819,10 @@ function formatPdfExtraInventorySummaryLines(reservation: Reservation, rooms: Ro
 }
 
 function formatReservationExtraInventorySummaryLine(reservation: Reservation, rooms: Room[]) {
-  const inventoryByRoomId = reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation);
+  const inventoryByRoomId = filterExtraInventoryByRooms(
+    reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation),
+    rooms
+  );
   const totalCount = getExtraInventoryTotalCount(inventoryByRoomId);
   if (!totalCount) return "";
 
@@ -24547,7 +24831,7 @@ function formatReservationExtraInventorySummaryLine(reservation: Reservation, ro
     rooms
   );
 
-  return `Допместа всего${totalCharge ? `: (+${formatPrice(totalCharge)})` : ""}`;
+  return `Допместа всего: ${totalCount}${totalCharge ? ` (+${formatPrice(totalCharge)})` : ""}`;
 }
 
 async function drawPdfRoomCard(
@@ -25722,5 +26006,5 @@ function getSleepingPlaceTitle(place: Pick<SleepingPlace, "title" | "type">) {
 
 function formatSleepingPlaceWithCapacity(place: SleepingPlace) {
   const count = Math.max(0, place.count || 0);
-  return `${getSleepingPlaceTitle(place)}: ${count} / Мест: ${getSleepingPlacePlacesCount(place)}`;
+  return `${getSleepingPlaceTitle(place)}: ${count} / Мест: ${formatPlaceCount(getSleepingPlacePlacesCount(place))}`;
 }

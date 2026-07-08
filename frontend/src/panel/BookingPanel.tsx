@@ -98,6 +98,7 @@ const DEFAULT_CHECK_OUT_TIME = "12:00";
 const PENDING_CONTACT_SAVE_KEY = "gpb-pending-contact-save";
 const MANUAL_SALE_MODE_KEY = "gpb-manual-sale-mode";
 const PANEL_WIDTH_STORAGE_KEY = "gpb-panel-width";
+const GPB_BUILD_VERSION = "1.0.88";
 const CUSTOM_HOLIDAY_DATES_STORAGE_KEY = "gpb-custom-holiday-dates";
 const CUSTOM_AMENITY_OPTIONS_STORAGE_KEY = "gpb-custom-amenity-options";
 const CUSTOM_FOOD_OPTIONS_STORAGE_KEY = "gpb-custom-food-options";
@@ -6421,6 +6422,7 @@ export function BookingPanel() {
       <div className="gpb-resize-handle" onPointerDown={startResize} />
       <header className="gpb-panel-header">
         <HeaderWeatherStrip weatherState={todayWeatherState} />
+        <span className="gpb-build-version">v{GPB_BUILD_VERSION}</span>
         <div className="gpb-header-actions">
           <button type="button" onClick={openExternalPricePdfOptions} title="Внешний источник">
             <Share2 size={18} />

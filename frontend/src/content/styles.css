@@ -9154,17 +9154,24 @@ body.gpb-reservation-split-resizing {
   background: rgb(255 255 255 / 94%);
   color: #0f6b57;
   cursor: pointer;
-  padding: 0 12px;
+  padding: 0;
   box-shadow: 0 6px 16px rgb(15 23 42 / 18%);
 }
 
+.gpb-gallery-item button svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  stroke-width: 2.25;
+}
+
 .gpb-gallery-item .gpb-gallery-main {
-  right: 80px;
+  right: 88px;
   color: #0f6b57;
 }
 
 .gpb-gallery-item .gpb-gallery-crop {
-  right: 44px;
+  right: 48px;
   color: #0f6b57;
 }
 

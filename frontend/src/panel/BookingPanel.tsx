@@ -19674,6 +19674,10 @@ function getLockedReservationFinancials(
   if (roomIds.length !== reservationRoomIds.length || roomIds.some((roomId, index) => roomId !== reservationRoomIds[index])) return null;
   const items = getReservationItems(reservation);
   const itemsByRoomId = new Map(items.map((item) => [item.roomId, item]));
+  const inventoryByRoomId = filterExtraInventoryByRooms(
+    reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(reservation),
+    rooms
+  );
   const sameScope = rooms.every((room) => {
     const item = itemsByRoomId.get(room.id);
     const dateRange = getRoomDateRange(room.id, checkIn, checkOut, roomDateOverrides);
@@ -19684,6 +19688,25 @@ function getLockedReservationFinancials(
       (item.checkOutTime || reservation.checkOutTime) === checkOutTime;
   });
   if (!sameScope) return null;
+  const sameExtraInventoryTotals = rooms.every((room) => {
+    const item = itemsByRoomId.get(room.id);
+    const dateRange = getRoomDateRange(room.id, checkIn, checkOut, roomDateOverrides);
+    const nights = getNightsCount(dateRange.checkIn, dateRange.checkOut);
+    const expectedExtraInventoryTotal = calculateExtraInventoryItemCharge(
+      inventoryByRoomId[room.id],
+      room,
+      dateRange.checkIn,
+      nights,
+      0,
+      0,
+      reservation.inventoryExtraPlaceAdultPercent ?? 100,
+      reservation.inventoryExtraPlaceTeenPercent ?? 50,
+      reservation.inventoryExtraPlaceChildPercent ?? 0
+    );
+    const lockedExtraInventoryTotal = Math.max(0, item?.priceSnapshot?.extraInventoryTotal ?? 0);
+    return Math.round(lockedExtraInventoryTotal) === Math.round(expectedExtraInventoryTotal);
+  });
+  if (!sameExtraInventoryTotals) return null;
 
   return {
     breakfastDiscountAmount: reservation.breakfastDiscountAmount ?? 0,
@@ -19730,7 +19753,10 @@ function buildReservationItemsFromRooms(
       : 0;
     const subtotal = roomSubtotal + extraInventoryTotal;
     const existing = existingByRoomId.get(room.id);
-    const locked = existing && reservationItemMatchesBooking(existing, dateRange.checkIn, dateRange.checkOut, checkInTime, checkOutTime);
+    const lockedExtraInventoryTotal = Math.max(0, existing?.priceSnapshot?.extraInventoryTotal ?? 0);
+    const locked = existing &&
+      reservationItemMatchesBooking(existing, dateRange.checkIn, dateRange.checkOut, checkInTime, checkOutTime) &&
+      Math.round(lockedExtraInventoryTotal) === Math.round(extraInventoryTotal);
     if (locked) {
       return {
         ...existing,

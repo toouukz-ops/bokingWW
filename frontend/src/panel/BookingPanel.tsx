@@ -15064,7 +15064,7 @@ function RoomCatalogModal({
                         <button className="gpb-gallery-crop" type="button" onClick={() => setCropPath(path)} title="Обрезать фото">
                           <Crop size={16} />
                         </button>
-                        <button type="button" onClick={() => handleMediaDelete(path)} title="Удалить фото">
+                        <button className="gpb-gallery-delete" type="button" onClick={() => handleMediaDelete(path)} title="Удалить фото">
                           <Trash2 size={16} />
                         </button>
                       </div>
@@ -15073,7 +15073,7 @@ function RoomCatalogModal({
                       <div className="gpb-gallery-item" key={path}>
                         <MediaVideo path={path} />
                         <span>Видео</span>
-                        <button type="button" onClick={() => handleMediaDelete(path)} title="Удалить видео">
+                        <button className="gpb-gallery-delete" type="button" onClick={() => handleMediaDelete(path)} title="Удалить видео">
                           <Trash2 size={16} />
                         </button>
                       </div>

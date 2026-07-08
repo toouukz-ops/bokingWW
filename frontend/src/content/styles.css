@@ -9149,10 +9149,10 @@ body.gpb-reservation-split-resizing {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border: 1px solid rgb(255 255 255 / 78%);
+  border: 1px solid rgb(203 213 225 / 88%);
   border-radius: 6px;
-  background: rgb(244 250 248 / 94%);
-  color: #ffffff;
+  background: rgb(255 255 255 / 94%);
+  color: #0f6b57;
   cursor: pointer;
   padding: 0 12px;
   box-shadow: 0 6px 16px rgb(15 23 42 / 18%);
@@ -9160,23 +9160,20 @@ body.gpb-reservation-split-resizing {
 
 .gpb-gallery-item .gpb-gallery-main {
   right: 80px;
-  background: rgb(15 107 87 / 94%);
-  color: #ffffff;
+  color: #0f6b57;
 }
 
 .gpb-gallery-item .gpb-gallery-crop {
   right: 44px;
-  background: rgb(37 99 235 / 94%);
-  color: #ffffff;
+  color: #0f6b57;
 }
 
 .gpb-gallery-item .gpb-gallery-delete {
-  background: rgb(190 18 60 / 94%);
-  color: #ffffff;
+  color: #b42318;
 }
 
 .gpb-gallery-item button:hover {
-  filter: brightness(1.06);
+  background: #f8fafc;
 }
 
 .gpb-crop-backdrop {

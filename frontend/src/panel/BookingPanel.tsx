@@ -25154,7 +25154,7 @@ async function sendRoomVideoToActiveWhatsAppChat(room: Room) {
 
     if (index < room.videoPaths.length - 1) {
       await waitForElement(findWhatsAppMessageInput, 8000);
-      await waitForDelay(1400);
+      await waitForDelay(5200);
     }
   }
 

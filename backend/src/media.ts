@@ -30,8 +30,14 @@ const allowedExtensions = new Set([
 export function getMediaType(file: MultipartFile): "photo" | "video" | null {
   if (file.mimetype.startsWith("image/")) return "photo";
   if (file.mimetype.startsWith("video/")) return "video";
+  const extension = extname(file.filename).toLowerCase();
+  if (photoExtensions.has(extension)) return "photo";
+  if (videoExtensions.has(extension)) return "video";
   return null;
 }
+
+const photoExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".hec"]);
+const videoExtensions = new Set([".mp4", ".mov", ".m4v"]);
 
 export async function saveRoomMediaFile(roomId: string, file: MultipartFile) {
   const mediaType = getMediaType(file);

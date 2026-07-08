@@ -23348,7 +23348,14 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
   const roomLines = reservationItems.map((item) => {
     const room = rooms.find((candidate) => candidate.id === item.roomId);
     if (!room || isHourlyBookingObject(room)) return "";
-    const roomExtraInventory = formatRoomExtraInventoryLines(reservation.extraInventoryByRoomId?.[room.id], room, item, reservation);
+    const pricingItem = hasDifferentRoomPeriods ? item : {
+      ...item,
+      checkIn: reservation.checkIn,
+      checkOut: reservation.checkOut,
+      checkInTime: reservation.checkInTime,
+      checkOutTime: reservation.checkOutTime
+    };
+    const roomExtraInventory = formatRoomExtraInventoryLines(reservation.extraInventoryByRoomId?.[room.id], room, pricingItem, reservation);
     const roomFoodLine = foodSummary.mode === "per-room" ? formatReservationRoomFoodLine(room) : "";
 
     const sleepingPlaces = formatReservationSleepingPlaceLines(room.sleepingPlaces);
@@ -23370,7 +23377,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
       ...dateLines,
       roomFoodLine,
       ...sleepingPlaces,
-      formatReservationRoomDailyPriceLine(room, item),
+      formatReservationRoomDailyPriceLine(room, pricingItem),
       roomExtraInventory
     ].filter(Boolean).join("\n");
   }).filter(Boolean).join("\n\n");
@@ -23657,17 +23664,19 @@ function formatReservationRoomDailyPriceLine(room: Room, item: ReservationItem) 
 }
 
 function buildReservationTotalMessage(reservation: Reservation, rooms: Room[]) {
-  const bookedRooms = reservation.roomIds
-    .map((roomId) => rooms.find((room) => room.id === roomId))
+  const reservationItems = getReservationItems(reservation, rooms);
+  const bookedRooms = reservationItems
+    .map((item) => rooms.find((room) => room.id === item.roomId))
     .filter((room): room is Room => Boolean(room));
   const nightlyRooms = bookedRooms.filter((room) => !isHourlyBookingObject(room));
   const sleepingPlaceTotal = calculateReservationSleepingPlacesTotal(reservation, bookedRooms);
-  const fullPaymentMode = reservation.prepayment >= reservation.total;
-  const discountLine = reservation.discountPercent && reservation.discountAmount > 0
-    ? `| Скидка: ${reservation.discountPercent}% (${formatPrice(reservation.discountAmount)})`
+  const messageFinancials = calculateReservationMessageFinancials(reservation, bookedRooms, reservationItems);
+  const fullPaymentMode = messageFinancials.prepayment >= messageFinancials.total;
+  const discountLine = reservation.discountPercent && messageFinancials.discountAmount > 0
+    ? `| Скидка: ${reservation.discountPercent}% (${formatPrice(messageFinancials.discountAmount)})`
     : "";
   const nights = getNightsCount(reservation.checkIn, reservation.checkOut);
-  const averagePerPersonLine = formatReservationAveragePerPersonLine(reservation, nights);
+  const averagePerPersonLine = formatReservationAveragePerPersonLine(reservation, nights, messageFinancials.total);
   const guestSummaryLine = formatReservationSummaryGuestLine(reservation);
 
   const lines = [
@@ -23680,12 +23689,12 @@ function buildReservationTotalMessage(reservation: Reservation, rooms: Room[]) {
     `| Номера: ${nightlyRooms.length}`,
     ...(guestSummaryLine ? [guestSummaryLine] : []),
     ...(sleepingPlaceTotal > 0 ? [`| Спальных мест: ${formatPlaceCount(sleepingPlaceTotal)}`] : []),
-    `| Сумма: ${formatPrice(reservation.subtotal)}`,
+    `| Сумма: ${formatPrice(messageFinancials.subtotal)}`,
     ...(discountLine ? [discountLine] : []),
-    ...(discountLine ? [`*| Сумма со скидкой: ${formatPrice(reservation.total)}*`] : []),
+    ...(discountLine ? [`*| Сумма со скидкой: ${formatPrice(messageFinancials.total)}*`] : []),
     ...(averagePerPersonLine ? [averagePerPersonLine] : []),
     "",
-    `*${fullPaymentMode ? "К оплате 100%" : "Предоплата 50%"}: ${formatPrice(reservation.prepayment)}*`,
+    `*${fullPaymentMode ? "К оплате 100%" : "Предоплата 50%"}: ${formatPrice(messageFinancials.prepayment)}*`,
     ...(reservation.paymentLink ? [reservation.paymentLink] : []),
     "",
     "* После внесения предоплаты бронь закрепляем за вами.",

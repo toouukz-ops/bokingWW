@@ -20272,19 +20272,27 @@ function calculateRoomExtraPlacesCharge(
   room: Room,
   checkIn: string,
   checkOut: string,
-  reservation: Pick<Reservation, "inventoryExtraPlaceAdultPercent" | "inventoryExtraPlaceTeenPercent" | "inventoryExtraPlaceChildPercent">
+  reservation: Pick<Reservation, "inventoryAirBedPrice" | "inventoryRollawayPrice" | "inventoryExtraPlaceAdultPercent" | "inventoryExtraPlaceTeenPercent" | "inventoryExtraPlaceChildPercent">
 ) {
   const placements = getExtraInventoryPlacements(item);
   if (!placements.length) return 0;
   const nights = getNightsCount(checkIn, checkOut);
-  return placements.reduce((sum, placement) => sum + getRoomExtraPlaceDailyPrice(
-    room,
-    checkIn,
-    placement.guestType,
-    reservation.inventoryExtraPlaceAdultPercent ?? 100,
-    reservation.inventoryExtraPlaceTeenPercent ?? 50,
-    reservation.inventoryExtraPlaceChildPercent ?? 0
-  ) * nights, 0);
+  return placements.reduce((sum, placement) => {
+    const fixedDailyPrice = getExtraInventoryFixedDailyPrice(
+      placement,
+      reservation.inventoryAirBedPrice ?? 0,
+      reservation.inventoryRollawayPrice ?? 0
+    );
+    const dailyPrice = fixedDailyPrice || getRoomExtraPlaceDailyPrice(
+      room,
+      checkIn,
+      placement.guestType,
+      reservation.inventoryExtraPlaceAdultPercent ?? 100,
+      reservation.inventoryExtraPlaceTeenPercent ?? 50,
+      reservation.inventoryExtraPlaceChildPercent ?? 0
+    );
+    return sum + dailyPrice * nights;
+  }, 0);
 }
 
 function calculateExtraInventoryItemCharge(
@@ -20302,8 +20310,18 @@ function calculateExtraInventoryItemCharge(
   _children = 0
 ) {
   const safeNights = Math.max(0, nights);
-  return getExtraInventoryPlacements(inventory).reduce((sum, placement) =>
-    sum + getRoomExtraPlaceDailyPrice(room, checkIn, placement.guestType, extraPlaceAdultPercent, extraPlaceTeenPercent, extraPlaceChildPercent) * safeNights, 0);
+  return getExtraInventoryPlacements(inventory).reduce((sum, placement) => {
+    const fixedDailyPrice = getExtraInventoryFixedDailyPrice(placement, _airBedPrice, _rollawayPrice);
+    const dailyPrice = fixedDailyPrice || getRoomExtraPlaceDailyPrice(room, checkIn, placement.guestType, extraPlaceAdultPercent, extraPlaceTeenPercent, extraPlaceChildPercent);
+    return sum + dailyPrice * safeNights;
+  }, 0);
+}
+
+function getExtraInventoryFixedDailyPrice(placement: ExtraInventoryPlacement, airBedPrice: number, rollawayPrice: number) {
+  const text = normalizeExtractedText(`${placement.typeId} ${placement.label}`).toLowerCase();
+  if (placement.typeId === "air-bed" || /надувн.*матрас|матрас/.test(text)) return Math.max(0, airBedPrice || 0);
+  if (placement.typeId === "rollaway" || /расклад/.test(text)) return Math.max(0, rollawayPrice || 0);
+  return 0;
 }
 
 function getReservationExtraInventoryPrice(reservation: Pick<Reservation, "extraInventoryChargeEnabled" | "inventoryExtraPlaceAdultPercent">, _type: ExtraInventoryType, _fallbackRooms: Room[] = []) {
@@ -23766,15 +23784,18 @@ function formatReservationComment(comment: string) {
 function formatRoomExtraInventoryLines(item?: ExtraInventoryItem, room?: Room, reservationItem?: ReservationItem, reservation?: Reservation) {
   const nights = reservationItem ? getNightsCount(reservationItem.checkIn, reservationItem.checkOut) : 0;
   const lines = getExtraInventoryPlacements(item).map((placement) => {
+    const fixedDailyPrice = reservation
+      ? getExtraInventoryFixedDailyPrice(placement, reservation.inventoryAirBedPrice ?? 0, reservation.inventoryRollawayPrice ?? 0)
+      : 0;
     const total = room && reservation && nights
-      ? getRoomExtraPlaceDailyPrice(
+      ? (fixedDailyPrice || getRoomExtraPlaceDailyPrice(
         room,
         reservationItem?.checkIn ?? reservation.checkIn,
         placement.guestType,
         reservation.inventoryExtraPlaceAdultPercent ?? 100,
         reservation.inventoryExtraPlaceTeenPercent ?? 50,
         reservation.inventoryExtraPlaceChildPercent ?? 0
-      ) * nights
+      )) * nights
       : 0;
     return `| ${placement.label}: 1 | ${getExtraGuestTypeLabel(placement.guestType)} | Мест: 1${total ? ` | +${formatPrice(total)}` : ""}`;
   });

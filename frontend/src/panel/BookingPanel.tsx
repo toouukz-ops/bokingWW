@@ -13450,26 +13450,31 @@ function ReservationTimelineRoomRow({
         </div>
       ) : null}
       {timelineLayers.lodging ? segments.map((segment) => (
-        <svg
+        <div
           className="gpb-timeline-reservation-bar"
-          key={`${segment.reservation.id}-${segment.roomId}`}
-          preserveAspectRatio="none"
+          key={`${segment.reservation.id}-${segment.roomId}-${segment.checkInDate}-${segment.checkOutDate}`}
           style={{
             "--gpb-timeline-lane": segment.lane,
             "--gpb-timeline-segment-offset": `${segment.segmentOffset}px`,
             "--gpb-timeline-span": segment.endPosition - segment.startPosition,
             "--gpb-timeline-start": segment.startPosition
           } as React.CSSProperties}
-          viewBox="0 0 100 42"
+          tabIndex={0}
         >
-          <title>{`${segment.reservation.guestFirstName || "Гость"} · ${formatReservationDateRange(segment.reservation)} · ${segment.checkInTime}-${segment.checkOutTime} · ${room.number || room.title}`}</title>
-          <line
-            x1="0"
-            x2="100"
-            y1="21"
-            y2="21"
-          />
-        </svg>
+          <svg
+            aria-hidden="true"
+            preserveAspectRatio="none"
+            viewBox="0 0 100 42"
+          >
+            <line
+              x1="0"
+              x2="100"
+              y1="21"
+              y2="21"
+            />
+          </svg>
+          <ReservationTimelineHoverCard reservation={segment.reservation} room={room} />
+        </div>
       )) : null}
       {timelineLayers.checkIn ? segments.map((segment) => (
         <div
@@ -13510,6 +13515,70 @@ function ReservationTimelineRoomRow({
         </div>
       )) : null}
     </div>
+  );
+}
+
+function ReservationTimelineHoverCard({ reservation, room }: { reservation: Reservation; room: Room }) {
+  const finance = getReservationFinance(reservation);
+  const guestTotal = getReservationGuestTotal(reservation);
+  const mainPhotoPath = getMainPhotoPath(room);
+  const breakfastText = reservation.breakfastIncluded === false
+    ? "Без завтрака"
+    : `${guestTotal || getRoomBreakfastCount(room)} ${getBreakfastWord(guestTotal || getRoomBreakfastCount(room))}`;
+  const balance = finance.displayBalance;
+
+  return (
+    <aside className="gpb-timeline-reservation-tooltip">
+      <div className="gpb-timeline-reservation-tooltip-photo">
+        {mainPhotoPath ? (
+          <MediaImage alt={room.title || room.number || "Номер"} path={mainPhotoPath} />
+        ) : (
+          <span>Фото</span>
+        )}
+      </div>
+      <div className="gpb-timeline-reservation-tooltip-body">
+        <div className="gpb-timeline-reservation-tooltip-head">
+          <strong>{reservation.guestFirstName || "Гость"}</strong>
+          <span>{formatReservationPhone(reservation.phone)}</span>
+        </div>
+        <div className="gpb-timeline-reservation-tooltip-room">
+          {room.number || room.title}
+          {room.title && room.title !== room.number ? ` · ${room.title}` : ""}
+        </div>
+        <dl>
+          <div>
+            <dt>Период</dt>
+            <dd>{formatReservationDateRange(reservation)}</dd>
+          </div>
+          <div>
+            <dt>Гости</dt>
+            <dd>{formatReservationCompactGuestCountText(reservation)}</dd>
+          </div>
+          <div>
+            <dt>Завтраки</dt>
+            <dd>{breakfastText}</dd>
+          </div>
+          <div>
+            <dt>Сумма</dt>
+            <dd>{formatPrice(reservation.total)}</dd>
+          </div>
+          <div>
+            <dt>Предоплата</dt>
+            <dd>{formatReservationPaymentAmount(finance.displayPrepayment)}</dd>
+          </div>
+          <div>
+            <dt>Остаток</dt>
+            <dd>{formatReservationPaymentAmount(balance)}</dd>
+          </div>
+        </dl>
+        <div className="gpb-timeline-reservation-tooltip-flags">
+          {reservation.prepaymentReceivedAt ? <span>Предоплата внесена</span> : null}
+          {reservation.balancePaidAt ? <span>Доплата внесена</span> : null}
+          {reservation.checkedInAt ? <span>Въезд отмечен</span> : null}
+          {reservation.checkedOutAt ? <span>Выезд отмечен</span> : null}
+        </div>
+      </div>
+    </aside>
   );
 }
 

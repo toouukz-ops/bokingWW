@@ -5645,15 +5645,52 @@ export function BookingPanel() {
 
   async function cancelReservation(reservation: Reservation, reason?: string) {
     const cancellationNote = reason ? `Снятие брони: ${reason}` : "";
-    const cancelledReservation = {
-      ...reservation,
-      comment: cancellationNote ? [reservation.comment, cancellationNote].filter(Boolean).join("\n") : reservation.comment,
+    const targets = findExactDuplicateReservationsForCancel(reservation);
+    const cancelledReservations = targets.map((target) => ({
+      ...target,
+      comment: cancellationNote ? [target.comment, cancellationNote].filter(Boolean).join("\n") : target.comment,
       status: "cancelled" as const
-    };
-    const saved = await updateReservation(cancelledReservation, { respectActiveDialogOwner: false });
-    if (!saved) return false;
-    await saveAgreementDraftForReservation(cancelledReservation);
+    }));
+
+    try {
+      await Promise.all(cancelledReservations.map((cancelledReservation) => saveReservation(cancelledReservation, { requireRemote: true })));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setBookingDateWarning("Не удалось снять бронь на сервере. Проверьте интернет/Render и повторите действие.");
+      void sendDebugLog("reservation-cancel-remote-error", { message, reservationId: reservation.id, duplicateIds: targets.map((target) => target.id) });
+      return false;
+    }
+
+    setReservations((currentReservations) => {
+      const cancelledById = new Map(cancelledReservations.map((cancelledReservation) => [cancelledReservation.id, cancelledReservation]));
+      return currentReservations.map((item) => cancelledById.get(item.id) ?? item);
+    });
+    const cancelledReservation = cancelledReservations.find((item) => item.id === reservation.id) ?? cancelledReservations[0];
+    if (cancelledReservation && shouldAttachReservationToActiveChat(cancelledReservation)) {
+      setLastReservation(cancelledReservation);
+    }
+    await Promise.all(cancelledReservations.map((cancelledReservation) => syncReservationDraftForStatus(cancelledReservation)));
+    if (cancelledReservation) {
+      await saveAgreementDraftForReservation(cancelledReservation);
+    }
     return true;
+  }
+
+  function findExactDuplicateReservationsForCancel(reservation: Reservation) {
+    const reservationPhone = normalizePhoneSearch(reservation.phone);
+    const reservationRoomIds = reservation.roomIds.slice().sort();
+    const duplicateReservations = reservations.filter((candidate) => {
+      if (candidate.isAddOnSale || candidate.status === "cancelled") return false;
+      if (candidate.checkIn !== reservation.checkIn || candidate.checkOut !== reservation.checkOut) return false;
+      const candidateRoomIds = candidate.roomIds.slice().sort();
+      if (candidateRoomIds.length !== reservationRoomIds.length || candidateRoomIds.some((roomId, index) => roomId !== reservationRoomIds[index])) return false;
+      const candidatePhone = normalizePhoneSearch(candidate.phone);
+      if (reservationPhone && candidatePhone) return phonesMatchForContactLookup(reservationPhone, candidatePhone);
+      return normalizeContactLookupText(candidate.guestFirstName) === normalizeContactLookupText(reservation.guestFirstName);
+    });
+    return duplicateReservations.some((candidate) => candidate.id === reservation.id)
+      ? duplicateReservations
+      : duplicateReservations.concat(reservation);
   }
 
   async function handleCancelReservationWithReason(reason: string) {

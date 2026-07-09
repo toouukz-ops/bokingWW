@@ -13450,31 +13450,11 @@ function ReservationTimelineRoomRow({
         </div>
       ) : null}
       {timelineLayers.lodging ? segments.map((segment) => (
-        <div
-          className="gpb-timeline-reservation-bar"
+        <ReservationTimelineBar
           key={`${segment.reservation.id}-${segment.roomId}-${segment.checkInDate}-${segment.checkOutDate}`}
-          style={{
-            "--gpb-timeline-lane": segment.lane,
-            "--gpb-timeline-segment-offset": `${segment.segmentOffset}px`,
-            "--gpb-timeline-span": segment.endPosition - segment.startPosition,
-            "--gpb-timeline-start": segment.startPosition
-          } as React.CSSProperties}
-          tabIndex={0}
-        >
-          <svg
-            aria-hidden="true"
-            preserveAspectRatio="none"
-            viewBox="0 0 100 42"
-          >
-            <line
-              x1="0"
-              x2="100"
-              y1="21"
-              y2="21"
-            />
-          </svg>
-          <ReservationTimelineHoverCard reservation={segment.reservation} room={room} />
-        </div>
+          room={room}
+          segment={segment}
+        />
       )) : null}
       {timelineLayers.checkIn ? segments.map((segment) => (
         <div
@@ -13514,6 +13494,68 @@ function ReservationTimelineRoomRow({
           Уборка
         </div>
       )) : null}
+    </div>
+  );
+}
+
+function ReservationTimelineBar({
+  room,
+  segment
+}: {
+  room: Room;
+  segment: ReturnType<typeof buildReservationTimelineSegments>[number];
+}) {
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{ left: number; top: number } | null>(null);
+
+  function updateTooltipPosition() {
+    const bar = barRef.current;
+    if (!bar) return;
+
+    const rect = bar.getBoundingClientRect();
+    const padding = 10;
+    const tooltipWidth = Math.min(360, window.innerWidth - padding * 2);
+    const tooltipHeight = Math.min(360, window.innerHeight - padding * 2);
+    const preferredLeft = rect.left + rect.width / 2 - tooltipWidth / 2;
+    const preferredTop = rect.bottom + 8;
+    const fallbackTop = rect.top - tooltipHeight - 8;
+    const left = clampNumber(preferredLeft, padding, Math.max(padding, window.innerWidth - tooltipWidth - padding));
+    const topCandidate = preferredTop + tooltipHeight <= window.innerHeight - padding ? preferredTop : fallbackTop;
+    const top = clampNumber(topCandidate, padding, Math.max(padding, window.innerHeight - tooltipHeight - padding));
+
+    setTooltipPosition({ left, top });
+  }
+
+  return (
+    <div
+      ref={barRef}
+      className="gpb-timeline-reservation-bar"
+      style={{
+        "--gpb-timeline-lane": segment.lane,
+        "--gpb-timeline-segment-offset": `${segment.segmentOffset}px`,
+        "--gpb-timeline-span": segment.endPosition - segment.startPosition,
+        "--gpb-timeline-start": segment.startPosition,
+        "--gpb-timeline-tooltip-left": tooltipPosition ? `${tooltipPosition.left}px` : "10px",
+        "--gpb-timeline-tooltip-top": tooltipPosition ? `${tooltipPosition.top}px` : "10px"
+      } as React.CSSProperties}
+      tabIndex={0}
+      onFocus={updateTooltipPosition}
+      onMouseEnter={updateTooltipPosition}
+      onMouseMove={updateTooltipPosition}
+    >
+      <svg
+        aria-hidden="true"
+        preserveAspectRatio="none"
+        viewBox="0 0 100 42"
+      >
+        <line
+          x1="0"
+          x2="100"
+          y1="21"
+          y2="21"
+        />
+      </svg>
+      <ReservationTimelineHoverCard reservation={segment.reservation} room={room} />
     </div>
   );
 }

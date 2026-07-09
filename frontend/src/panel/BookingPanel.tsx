@@ -2831,19 +2831,29 @@ export function BookingPanel() {
     );
     if (matchingReservation) {
       restoredDraft = mergeReservationIntoChatDraft(restoredDraft, matchingReservation);
+    } else {
+      restoredDraft = sanitizeChatDraftReservationServerLink(restoredDraft, reservations);
     }
     const shouldResetPastBookingFields = isChatDraftPastStay(restoredDraft);
     const restoredCheckIn = shouldResetPastBookingFields ? getDefaultCheckInDate() : restoredDraft.checkIn;
     const restoredCheckOut = shouldResetPastBookingFields ? getDefaultCheckOutDate() : restoredDraft.checkOut;
     if (restoredDraft !== draft && activeChat) {
-      if (restoredDraft.lastReservation) {
+      const shouldPersistRestoredReservation = Boolean(
+        restoredDraft.lastReservation &&
+        reservations.some((reservation) =>
+          reservation.id === restoredDraft.lastReservation?.id &&
+          reservation.status !== "cancelled" &&
+          !reservation.noShowAt
+        )
+      );
+      if (restoredDraft.lastReservation && shouldPersistRestoredReservation) {
         void saveReservation(restoredDraft.lastReservation);
       }
       void saveCachedChatBookingDraft(activeChat.id, {
         ...restoredDraft,
         updatedAt: new Date().toISOString()
       });
-      if (restoredDraft.lastReservation) {
+      if (restoredDraft.lastReservation && shouldPersistRestoredReservation) {
         setReservations((currentReservations) => currentReservations.map((reservation) =>
           reservation.id === restoredDraft.lastReservation?.id ? restoredDraft.lastReservation as Reservation : reservation
         ));
@@ -22313,6 +22323,28 @@ function sanitizeChatDraftReservationLink(draft: ChatBookingDraft, activeChat: A
   };
 }
 
+function sanitizeChatDraftReservationServerLink(draft: ChatBookingDraft, reservations: Reservation[]): ChatBookingDraft {
+  if (!draft.lastReservation) return draft;
+  const linkedReservation = reservations.find((reservation) => reservation.id === draft.lastReservation?.id);
+  if (linkedReservation && linkedReservation.status !== "cancelled" && !linkedReservation.noShowAt) {
+    return linkedReservation === draft.lastReservation ? draft : {
+      ...draft,
+      lastReservation: linkedReservation,
+      prepaymentAlreadyPaid: Boolean(linkedReservation.prepaymentReceivedAt)
+    };
+  }
+
+  return {
+    ...draft,
+    agreementSent: false,
+    lastReservation: null,
+    prepaymentAlreadyPaid: false,
+    selectedBookingRoomIds: [],
+    selectedRoomId: "",
+    updatedAt: new Date().toISOString()
+  };
+}
+
 function isDraftReservationLinkedByGuestName(draft: ChatBookingDraft, activeChat: ActiveChat | null) {
   const reservationName = normalizeContactLookupText(draft.lastReservation?.guestFirstName || "");
   if (!reservationName || !isGuestFallbackName(reservationName)) return false;
@@ -22348,14 +22380,24 @@ function normalizeReservationPhoneIdentity(reservation: Reservation): Reservatio
 
 function repairChatDraftPhoneIdentity(draft: ChatBookingDraft, reservationsById: Map<string, Reservation>): ChatBookingDraft {
   const normalizedPhone = formatPhoneDigits(draft.phone);
-  const linkedReservation = draft.lastReservation
-    ? reservationsById.get(draft.lastReservation.id) ?? normalizeReservationPhoneIdentity(draft.lastReservation)
-    : null;
+  const linkedReservation = draft.lastReservation ? reservationsById.get(draft.lastReservation.id) ?? null : null;
   const nextDraft = {
     ...draft,
     phone: normalizedPhone || draft.phone,
     lastReservation: linkedReservation
   };
+
+  if (draft.lastReservation && !linkedReservation) {
+    return {
+      ...nextDraft,
+      agreementSent: false,
+      lastReservation: null,
+      prepaymentAlreadyPaid: false,
+      selectedBookingRoomIds: [],
+      selectedRoomId: "",
+      updatedAt: new Date().toISOString()
+    };
+  }
 
   if (!linkedReservation) {
     return nextDraft.phone === draft.phone && nextDraft.lastReservation === draft.lastReservation ? draft : nextDraft;

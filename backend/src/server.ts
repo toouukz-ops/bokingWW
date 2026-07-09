@@ -895,10 +895,50 @@ app.get("/api/chat-drafts/:chatId", async (request) => {
   return { draft: await getChatDraftById(decodeURIComponent(chatId)) };
 });
 
+async function sanitizeChatDrafts(drafts: Record<string, unknown>) {
+  const entries = await Promise.all(
+    Object.entries(drafts).map(async ([chatId, draft]) => [chatId, await sanitizeChatDraft(draft)] as const)
+  );
+  return Object.fromEntries(entries);
+}
+
+async function sanitizeChatDraft(draft: unknown) {
+  if (!draft || typeof draft !== "object" || Array.isArray(draft)) return draft;
+
+  const draftRecord = draft as Record<string, unknown>;
+  const lastReservation = draftRecord.lastReservation;
+  if (!lastReservation || typeof lastReservation !== "object" || Array.isArray(lastReservation)) return draftRecord;
+
+  const reservationId = typeof (lastReservation as Record<string, unknown>).id === "string"
+    ? (lastReservation as Record<string, unknown>).id
+    : "";
+  if (!reservationId) return clearDraftReservationLink(draftRecord);
+
+  const reservations = await listReservations();
+  const linkedReservation = reservations.find((reservation) => reservation.id === reservationId);
+  if (linkedReservation && linkedReservation.status !== "cancelled" && !linkedReservation.noShowAt) {
+    return { ...draftRecord, lastReservation: linkedReservation };
+  }
+
+  return clearDraftReservationLink(draftRecord);
+}
+
+function clearDraftReservationLink(draft: Record<string, unknown>) {
+  return {
+    ...draft,
+    agreementSent: false,
+    lastReservation: null,
+    prepaymentAlreadyPaid: false,
+    selectedBookingRoomIds: [],
+    selectedRoomId: "",
+    updatedAt: new Date().toISOString()
+  };
+}
+
 app.put("/api/chat-drafts", async (request) => {
   const body = request.body as { drafts?: Record<string, unknown> } | undefined;
   const drafts = body?.drafts && typeof body.drafts === "object" && !Array.isArray(body.drafts) ? body.drafts : {};
-  const savedDrafts = await replaceChatDraftData(drafts);
+  const savedDrafts = await replaceChatDraftData(await sanitizeChatDrafts(drafts));
   broadcastRealtime("chat-drafts.changed", { action: "replace", drafts: savedDrafts });
   return { drafts: savedDrafts };
 });
@@ -911,7 +951,7 @@ app.put("/api/chat-drafts/:chatId", async (request, reply) => {
   }
 
   const decodedChatId = decodeURIComponent(chatId);
-  const draft = await saveChatDraftData(decodedChatId, body.draft);
+  const draft = await saveChatDraftData(decodedChatId, await sanitizeChatDraft(body.draft));
   broadcastRealtime("chat-drafts.changed", { action: "upsert", chatId: decodedChatId, draft });
   return { draft };
 });

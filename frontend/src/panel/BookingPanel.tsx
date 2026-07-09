@@ -13807,12 +13807,12 @@ function EditReservationModal({
   onClose: () => void;
   onSave: (reservation: Reservation) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState<Reservation>(reservation);
+  const [draft, setDraft] = useState<Reservation>(() => normalizeReservationEditDraft(reservation));
   const [isSaving, setIsSaving] = useState(false);
   const [activeSection, setActiveSection] = useState<"client" | "dates" | "objects" | "finance" | "marks">("client");
 
   useEffect(() => {
-    setDraft(reservation);
+    setDraft(normalizeReservationEditDraft(reservation));
     setActiveSection("client");
   }, [reservation]);
 
@@ -13836,7 +13836,7 @@ function EditReservationModal({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSaving(true);
-    const normalizedDraft = {
+    const normalizedDraft = normalizeReservationEditDraft({
       ...draft,
       adults: Math.max(0, draft.adults),
       teenagers: Math.max(0, draft.teenagers ?? 0),
@@ -13849,7 +13849,7 @@ function EditReservationModal({
       discountAmount: Math.max(0, draft.discountAmount),
       total: Math.max(0, draft.total),
       prepayment: Math.max(0, draft.prepayment)
-    };
+    });
     const paymentFieldsChanged =
       normalizedDraft.prepayment !== reservation.prepayment ||
       normalizedDraft.prepaymentReceivedAt !== reservation.prepaymentReceivedAt ||
@@ -14114,6 +14114,30 @@ function EditReservationModal({
       </form>
     </div>
   );
+}
+
+function normalizeReservationEditDraft(reservation: Reservation): Reservation {
+  const itemMark = (field: "balancePaidAt" | "checkedInAt" | "checkedOutAt") =>
+    reservation.items?.find((item) => item[field])?.[field];
+  const nextReservation = {
+    ...reservation,
+    balancePaidAt: reservation.balancePaidAt ?? itemMark("balancePaidAt"),
+    checkedInAt: reservation.checkedInAt ?? itemMark("checkedInAt"),
+    checkedOutAt: reservation.checkedOutAt ?? itemMark("checkedOutAt"),
+    createdAt: reservation.createdAt || reservation.updatedAt || new Date().toISOString()
+  };
+
+  if (!nextReservation.items?.length) return nextReservation;
+
+  return {
+    ...nextReservation,
+    items: nextReservation.items.map((item) => ({
+      ...item,
+      balancePaidAt: nextReservation.balancePaidAt ? item.balancePaidAt ?? nextReservation.balancePaidAt : item.balancePaidAt,
+      checkedInAt: nextReservation.checkedInAt ? item.checkedInAt ?? nextReservation.checkedInAt : item.checkedInAt,
+      checkedOutAt: nextReservation.checkedOutAt ? item.checkedOutAt ?? nextReservation.checkedOutAt : item.checkedOutAt
+    }))
+  };
 }
 
 function AnalyticsCard({ label, value }: { label: string; value: number | string }) {

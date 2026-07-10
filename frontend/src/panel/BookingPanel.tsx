@@ -23600,11 +23600,11 @@ function getCatalogCardTitle(room: Room) {
   const objectLabel = getObjectTypeLabel(room);
   if (shouldShowObjectNumber(room)) {
     const objectNumber = room.number ? `${objectLabel} ${room.number}` : objectLabel;
-    const titleParts = [objectNumber, room.title, isStayBookingObject(room) ? formatCapacityTitle(getRoomTotalSleepingCapacity(room)) : ""].filter(Boolean);
+    const titleParts = [objectNumber, room.title, isStayBookingObject(room) ? formatCapacityTitle(getRoomTotalSleepingCapacity(room)) : "", room.floor].filter(Boolean);
     return titleParts.join(" / ");
   }
 
-  return room.title || objectLabel;
+  return [room.title || objectLabel, room.floor].filter(Boolean).join(" / ");
 }
 
 function formatBookingPickerObjectLabel(room: Room) {

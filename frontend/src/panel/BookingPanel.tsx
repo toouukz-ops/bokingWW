@@ -42,7 +42,7 @@ import {
   X
 } from "lucide-react";
 import { jsPDF } from "jspdf";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent, type MouseEvent } from "react";
 import {
   clearBookingStatistics,
   claimActiveDialog,
@@ -89,7 +89,7 @@ import {
   uploadRoomMedia
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
-import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, PaymentSettings, QuickReplyButton, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
+import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, PaymentSettings, QuickReplyButton, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, RoomWorkStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -182,7 +182,7 @@ type CatalogAvailabilitySummary = {
   sleepingPlaces: number;
 };
 type PricePdfRoomStatus = {
-  kind: "available" | "booked" | "hold" | "repair";
+  kind: "available" | "booked" | "hold" | "repair" | "cleaning";
   label: string;
 };
 type PdfImageFit = "cover" | "contain";
@@ -2090,6 +2090,21 @@ export function BookingPanel() {
     const loadedRooms = mergeRooms(await getRooms());
     setRooms(loadedRooms);
     setSelectedRoomId((currentId) => currentId || loadedRooms[0]?.id || "");
+  }
+
+  async function updateRoomWorkStatus(roomId: string, workStatus?: RoomWorkStatus) {
+    const room = rooms.find((item) => item.id === roomId);
+    if (!room) return;
+
+    const updatedRoom = { ...room, workStatus };
+    setRooms((currentRooms) => currentRooms.map((item) => (item.id === roomId ? updatedRoom : item)));
+    try {
+      const savedRoom = await saveRoom(updatedRoom, { requireServer: true });
+      setRooms((currentRooms) => currentRooms.map((item) => (item.id === roomId ? savedRoom : item)));
+    } catch {
+      setRooms((currentRooms) => currentRooms.map((item) => (item.id === roomId ? room : item)));
+      window.alert("Не удалось сохранить статус номера. Проверьте backend.");
+    }
   }
 
   async function loadReservations() {
@@ -6782,13 +6797,15 @@ export function BookingPanel() {
                     const roomIsReserved = !isHourlyBookingObject(room) && isRoomReserved(room, checkIn, checkOut, checkInTime, checkOutTime, reservations);
                     const roomReservationConflict = findRoomReservedReservation(room, checkIn, checkOut, reservations);
                     const roomExtraInventoryPlacements = getExtraInventoryPlacements(extraInventoryByRoomId[room.id]);
+                    const roomWorkStatusLabel = getRoomWorkStatusLabel(room);
                     return (
                     <button
                       className={[
                         room.id === selectedRoomId ? "is-active" : "",
                         selectedBookingRoomIds.includes(room.id) ? "is-selected" : "",
                         saunaBusySlotsByRoomId[room.id]?.length ? "has-busy-slots" : "",
-                        roomIsReserved ? "is-reserved" : ""
+                        roomIsReserved ? "is-reserved" : "",
+                        room.workStatus ? `has-work-status is-${room.workStatus}` : ""
                       ].filter(Boolean).join(" ")}
                       key={room.id}
                       type="button"
@@ -6804,6 +6821,11 @@ export function BookingPanel() {
                     >
                       <span className="gpb-panel-object-media">
                         <RoomCatalogThumb room={room} />
+                        {roomWorkStatusLabel ? (
+                          <span className={`gpb-panel-object-status is-${room.workStatus ?? "repair"}`}>
+                            {roomWorkStatusLabel}
+                          </span>
+                        ) : null}
                         {roomIsReserved && roomReservationConflict && !getRoomHoldsForRoom(room.id).length ? (
                           <span className="gpb-room-reserved-date-badges" aria-label={`Заезд ${formatNumericDayMonth(roomReservationConflict.checkIn)}, выезд ${formatNumericDayMonth(roomReservationConflict.checkOut)}`}>
                             <span>Заезд {formatNumericDayMonth(roomReservationConflict.checkIn)}</span>
@@ -7823,6 +7845,7 @@ export function BookingPanel() {
           onDeleteReservation={removeReservation}
           onMarkBalancePaid={toggleBalancePaid}
           onMarkCheckedIn={toggleCheckedIn}
+          onUpdateRoomWorkStatus={updateRoomWorkStatus}
           onUpdateReservation={updateReservation}
           onClose={() => setIsReservationsOpen(false)}
         />
@@ -12935,6 +12958,7 @@ function ReservationsModal({
   onDeleteReservation,
   onMarkBalancePaid,
   onMarkCheckedIn,
+  onUpdateRoomWorkStatus,
   onUpdateReservation,
   onClose
 }: {
@@ -12944,6 +12968,7 @@ function ReservationsModal({
   onDeleteReservation: (reservation: Reservation) => void;
   onMarkBalancePaid: (reservation: Reservation) => void;
   onMarkCheckedIn: (reservation: Reservation) => void;
+  onUpdateRoomWorkStatus: (roomId: string, workStatus?: RoomWorkStatus) => Promise<void>;
   onUpdateReservation: (reservation: Reservation) => Promise<void>;
   onClose: () => void;
 }) {
@@ -13254,6 +13279,7 @@ function ReservationsModal({
               timelineLayers={timelineLayers}
               timelineDays={timelineDays}
               onSelectDate={setSelectedDate}
+              onUpdateRoomWorkStatus={onUpdateRoomWorkStatus}
             />
 
             <div
@@ -13327,7 +13353,8 @@ function ReservationTimelineBoard({
   timelineSelectedDayColor,
   timelineLayers,
   timelineDays,
-  onSelectDate
+  onSelectDate,
+  onUpdateRoomWorkStatus
 }: {
   reservations: Reservation[];
   rooms: Room[];
@@ -13342,6 +13369,7 @@ function ReservationTimelineBoard({
   timelineLayers: { alternateRows: boolean; checkIn: boolean; checkOut: boolean; cleaning: boolean; lodging: boolean; repair: boolean };
   timelineDays: Array<{ date: string; dayNumber: number; weekday: string; isWeekend: boolean }>;
   onSelectDate: (date: string) => void;
+  onUpdateRoomWorkStatus: (roomId: string, workStatus?: RoomWorkStatus) => Promise<void>;
 }) {
   const boardRef = useRef<HTMLDivElement | null>(null);
   const monthBands = useMemo(() => buildTimelineMonthBands(timelineDays), [timelineDays]);
@@ -13432,6 +13460,7 @@ function ReservationTimelineBoard({
             timelineLayers={timelineLayers}
             timelineDays={timelineDays}
             onSelectDate={onSelectDate}
+            onUpdateRoomWorkStatus={onUpdateRoomWorkStatus}
           />
         ))}
       </div>
@@ -13446,7 +13475,8 @@ function ReservationTimelineRoomRow({
   selectedDate,
   timelineLayers,
   timelineDays,
-  onSelectDate
+  onSelectDate,
+  onUpdateRoomWorkStatus
 }: {
   reservations: Reservation[];
   rowIndex: number;
@@ -13455,24 +13485,62 @@ function ReservationTimelineRoomRow({
   timelineLayers: { alternateRows: boolean; checkIn: boolean; checkOut: boolean; cleaning: boolean; lodging: boolean; repair: boolean };
   timelineDays: Array<{ date: string; dayNumber: number; weekday: string; isWeekend: boolean }>;
   onSelectDate: (date: string) => void;
+  onUpdateRoomWorkStatus: (roomId: string, workStatus?: RoomWorkStatus) => Promise<void>;
 }) {
+  const [isStatusMenuOpen, setIsStatusMenuOpen] = useState(false);
   const segments = buildReservationTimelineSegments(room, reservations, timelineDays);
   const cleaningSegments = buildCleaningTimelineSegments(room, reservations, timelineDays);
-  const rowLaneCount = Math.max(1, ...segments.map((segment) => segment.lane + 1), room.status === "repair" ? 1 : 0);
+  const hasRepairStatus = room.status === "repair" || room.workStatus === "repair";
+  const workStatusLabel = getRoomWorkStatusLabel(room);
+  const rowLaneCount = Math.max(1, ...segments.map((segment) => segment.lane + 1), hasRepairStatus ? 1 : 0);
   const primaryLabel = room.number || room.title;
   const secondaryLabel = room.number && room.title && room.title !== room.number ? room.title : "";
+
+  async function setWorkStatus(workStatus: RoomWorkStatus) {
+    setIsStatusMenuOpen(false);
+    await onUpdateRoomWorkStatus(room.id, workStatus);
+  }
+
+  async function clearWorkStatus(event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    setIsStatusMenuOpen(false);
+    await onUpdateRoomWorkStatus(room.id, undefined);
+  }
 
   return (
     <div
       className={[
         "gpb-reservation-timeline-row",
-        timelineLayers.alternateRows && rowIndex % 2 === 1 ? "is-alternate" : ""
+        timelineLayers.alternateRows && rowIndex % 2 === 1 ? "is-alternate" : "",
+        room.workStatus ? `has-work-status is-${room.workStatus}` : ""
       ].filter(Boolean).join(" ")}
       style={{ "--gpb-timeline-lanes": rowLaneCount } as React.CSSProperties}
     >
       <div className="gpb-timeline-room-cell">
-        <strong>{primaryLabel}</strong>
-        {secondaryLabel ? <span>{secondaryLabel}</span> : null}
+        <button
+          className="gpb-timeline-room-trigger"
+          type="button"
+          onClick={() => setIsStatusMenuOpen((isOpen) => !isOpen)}
+        >
+          <strong>{primaryLabel}</strong>
+          {secondaryLabel ? <span>{secondaryLabel}</span> : null}
+        </button>
+        {workStatusLabel ? (
+          <span className={`gpb-timeline-room-status is-${room.workStatus ?? "repair"}`}>
+            {workStatusLabel}
+            {room.workStatus ? (
+              <button type="button" onClick={clearWorkStatus} title="Снять статус">
+                <X size={11} />
+              </button>
+            ) : null}
+          </span>
+        ) : null}
+        {isStatusMenuOpen ? (
+          <div className="gpb-timeline-room-menu">
+            <button type="button" onClick={() => void setWorkStatus("cleaning")}>Уборка</button>
+            <button type="button" onClick={() => void setWorkStatus("repair")}>Ремонт</button>
+          </div>
+        ) : null}
       </div>
       {timelineDays.map((day, index) => (
         <button
@@ -13487,13 +13555,22 @@ function ReservationTimelineRoomRow({
           onClick={() => onSelectDate(day.date)}
         />
       ))}
-      {timelineLayers.repair && room.status === "repair" ? (
+      {timelineLayers.repair && hasRepairStatus ? (
         <div
           className="gpb-timeline-status-bar is-repair"
           style={{ gridColumn: `2 / ${timelineDays.length + 2}`, "--gpb-timeline-lane": 0 } as React.CSSProperties}
-          title={`${room.number || room.title}: на ремонте`}
+          title={`${room.number || room.title}: ремонт`}
         >
           Ремонт
+        </div>
+      ) : null}
+      {timelineLayers.cleaning && room.workStatus === "cleaning" ? (
+        <div
+          className="gpb-timeline-status-bar is-cleaning is-manual"
+          style={{ gridColumn: `2 / ${timelineDays.length + 2}`, "--gpb-timeline-lane": 0 } as React.CSSProperties}
+          title={`${room.number || room.title}: уборка`}
+        >
+          Уборка
         </div>
       ) : null}
       {timelineLayers.lodging ? segments.map((segment) => (
@@ -16198,6 +16275,7 @@ function createCustomObject({
     bookable: category !== "staff-room",
     includedInStay: false,
     status: "active",
+    workStatus: undefined,
     excludeFromBookingSummary: false,
     hideInBookingPanel: false,
     basePrice: 0,
@@ -16304,6 +16382,7 @@ function mergeRooms(loadedRooms: Room[]) {
     bookable: typeof room.bookable === "boolean" ? room.bookable : getDefaultBookable(room.number),
     includedInStay: typeof room.includedInStay === "boolean" ? room.includedInStay : getDefaultIncludedInStay(room.id),
     status: room.status ?? "active",
+    workStatus: room.workStatus,
     excludeFromBookingSummary: Boolean(room.excludeFromBookingSummary),
     hideInBookingPanel: Boolean(room.hideInBookingPanel),
     basePrice: room.basePrice ?? room.weekdayPrice ?? 0,
@@ -16661,8 +16740,11 @@ function buildPricePdfRoomStatuses(
   ownerId = ""
 ): Record<string, PricePdfRoomStatus> {
   return Object.fromEntries(rooms.map((room) => {
-    if (room.status === "repair") {
-      return [room.id, { kind: "repair", label: "На ремонте" } satisfies PricePdfRoomStatus];
+    if (room.workStatus === "cleaning") {
+      return [room.id, { kind: "cleaning", label: "Уборка" } satisfies PricePdfRoomStatus];
+    }
+    if (room.status === "repair" || room.workStatus === "repair") {
+      return [room.id, { kind: "repair", label: "Ремонт" } satisfies PricePdfRoomStatus];
     }
 
     const conflicts = buildRoomAvailabilityConflicts([room], reservations, checkIn, checkOut, checkInTime, checkOutTime, holds, ownerId);
@@ -16753,7 +16835,8 @@ function getCatalogPanelObjectStatus(
 ) {
   if (selectedRoomIds.includes(room.id)) return "Выбран";
   if (currentReservation && isReservationActiveOccupancy(currentReservation) && currentReservation.roomIds.includes(room.id)) return "Забронирован";
-  if (room.status === "repair") return "На ремонте";
+  const workStatusLabel = getRoomWorkStatusLabel(room);
+  if (workStatusLabel) return workStatusLabel;
   if (isRoomCleaningNow(room, reservations)) return "Уборка до 15:00";
 
   const conflict = reservations.find((reservation) =>
@@ -16767,6 +16850,13 @@ function getCatalogPanelObjectStatus(
   if (!conflict) return "Свободен";
   if (isHourlyBookingObject(room)) return `Занята ${conflict.checkInTime}-${getReservationHourlyEndTime(conflict)}`;
   return `Занят до ${formatKazakhDate(conflict.checkOut)}`;
+}
+
+function getRoomWorkStatusLabel(room: Pick<Room, "status" | "workStatus">) {
+  if (room.workStatus === "cleaning") return "Уборка";
+  if (room.workStatus === "repair") return "Ремонт";
+  if (room.status === "repair") return "Ремонт";
+  return "";
 }
 
 function isRoomCleaningNow(room: Room, reservations: Reservation[]) {

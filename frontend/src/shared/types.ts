@@ -346,6 +346,7 @@ export interface ChatBookingDraft {
 }
 
 export type RoomStatus = "active" | "hidden" | "repair";
+export type RoomWorkStatus = "cleaning" | "repair";
 export type CatalogItemCategory = "guest-room" | "staff-room" | "amenity";
 export type CatalogObjectType = "room" | "house" | "amenity" | "staff" | "sauna" | "gazebo" | "bbq" | "firepit" | "parking" | "dining";
 export type BathroomType = "inside-room" | "private-on-floor" | "shared-on-floor" | "none";
@@ -380,6 +381,7 @@ export interface Room {
   bookable: boolean;
   includedInStay: boolean;
   status: RoomStatus;
+  workStatus?: RoomWorkStatus;
   excludeFromBookingSummary: boolean;
   hideInBookingPanel: boolean;
   basePrice: number;

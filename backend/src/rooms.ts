@@ -29,6 +29,7 @@ export const roomSchema = z.object({
   bookable: z.boolean(),
   includedInStay: z.boolean().default(false),
   status: z.enum(["active", "hidden", "repair"]),
+  workStatus: z.enum(["cleaning", "repair"]).optional(),
   excludeFromBookingSummary: z.boolean().optional().default(false),
   hideInBookingPanel: z.boolean().optional().default(false),
   basePrice: z.number().int().min(0),
@@ -74,14 +75,17 @@ export async function getRoom(id: string): Promise<Room | null> {
 
 export async function saveRoom(room: Room): Promise<Room> {
   const now = new Date();
+  const { workStatus, ...roomFields } = room;
 
   await rooms.updateOne(
     { id: room.id },
     {
       $set: {
-        ...room,
+        ...roomFields,
+        ...(workStatus ? { workStatus } : {}),
         updatedAt: now
       },
+      ...(!workStatus ? { $unset: { workStatus: "" } } : {}),
       $setOnInsert: {
         createdAt: now
       }
@@ -160,6 +164,7 @@ function mapRoomDocument(document: RoomDocument): Room {
     bookable: document.bookable ?? true,
     includedInStay: document.includedInStay ?? false,
     status: document.status ?? "active",
+    workStatus: document.workStatus,
     excludeFromBookingSummary: document.excludeFromBookingSummary ?? false,
     hideInBookingPanel: document.hideInBookingPanel ?? false,
     basePrice: document.basePrice,

@@ -892,6 +892,38 @@ body.gpb-booking-panel-open #app {
   opacity: 0.78;
 }
 
+.gpb-panel-object-list button.has-work-status.is-cleaning:not(.is-selected) {
+  border-color: #c4b5fd;
+  background: #f5f3ff;
+}
+
+.gpb-panel-object-list button.has-work-status.is-repair:not(.is-selected) {
+  border-color: #f3a7a7;
+  background: #fff3f3;
+}
+
+.gpb-panel-object-status {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 6px 9px;
+  box-shadow: 0 6px 16px rgb(15 23 42 / 20%);
+}
+
+.gpb-panel-object-status.is-cleaning {
+  background: #6d28d9;
+}
+
+.gpb-panel-object-status.is-repair {
+  background: #b42318;
+}
+
 .gpb-availability-conflicts {
   display: grid;
   gap: 8px;
@@ -4341,6 +4373,11 @@ body.gpb-booking-panel-open #app {
   box-shadow: inset 0 0 0 1px rgba(183, 121, 31, 0.22);
 }
 
+.gpb-price-pdf-room-option.is-cleaning {
+  border-color: #c4b5fd;
+  background: #f5f3ff;
+}
+
 .gpb-price-pdf-room-option.is-repair {
   border-color: #c7ccd3;
   background: #f0f2f5;
@@ -4427,6 +4464,11 @@ body.gpb-booking-panel-open #app {
 .gpb-price-pdf-room-option.is-hold em {
   background: #fff0b8;
   color: #8a5a13;
+}
+
+.gpb-price-pdf-room-option.is-cleaning em {
+  background: #ede9fe;
+  color: #5b21b6;
 }
 
 .gpb-price-pdf-room-option.is-repair em {
@@ -5804,6 +5846,22 @@ body.gpb-reservation-split-resizing {
   color: var(--gpb-timeline-alternate-row-muted-text-color, #64707d);
 }
 
+.gpb-reservation-timeline-row.has-work-status.is-cleaning {
+  background: color-mix(in srgb, var(--gpb-timeline-cleaning-color, #7c3aed) 8%, #ffffff);
+}
+
+.gpb-reservation-timeline-row.has-work-status.is-repair {
+  background: color-mix(in srgb, var(--gpb-timeline-repair-color, #d12b2b) 8%, #ffffff);
+}
+
+.gpb-reservation-timeline-row.has-work-status.is-cleaning .gpb-timeline-room-cell {
+  background: color-mix(in srgb, var(--gpb-timeline-cleaning-color, #7c3aed) 12%, #ffffff);
+}
+
+.gpb-reservation-timeline-row.has-work-status.is-repair .gpb-timeline-room-cell {
+  background: color-mix(in srgb, var(--gpb-timeline-repair-color, #d12b2b) 12%, #ffffff);
+}
+
 .gpb-timeline-room-cell {
   position: sticky;
   left: 0;
@@ -5815,6 +5873,18 @@ body.gpb-reservation-split-resizing {
   background: #ffffff;
   min-height: 0;
   padding: 3px 12px;
+}
+
+.gpb-timeline-room-trigger {
+  display: grid;
+  gap: 1px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-align: left;
 }
 
 .gpb-timeline-room-cell strong {
@@ -5830,6 +5900,77 @@ body.gpb-reservation-split-resizing {
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.gpb-timeline-room-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
+  max-width: 100%;
+  margin-top: 3px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 4px 5px 4px 7px;
+}
+
+.gpb-timeline-room-status.is-cleaning {
+  background: color-mix(in srgb, var(--gpb-timeline-cleaning-color, #7c3aed) 18%, #ffffff);
+  color: #5b21b6;
+}
+
+.gpb-timeline-room-status.is-repair {
+  background: color-mix(in srgb, var(--gpb-timeline-repair-color, #d12b2b) 16%, #ffffff);
+  color: #9f1d1d;
+}
+
+.gpb-timeline-room-status button {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 74%);
+  color: currentColor;
+  cursor: pointer;
+  padding: 0;
+}
+
+.gpb-timeline-room-menu {
+  position: absolute;
+  top: calc(100% - 6px);
+  left: 10px;
+  z-index: 160;
+  display: grid;
+  gap: 4px;
+  min-width: 126px;
+  border: 1px solid #d8dee5;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 30px rgb(15 23 42 / 18%);
+  padding: 6px;
+}
+
+.gpb-timeline-room-menu button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #25313d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 0 9px;
+  text-align: left;
+}
+
+.gpb-timeline-room-menu button:hover {
+  background: #eef8f4;
+  color: #0f6b57;
 }
 
 .gpb-timeline-date-cell {
@@ -6065,6 +6206,12 @@ body.gpb-reservation-split-resizing {
   background: var(--gpb-timeline-cleaning-color, #7c3aed);
   height: 3px;
   opacity: 0.92;
+}
+
+.gpb-timeline-status-bar.is-cleaning.is-manual {
+  position: static;
+  width: auto;
+  margin-top: calc(50% - 2px + var(--gpb-timeline-lane, 0) * 8px);
 }
 
 .gpb-timeline-status-bar.is-repair {

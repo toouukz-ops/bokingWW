@@ -13818,6 +13818,10 @@ function AnalyticsModal({
     () => buildAnalyticsSnapshot(filteredReservations, drafts, rooms, filteredGuestContacts, filteredExpenseEntries),
     [drafts, filteredExpenseEntries, filteredGuestContacts, filteredReservations, rooms]
   );
+  const todayPrepaymentSales = useMemo(
+    () => buildTodayPrepaymentSales(reservations, rooms, formatDateInput(new Date())),
+    [reservations, rooms]
+  );
   const priceRecommendation = useMemo(
     () => buildAnalyticsPriceRecommendation({
       analytics,
@@ -13909,6 +13913,8 @@ function AnalyticsModal({
                   </select>
                 </label>
               </section>
+
+              <TodayPrepaymentSalesPanel summary={todayPrepaymentSales} />
 
               <section className="gpb-analytics-cards">
                 <h2>Сводка цифр</h2>
@@ -14304,6 +14310,60 @@ function AnalyticsCard({ label, value }: { label: string; value: number | string
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function TodayPrepaymentSalesPanel({ summary }: { summary: ReturnType<typeof buildTodayPrepaymentSales> }) {
+  return (
+    <section className="gpb-analytics-panel gpb-today-sales-panel">
+      <header>
+        <div>
+          <h2>Продажи за сегодня</h2>
+          <span>Предоплаты, полученные {formatShortDayMonth(summary.date)}</span>
+        </div>
+        <strong>{formatAnalyticsMoney(summary.total)}</strong>
+      </header>
+      <div className="gpb-today-sales-stats">
+        <div>
+          <span>Предоплат</span>
+          <b>{summary.count}</b>
+        </div>
+        <div>
+          <span>Средняя</span>
+          <b>{formatAnalyticsMoney(summary.average)}</b>
+        </div>
+        <div>
+          <span>Даты заездов</span>
+          <b>{summary.stayDateRange || "Нет"}</b>
+        </div>
+      </div>
+      {summary.items.length ? (
+        <div className="gpb-today-sales-list">
+          {summary.items.map((item) => (
+            <article className="gpb-today-sales-row" key={item.id}>
+              <time>{item.time}</time>
+              <div>
+                <strong>{item.guestName}</strong>
+                <span>{item.rooms}</span>
+              </div>
+              <span>{item.stayDates}</span>
+              <b>{formatAnalyticsMoney(item.amount)}</b>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="gpb-today-sales-empty">Сегодня предоплат ещё нет.</p>
+      )}
+      <AnalyticsBarChart
+        title="График предоплат за сегодня"
+        items={summary.items.map((item) => ({
+          label: `${item.time} · ${item.guestName}`,
+          value: item.amount,
+          formatted: formatAnalyticsMoney(item.amount)
+        }))}
+        emptyLabel="Сегодня предоплат ещё нет"
+      />
+    </section>
   );
 }
 
@@ -20849,6 +20909,42 @@ function buildAnalyticsSnapshot(
   };
 }
 
+function buildTodayPrepaymentSales(reservations: Reservation[], rooms: Room[], today: string) {
+  const items = reservations
+    .filter((reservation) => reservation.status !== "cancelled" && !reservation.noShowAt)
+    .filter((reservation) => isSameLocalDate(reservation.prepaymentReceivedAt, today))
+    .map((reservation) => {
+      const finance = getReservationFinance(reservation);
+      const amount = finance.displayPrepayment;
+      const bookedRooms = reservation.roomIds
+        .map((roomId) => rooms.find((room) => room.id === roomId))
+        .filter((room): room is Room => Boolean(room));
+
+      return {
+        amount,
+        guestName: reservation.guestFirstName || "Гость",
+        id: reservation.id,
+        receivedAt: reservation.prepaymentReceivedAt || "",
+        rooms: formatReservationRowRooms(bookedRooms) || "Объект не указан",
+        stayDates: formatReservationDateRange(reservation),
+        time: formatAnalyticsTime(reservation.prepaymentReceivedAt)
+      };
+    })
+    .filter((item) => item.amount > 0)
+    .sort((left, right) => String(right.receivedAt).localeCompare(String(left.receivedAt)));
+  const total = items.reduce((sum, item) => sum + item.amount, 0);
+  const stayDates = Array.from(new Set(items.map((item) => item.stayDates).filter(Boolean)));
+
+  return {
+    average: items.length ? Math.round(total / items.length) : 0,
+    count: items.length,
+    date: today,
+    items,
+    stayDateRange: stayDates.length > 3 ? `${stayDates.slice(0, 3).join(", ")} +${stayDates.length - 3}` : stayDates.join(", "),
+    total
+  };
+}
+
 function buildAnalyticsPriceRecommendation({
   analytics,
   dateFrom,
@@ -23178,6 +23274,23 @@ function buildMenuItemPhotoCaption(item: MenuItem) {
 
 function formatAnalyticsMoney(price: number) {
   return `${new Intl.NumberFormat("ru-RU").format(price || 0)} тг`;
+}
+
+function formatAnalyticsTime(value?: string) {
+  if (!value) return "--:--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--:--";
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function isSameLocalDate(value: string | undefined, date: string) {
+  if (!value || !date) return false;
+  const parsedDate = new Date(value);
+  if (Number.isNaN(parsedDate.getTime())) return false;
+  return formatDateInput(parsedDate) === date;
 }
 
 function formatNightsWord(count: number) {

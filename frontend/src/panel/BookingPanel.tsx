@@ -12664,6 +12664,24 @@ function SettingsModal({
                   <h2>Допместа</h2>
                 </div>
                 <p className="gpb-settings-note">Создайте здесь позиции, которые оператор выбирает в карточке номера по кнопке «+»: диван, матрас, раскладушка, софа и т.д.</p>
+                <div className="gpb-form-grid">
+                  <label>
+                    Надувные матрасы, шт.
+                    <input inputMode="numeric" value={localAirBeds} onChange={(event) => setLocalAirBeds(event.target.value)} />
+                  </label>
+                  <label>
+                    Матрас: фикс. цена за сутки
+                    <input inputMode="numeric" value={localAirBedPrice} onChange={(event) => setLocalAirBedPrice(event.target.value)} />
+                  </label>
+                  <label>
+                    Раскладушки, шт.
+                    <input inputMode="numeric" value={localRollaways} onChange={(event) => setLocalRollaways(event.target.value)} />
+                  </label>
+                  <label>
+                    Раскладушка: фикс. цена за сутки
+                    <input inputMode="numeric" value={localRollawayPrice} onChange={(event) => setLocalRollawayPrice(event.target.value)} />
+                  </label>
+                </div>
                 <EditableSettingsFields
                   fields={inventoryCustomFields}
                   counts={inventoryCustomCounts}
@@ -12671,7 +12689,7 @@ function SettingsModal({
                   onCountChange={onInventoryCustomCountChange}
                   onDelete={onInventoryCustomFieldDelete}
                 />
-                <p className="gpb-settings-note">Стоимость включается автоматически, когда допместо добавлено в бронь. Проценты расчета задаются в разделе «Прайс / пакет».</p>
+                <p className="gpb-settings-note">Если фиксированная цена больше 0, она применяется за сутки вместо процента. Если поставить 0, расчет пойдет по процентам из раздела «Прайс / пакет».</p>
                 <div className="gpb-settings-panel-actions">
                   <button className="gpb-settings-add-button" type="button" onClick={addInventoryField}>
                     Создать допместо

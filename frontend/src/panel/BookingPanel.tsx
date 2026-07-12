@@ -5287,7 +5287,6 @@ export function BookingPanel() {
   async function ensureExistingWhatsAppContactOrOverwrite(contactName: string, normalizedPhone: string) {
     const existingOpened = await openExistingWhatsAppContactForManualSale(contactName, normalizedPhone);
     debugContactFlow("booking-contact-existing-before-overwrite", { contactName, normalizedPhone, existingOpened });
-    if (existingOpened) return true;
     return overwriteActiveWhatsAppContact(contactName, normalizedPhone);
   }
 
@@ -18255,6 +18254,10 @@ async function saveActiveWhatsAppContactFromProfile(contactName = "", contactPho
       await closeWhatsAppProfilePanelsAsync();
       return true;
     }
+    if (alreadySaved && !alreadyNamed) {
+      const editedExistingContact = await editOpenWhatsAppContactFromProfilePanel(contactName, contactPhone, profilePanel, "profile-save-edit-existing");
+      if (editedExistingContact) return true;
+    }
 
     let addButton = findProfilePersonAddButton(profilePanel) ?? findProfilePersonAddButton(document.body);
     debugContactFlow("profile-save-add-button", { found: Boolean(addButton), text: getDebugText(addButton), rect: getDebugRect(addButton) });
@@ -18280,6 +18283,10 @@ async function saveActiveWhatsAppContactFromProfile(contactName = "", contactPho
         if (savedAfterDetails && namedAfterDetails) {
           await closeWhatsAppProfilePanelsAsync();
           return true;
+        }
+        if (savedAfterDetails && !namedAfterDetails && detailsPanel) {
+          const editedExistingContact = await editOpenWhatsAppContactFromProfilePanel(contactName, contactPhone, detailsPanel, "profile-save-details-edit-existing");
+          if (editedExistingContact) return true;
         }
         debugContactFlow("profile-save-skip-edit-fallback", {
           reason: "no explicit contact edit button",

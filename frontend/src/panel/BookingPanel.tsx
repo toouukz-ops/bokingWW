@@ -4838,7 +4838,8 @@ export function BookingPanel() {
     const sourceChatId = sourceChat?.id ?? "";
     suppressActiveChatSyncRef.current = true;
     try {
-      const profile = await extractActiveChatPhoneFast(sourceChat);
+      const fastProfile = await extractActiveChatPhoneFast(sourceChat);
+      const profile = fastProfile.phone ? fastProfile : await extractActiveChatPhoneOnly(sourceChat);
       if (sourceChatId && activeChatIdRef.current !== sourceChatId) return false;
       const phone = profile.phone;
       if (!phone) {

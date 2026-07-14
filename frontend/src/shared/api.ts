@@ -259,7 +259,8 @@ export async function getRooms(): Promise<Room[]> {
     if (!response.ok) {
       throw new Error(`Rooms request failed: ${response.status}`);
     }
-    const rooms = (await response.json()) as Room[];
+    const serverRooms = (await response.json()) as Room[];
+    const rooms = serverRooms.map((room) => mergeServerRoomWithLocalFallback(room, localRooms.find((item) => item.id === room.id)));
     await saveLocalRooms(rooms);
     return rooms;
   } catch {
@@ -272,7 +273,7 @@ export async function saveRoom(room: Room, options: { requireServer?: boolean } 
   await saveLocalRooms(localRooms.filter((item) => item.id !== room.id).concat(room));
 
   try {
-    return await saveRoomToServer(room);
+    return mergeServerRoomWithLocalFallback(await saveRoomToServer(room), room);
   } catch (error) {
     if (options.requireServer) throw error;
     return room;
@@ -966,6 +967,15 @@ async function saveRoomToServer(room: Room): Promise<Room> {
   }
 
   return response.json();
+}
+
+function mergeServerRoomWithLocalFallback(serverRoom: Room, localRoom?: Room): Room {
+  if (!localRoom) return serverRoom;
+  const serverRecord = serverRoom as unknown as Record<string, unknown>;
+  return {
+    ...serverRoom,
+    areaSqm: Object.prototype.hasOwnProperty.call(serverRecord, "areaSqm") ? serverRoom.areaSqm : localRoom.areaSqm
+  };
 }
 
 function mergeById(currentValue: unknown, incomingValue: unknown) {

@@ -15115,6 +15115,15 @@ function RoomCatalogModal({
                           ))}
                         </select>
                       </label>
+                      <label>
+                        Площадь, м²
+                        <input
+                          inputMode="decimal"
+                          value={formatDecimalInput(activeRoom.areaSqm || 0)}
+                          onChange={(event) => updateActiveRoom({ areaSqm: Math.max(0, toNumber(event.target.value, 0)) })}
+                          placeholder="Например: 24"
+                        />
+                      </label>
                       {shouldShowBathroomType(activeRoom.objectType) ? (
                         <label>
                           Душ и санузел
@@ -16300,6 +16309,7 @@ function createCustomObject({
     weekdayPrice: 0,
     weekendPrice: 0,
     holidayPrice: 0,
+    areaSqm: 0,
     floor,
     occupancyLabel: roomClass,
     bathroomType: getDefaultBathroomType(objectType),
@@ -16407,6 +16417,7 @@ function mergeRooms(loadedRooms: Room[]) {
     weekdayPrice: room.weekdayPrice ?? room.basePrice ?? 0,
     weekendPrice: room.weekendPrice ?? room.basePrice ?? room.weekdayPrice ?? 0,
     holidayPrice: room.holidayPrice ?? room.weekendPrice ?? room.basePrice ?? room.weekdayPrice ?? 0,
+    areaSqm: typeof room.areaSqm === "number" ? room.areaSqm : 0,
     occupancyLabel: room.occupancyLabel ?? "",
     bathroomType: room.bathroomType ?? getDefaultBathroomType(room.objectType ?? getDefaultObjectType(room.category ?? getDefaultCategory(room.number))),
     sleepingPlaces: Array.isArray(room.sleepingPlaces) ? room.sleepingPlaces : [],
@@ -21300,6 +21311,7 @@ function buildCatalogCsvExport(rooms: Room[]) {
     "weekdayPrice",
     "weekendPrice",
     "holidayPrice",
+    "areaSqm",
     "floor",
     "occupancyLabel",
     "bathroomType",
@@ -21342,6 +21354,7 @@ function buildCatalogCsvExport(rooms: Room[]) {
     String(room.weekdayPrice || 0),
     String(room.weekendPrice || 0),
     String(room.holidayPrice || 0),
+    String(room.areaSqm || 0),
     room.floor,
     room.occupancyLabel,
     room.bathroomType,
@@ -23368,6 +23381,11 @@ function formatPrice(price: number) {
   return `${new Intl.NumberFormat("ru-RU").format(price)} тг`;
 }
 
+function formatAreaSqm(areaSqm: number) {
+  if (!areaSqm) return "";
+  return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(areaSqm)} м²`;
+}
+
 function formatKitchenSaleRowLabel(sale: Reservation) {
   const label = (sale.comment || "").replace(/^Кухня:\s*/i, "").trim();
   const match = label.match(/^(.*?)\s*[×xх]\s*(\d+)\s*$/i);
@@ -23856,6 +23874,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
       `${getObjectTypeLabel(room)} ${room.number}`,
       room.title,
       isStayBookingObject(room) ? formatCapacityTitle(getRoomTotalSleepingCapacity(room)) : "",
+      formatAreaSqm(room.areaSqm || 0),
       room.floor
     ].filter(Boolean);
     const hasCustomDates = item.checkIn !== reservation.checkIn || item.checkOut !== reservation.checkOut;

@@ -388,6 +388,7 @@ export interface Room {
   weekdayPrice: number;
   weekendPrice: number;
   holidayPrice: number;
+  areaSqm: number;
   dynamicPricingApplied?: boolean;
   dynamicPricingBasePrice?: number;
   dynamicPricesByDate?: Record<string, number>;

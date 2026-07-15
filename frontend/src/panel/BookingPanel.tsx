@@ -16669,7 +16669,7 @@ function isRoomReserved(room: Room, checkIn: string, checkOut: string, checkInTi
 
   return reservations.some((reservation) =>
     isReservationActiveOccupancy(reservation) &&
-    getReservationItems(reservation).some((item) =>
+    getReservationBlockingItems(reservation).some((item) =>
       item.roomId === room.id &&
       dateRangesOverlap(checkIn, checkOut, item.checkIn, item.checkOut)
     )
@@ -16687,7 +16687,7 @@ function findRoomReservedReservation(room: Room, checkIn: string, checkOut: stri
 
   return reservations.find((reservation) =>
     isReservationActiveOccupancy(reservation) &&
-    getReservationItems(reservation).some((item) =>
+    getReservationBlockingItems(reservation).some((item) =>
       item.roomId === room.id &&
       dateRangesOverlap(checkIn, checkOut, item.checkIn, item.checkOut)
     )
@@ -16920,7 +16920,7 @@ function isReservationItemRelevantForCalendarDate(item: Pick<ReservationItem, "c
 }
 
 function getReservationCalendarItemsForDate(reservation: Reservation, date: string, rooms: Room[] = []) {
-  const items = getReservationItems(reservation, rooms);
+  const items = getReservationBlockingItems(reservation, rooms);
   if (!date) return items;
   return items.filter((item) => isReservationItemRelevantForCalendarDate(item, date));
 }
@@ -20120,7 +20120,9 @@ function buildReservationItemsFromRooms(
   const existingByRoomId = new Map(existingItems.map((item) => [item.roomId, item]));
   type DraftReservationItem = ReservationItem & { locked: boolean };
   const rawItems = rooms.map((room) => {
-    const dateRange = getRoomDateRange(room.id, checkIn, checkOut, roomDateOverrides);
+    const dateRange = rooms.length === 1 && !isHourlyBookingObject(room)
+      ? { checkIn, checkOut }
+      : getRoomDateRange(room.id, checkIn, checkOut, roomDateOverrides);
     const nights = getNightsCount(dateRange.checkIn, dateRange.checkOut);
     const roomInventory = extraInventoryByRoomId[room.id];
     const roomSubtotal = calculateRoomStayPrice(room, dateRange.checkIn, dateRange.checkOut, hourlyHours);
@@ -20212,6 +20214,24 @@ function getReservationItems(reservation: Reservation, rooms: Room[] = []) {
       checkedOutAt: reservation.checkedOutAt
     } satisfies ReservationItem;
   });
+}
+
+function getReservationBlockingItems(reservation: Reservation, rooms: Room[] = []) {
+  const items = getReservationItems(reservation, rooms);
+  if (reservation.roomIds.length !== 1 || items.length !== 1) return items;
+  const item = items[0];
+  const roomId = reservation.roomIds[0];
+  if (!item || item.roomId !== roomId) return items;
+
+  const checkIn = item.checkIn && reservation.checkIn
+    ? item.checkIn < reservation.checkIn ? item.checkIn : reservation.checkIn
+    : item.checkIn || reservation.checkIn;
+  const checkOut = item.checkOut && reservation.checkOut
+    ? item.checkOut > reservation.checkOut ? item.checkOut : reservation.checkOut
+    : item.checkOut || reservation.checkOut;
+
+  if (checkIn === item.checkIn && checkOut === item.checkOut) return items;
+  return [{ ...item, checkIn, checkOut }];
 }
 
 function buildExtendedReservationItems(items: ReservationItem[] | undefined, previousCheckOut: string, nextCheckOut: string, extensionAmount: number) {

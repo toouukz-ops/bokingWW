@@ -21530,7 +21530,6 @@ function formatAdminDayGroupLine(group: AdminDayEntryGroup) {
   const { entries, reservation, status } = group;
   const firstEntry = entries[0];
   if (!firstEntry) return "";
-  const guestCount = getReservationGuestTotal(reservation);
   const timeText = status === "check-in"
     ? `заезд ${firstEntry.item.checkInTime || reservation.checkInTime || DEFAULT_CHECK_IN_TIME}`
     : status === "check-out"
@@ -21544,7 +21543,7 @@ function formatAdminDayGroupLine(group: AdminDayEntryGroup) {
   return [
     `- ${formatAdminBookingObjects(groupRooms)} - ${reservation.guestFirstName || "Гость"}`,
     timeText,
-    guestCount ? `${guestCount} чел.` : "гости не указаны",
+    formatReservationCompactGuestCountText(reservation),
     paymentText,
     extraInventoryText ? `допместа: ${extraInventoryText}` : "",
     comment ? `комм.: ${comment}` : ""
@@ -21722,7 +21721,7 @@ function formatReservationCompactGuestCountText(reservation: Reservation) {
   const children = Math.max(0, reservation.children || 0);
   const total = adults + teenagers + children;
   if (!total) return "гости не указаны";
-  return `${total} чел. (${adults}/${teenagers}/${children})`;
+  return `${total} чел. (${adults} взр. / ${teenagers} подрост. / ${children} дет.)`;
 }
 
 function formatReservationSummaryGuestLine(reservation: Reservation) {

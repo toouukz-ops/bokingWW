@@ -453,7 +453,7 @@ const CREATE_TYPE_OPTIONS: Array<{ category: Room["category"]; objectType: Room[
 ];
 const SLEEPING_PLACE_OPTIONS: Array<{ value: SleepingPlaceType; label: string; title: string; capacity: number }> = [
   { value: "double-bed", label: "Двуспальная кровать", title: "Двуспальная кровать", capacity: 2 },
-  { value: "three-quarter-bed", label: "Полутораспальная кровать", title: "Полутораспальная кровать", capacity: 1.5 },
+  { value: "three-quarter-bed", label: "Полутораспальная кровать", title: "Полутораспальная кровать", capacity: 1 },
   { value: "single-bed", label: "Односпальная кровать", title: "Односпальная кровать", capacity: 1 },
   { value: "sofa", label: "Диван", title: "Диван", capacity: 1 },
   { value: "fixed-sofa", label: "Нераскладной диван", title: "Нераскладной диван", capacity: 0 },
@@ -20585,6 +20585,8 @@ function getExtraGuestTypeLabel(type: ExtraGuestType) {
   return "взрослый";
 }
 
+type SharedBedChildrenAllocation = Partial<Record<"double-bed" | "three-quarter-bed", number>>;
+
 function buildSharedBedChildrenByRoomId(
   reservation: Pick<Reservation, "adults" | "children" | "extraInventoryByRoomId">,
   rooms: Room[]
@@ -20594,21 +20596,34 @@ function buildSharedBedChildrenByRoomId(
     .filter((placement) => placement.guestType === "child")
     .length;
   let remainingChildren = Math.max(0, totalChildren - childExtraPlaces);
-  let remainingAdultPairs = Math.floor(Math.max(0, reservation.adults || 0) / 2);
-  const result: Record<string, number> = {};
+  let remainingAdults = Math.max(0, reservation.adults || 0);
+  const result: Record<string, SharedBedChildrenAllocation> = {};
 
-  if (!remainingChildren || !remainingAdultPairs) return result;
+  if (!remainingChildren || !remainingAdults) return result;
 
   for (const room of rooms) {
-    const doubleBeds = getRoomDoubleBedCount(room);
-    if (!doubleBeds) continue;
-    const childrenForRoom = Math.min(remainingChildren, remainingAdultPairs, doubleBeds);
-    if (childrenForRoom > 0) {
-      result[room.id] = childrenForRoom;
-      remainingChildren -= childrenForRoom;
-      remainingAdultPairs -= childrenForRoom;
+    const allocation: SharedBedChildrenAllocation = {};
+    const threeQuarterBeds = getRoomShareableBedCount(room, "three-quarter-bed");
+    const childrenOnThreeQuarterBeds = Math.min(remainingChildren, remainingAdults, threeQuarterBeds);
+    if (childrenOnThreeQuarterBeds > 0) {
+      allocation["three-quarter-bed"] = childrenOnThreeQuarterBeds;
+      remainingChildren -= childrenOnThreeQuarterBeds;
+      remainingAdults -= childrenOnThreeQuarterBeds;
     }
-    if (!remainingChildren || !remainingAdultPairs) break;
+
+    const doubleBeds = getRoomShareableBedCount(room, "double-bed");
+    const adultPairs = Math.floor(remainingAdults / 2);
+    const childrenOnDoubleBeds = Math.min(remainingChildren, adultPairs, doubleBeds);
+    if (childrenOnDoubleBeds > 0) {
+      allocation["double-bed"] = childrenOnDoubleBeds;
+      remainingChildren -= childrenOnDoubleBeds;
+      remainingAdults -= childrenOnDoubleBeds * 2;
+    }
+
+    if ((allocation["three-quarter-bed"] || 0) + (allocation["double-bed"] || 0) > 0) {
+      result[room.id] = allocation;
+    }
+    if (!remainingChildren || !remainingAdults) break;
   }
 
   return result;
@@ -20621,9 +20636,9 @@ function getExtraInventoryPlacementsByRooms(extraInventoryByRoomId: Record<strin
     .flatMap(([, item]) => getExtraInventoryPlacements(item));
 }
 
-function getRoomDoubleBedCount(room: Pick<Room, "sleepingPlaces">) {
+function getRoomShareableBedCount(room: Pick<Room, "sleepingPlaces">, type: "double-bed" | "three-quarter-bed") {
   return room.sleepingPlaces.reduce((sum, place) => {
-    return sum + (place.type === "double-bed" ? Math.max(0, place.count || 0) : 0);
+    return sum + (place.type === type ? Math.max(0, place.count || 0) : 0);
   }, 0);
 }
 
@@ -20970,7 +20985,7 @@ function createSleepingPlacePatch(type: SleepingPlaceType): Partial<SleepingPlac
 function getSleepingPlaceCapacity(place: Pick<SleepingPlace, "type" | "normalCapacity">) {
   if (place.type === "fixed-sofa") return 0;
   if (place.type === "double-bed") return 2;
-  if (place.type === "three-quarter-bed") return 1.5;
+  if (place.type === "three-quarter-bed") return 1;
   if (place.type === "sofa-bed") return 2;
   if (place.type === "custom") return Math.max(1, place.normalCapacity || 1);
   return 1;
@@ -20981,6 +20996,7 @@ function formatPlaceCount(value: number) {
 }
 
 function getSleepingPlacePlacesCount(place: Pick<SleepingPlace, "count" | "normalCapacity" | "placesCount" | "type">) {
+  if (place.type === "three-quarter-bed") return Math.max(0, place.count || 0);
   if (typeof place.placesCount === "number") return Math.max(0, place.placesCount);
   return Math.max(0, place.count || 0) * getSleepingPlaceCapacity(place);
 }
@@ -23912,7 +23928,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     const roomExtraInventory = formatRoomExtraInventoryLines(reservation.extraInventoryByRoomId?.[room.id], room, pricingItem, reservation);
     const roomFoodLine = foodSummary.mode === "per-room" ? formatReservationRoomFoodLine(room) : "";
 
-    const sleepingPlaces = formatReservationSleepingPlaceLines(room.sleepingPlaces, sharedBedChildrenByRoomId[room.id] ?? 0);
+    const sleepingPlaces = formatReservationSleepingPlaceLines(room.sleepingPlaces, sharedBedChildrenByRoomId[room.id]);
     const roomTitleParts = [
       `${getObjectTypeLabel(room)} ${room.number}`,
       room.title,
@@ -26609,12 +26625,16 @@ function formatSleepingPlaceLines(places: SleepingPlace[]) {
     .map((place) => `* ${formatSleepingPlaceWithCapacity(place)}`);
 }
 
-function formatReservationSleepingPlaceLines(places: SleepingPlace[], sharedBedChildren = 0) {
-  let remainingSharedBedChildren = Math.max(0, Math.round(sharedBedChildren || 0));
+function formatReservationSleepingPlaceLines(places: SleepingPlace[], sharedBedChildren: SharedBedChildrenAllocation = {}) {
+  const remainingByType: SharedBedChildrenAllocation = {
+    "double-bed": Math.max(0, Math.round(sharedBedChildren["double-bed"] || 0)),
+    "three-quarter-bed": Math.max(0, Math.round(sharedBedChildren["three-quarter-bed"] || 0))
+  };
   return getVisibleSleepingPlaces(places)
     .map((place) => {
-      const childCount = place.type === "double-bed" ? Math.min(remainingSharedBedChildren, Math.max(0, place.count || 0)) : 0;
-      remainingSharedBedChildren -= childCount;
+      const shareableType = place.type === "double-bed" || place.type === "three-quarter-bed" ? place.type : null;
+      const childCount = shareableType ? Math.min(remainingByType[shareableType] || 0, Math.max(0, place.count || 0)) : 0;
+      if (shareableType) remainingByType[shareableType] = Math.max(0, (remainingByType[shareableType] || 0) - childCount);
       const childSuffix = childCount > 0 ? ` | + ${childCount} ${getChildWord(childCount)}` : "";
       return `| ${formatSleepingPlaceWithCapacity(place).replace(" / ", " | ")}${childSuffix}`;
     });

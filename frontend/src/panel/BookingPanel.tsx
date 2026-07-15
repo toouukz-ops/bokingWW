@@ -20585,6 +20585,48 @@ function getExtraGuestTypeLabel(type: ExtraGuestType) {
   return "взрослый";
 }
 
+function buildSharedBedChildrenByRoomId(
+  reservation: Pick<Reservation, "adults" | "children" | "extraInventoryByRoomId">,
+  rooms: Room[]
+) {
+  const totalChildren = Math.max(0, reservation.children || 0);
+  const childExtraPlaces = getExtraInventoryPlacementsByRooms(reservation.extraInventoryByRoomId ?? {}, rooms)
+    .filter((placement) => placement.guestType === "child")
+    .length;
+  let remainingChildren = Math.max(0, totalChildren - childExtraPlaces);
+  let remainingAdultPairs = Math.floor(Math.max(0, reservation.adults || 0) / 2);
+  const result: Record<string, number> = {};
+
+  if (!remainingChildren || !remainingAdultPairs) return result;
+
+  for (const room of rooms) {
+    const doubleBeds = getRoomDoubleBedCount(room);
+    if (!doubleBeds) continue;
+    const childrenForRoom = Math.min(remainingChildren, remainingAdultPairs, doubleBeds);
+    if (childrenForRoom > 0) {
+      result[room.id] = childrenForRoom;
+      remainingChildren -= childrenForRoom;
+      remainingAdultPairs -= childrenForRoom;
+    }
+    if (!remainingChildren || !remainingAdultPairs) break;
+  }
+
+  return result;
+}
+
+function getExtraInventoryPlacementsByRooms(extraInventoryByRoomId: Record<string, ExtraInventoryItem>, rooms: Array<Pick<Room, "id">>) {
+  const roomIds = new Set(rooms.map((room) => room.id));
+  return Object.entries(extraInventoryByRoomId)
+    .filter(([roomId]) => roomIds.has(roomId))
+    .flatMap(([, item]) => getExtraInventoryPlacements(item));
+}
+
+function getRoomDoubleBedCount(room: Pick<Room, "sleepingPlaces">) {
+  return room.sleepingPlaces.reduce((sum, place) => {
+    return sum + (place.type === "double-bed" ? Math.max(0, place.count || 0) : 0);
+  }, 0);
+}
+
 function normalizeExtraInventoryPlacement(placement: Partial<ExtraInventoryPlacement>, index: number): ExtraInventoryPlacement | null {
   const label = String(placement.label || getExtraInventoryTypeLabel(placement.typeId || "") || "Доп.место").trim();
   if (!label) return null;
@@ -23845,6 +23887,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     .filter((room): room is Room => Boolean(room));
   const nightlyRooms = bookedRooms.filter((room) => !isHourlyBookingObject(room));
   const hourlyRooms = bookedRooms.filter(isHourlyBookingObject);
+  const sharedBedChildrenByRoomId = buildSharedBedChildrenByRoomId(reservation, nightlyRooms);
   const guestName = resolveGuestNameForPhone(reservation.guestFirstName, reservation.phone) || "Гость";
   const guestLabel = "Гость";
   const hourlyHours = Math.max(2, reservation.hourlyHours ?? 2);
@@ -23870,7 +23913,7 @@ function buildReservationMessage(reservation: Reservation, rooms: Room[]) {
     const roomExtraInventory = formatRoomExtraInventoryLines(reservation.extraInventoryByRoomId?.[room.id], room, pricingItem, reservation);
     const roomFoodLine = foodSummary.mode === "per-room" ? formatReservationRoomFoodLine(room) : "";
 
-    const sleepingPlaces = formatReservationSleepingPlaceLines(room.sleepingPlaces);
+    const sleepingPlaces = formatReservationSleepingPlaceLines(room.sleepingPlaces, sharedBedChildrenByRoomId[room.id] ?? 0);
     const roomTitleParts = [
       `${getObjectTypeLabel(room)} ${room.number}`,
       room.title,
@@ -26567,9 +26610,15 @@ function formatSleepingPlaceLines(places: SleepingPlace[]) {
     .map((place) => `* ${formatSleepingPlaceWithCapacity(place)}`);
 }
 
-function formatReservationSleepingPlaceLines(places: SleepingPlace[]) {
+function formatReservationSleepingPlaceLines(places: SleepingPlace[], sharedBedChildren = 0) {
+  let remainingSharedBedChildren = Math.max(0, Math.round(sharedBedChildren || 0));
   return getVisibleSleepingPlaces(places)
-    .map((place) => `| ${formatSleepingPlaceWithCapacity(place).replace(" / ", " | ")}`);
+    .map((place) => {
+      const childCount = place.type === "double-bed" ? Math.min(remainingSharedBedChildren, Math.max(0, place.count || 0)) : 0;
+      remainingSharedBedChildren -= childCount;
+      const childSuffix = childCount > 0 ? ` | + ${childCount} ${getChildWord(childCount)}` : "";
+      return `| ${formatSleepingPlaceWithCapacity(place).replace(" / ", " | ")}${childSuffix}`;
+    });
 }
 
 function getVisibleSleepingPlaces(places: SleepingPlace[]) {
@@ -26590,4 +26639,14 @@ function getSleepingPlaceTitle(place: Pick<SleepingPlace, "title" | "type">) {
 function formatSleepingPlaceWithCapacity(place: SleepingPlace) {
   const count = Math.max(0, place.count || 0);
   return `${getSleepingPlaceTitle(place)}: ${count} / Мест: ${formatPlaceCount(getSleepingPlacePlacesCount(place))}`;
+}
+
+function getChildWord(count: number) {
+  const absCount = Math.abs(count);
+  const lastTwo = absCount % 100;
+  const last = absCount % 10;
+  if (lastTwo >= 11 && lastTwo <= 14) return "детей";
+  if (last === 1) return "ребенок";
+  if (last >= 2 && last <= 4) return "ребенка";
+  return "детей";
 }

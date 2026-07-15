@@ -15839,6 +15839,7 @@ function RoomListItem({
         <span>
           <strong>{shouldShowObjectNumber(room) ? room.number || "Без номера" : room.title || getObjectTypeLabel(room)}</strong>
           <small>{shouldShowObjectNumber(room) ? room.title || getObjectTypeLabel(room) : getObjectTypeLabel(room)}</small>
+          {formatAreaSqm(room.areaSqm || 0) ? <small>{formatAreaSqm(room.areaSqm || 0)}</small> : null}
         </span>
       </button>
     </>
@@ -23755,7 +23756,7 @@ function getPanelObjectCapacityTitle(room: Room) {
 
 function getPanelObjectMetaLine(room: Room) {
   if (!shouldShowObjectNumber(room)) return room.floor || "";
-  return [room.number || "Без номера", room.title || getObjectTypeLabel(room), room.floor].filter(Boolean).join(" | ");
+  return [room.number || "Без номера", room.title || getObjectTypeLabel(room), formatAreaSqm(room.areaSqm || 0), room.floor].filter(Boolean).join(" | ");
 }
 
 function getRoomTotalSleepingCapacity(room: Room) {

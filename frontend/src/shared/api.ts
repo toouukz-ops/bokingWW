@@ -260,7 +260,7 @@ export async function getRooms(): Promise<Room[]> {
       throw new Error(`Rooms request failed: ${response.status}`);
     }
     const serverRooms = (await response.json()) as Room[];
-    const rooms = serverRooms.map((room) => mergeServerRoomWithLocalFallback(room, localRooms.find((item) => item.id === room.id)));
+    const rooms = serverRooms.map((room) => mergeServerRoomWithLocalFallback(room, findLocalRoomFallback(localRooms, room)));
     await saveLocalRooms(rooms);
     return rooms;
   } catch {
@@ -976,6 +976,11 @@ function mergeServerRoomWithLocalFallback(serverRoom: Room, localRoom?: Room): R
     ...serverRoom,
     areaSqm: Object.prototype.hasOwnProperty.call(serverRecord, "areaSqm") ? serverRoom.areaSqm : localRoom.areaSqm
   };
+}
+
+function findLocalRoomFallback(localRooms: Room[], serverRoom: Room): Room | undefined {
+  return localRooms.find((room) => room.id === serverRoom.id)
+    ?? localRooms.find((room) => room.number && room.number === serverRoom.number);
 }
 
 function mergeById(currentValue: unknown, incomingValue: unknown) {

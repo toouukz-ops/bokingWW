@@ -23193,21 +23193,17 @@ function buildBookingPanelSummary(
   const availableStayRooms = availableRooms.filter((room) => isStayBookingObject(room) && isRoomIncludedInBookingSummary(room));
   const availableServiceObjects = availableRooms.filter((room) => !isStayBookingObject(room) && isRoomIncludedInBookingSummary(room));
   const activeReservations = reservations.filter((reservation) =>
-    isReservationActiveOccupancy(reservation) && dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
+    reservation.status === "booked" && getReservationPeriodStayRevenue(reservation, checkIn, checkOut, rooms) > 0
   );
   const bookedStayRoomIds = new Set(
     activeReservations
-      .flatMap((reservation) => reservation.roomIds)
-      .filter((roomId) => {
-        const room = rooms.find((item) => item.id === roomId);
-        return room ? isStayBookingObject(room) : false;
-      })
+      .flatMap((reservation) => getReservationPeriodStayRoomIds(reservation, checkIn, checkOut, rooms))
   );
-  const bookedRevenue = activeReservations.reduce((sum, reservation) => sum + reservation.total, 0);
+  const bookedRevenue = activeReservations.reduce((sum, reservation) => sum + getReservationPeriodStayRevenue(reservation, checkIn, checkOut, rooms), 0);
   const plannedRevenue = bookableStayRooms
     .reduce((sum, room) => sum + calculateRoomStayPrice(room, checkIn, checkOut), 0);
   const discountedReservations = activeReservations.filter((reservation) => reservation.discountAmount > 0);
-  const actualDiscountAmount = discountedReservations.reduce((sum, reservation) => sum + reservation.discountAmount, 0);
+  const actualDiscountAmount = discountedReservations.reduce((sum, reservation) => sum + getReservationPeriodStayDiscountAmount(reservation, checkIn, checkOut, rooms), 0);
   const analyticsReservations = filterAnalyticsReservations(reservations, rooms, { dateFrom: checkIn, dateTo: checkOut, search: "", statusFilter: "all" });
   const analyticsExpenses = filterAnalyticsExpenseEntries(expenseEntries, { dateFrom: checkIn, dateTo: checkOut });
   const analytics = buildAnalyticsSnapshot(analyticsReservations, {}, rooms, [], analyticsExpenses);
@@ -23241,6 +23237,39 @@ function buildBookingPanelSummary(
     plannedDiscountAmount,
     totalStayRooms: bookableStayRooms.length
   };
+}
+
+function getReservationPeriodStayRoomIds(reservation: Reservation, from: string, to: string, rooms: Room[]) {
+  return getReservationPeriodStayItems(reservation, from, to, rooms).map(({ item }) => item.roomId);
+}
+
+function getReservationPeriodStayRevenue(reservation: Reservation, from: string, to: string, rooms: Room[]) {
+  return Math.round(getReservationPeriodStayItems(reservation, from, to, rooms)
+    .reduce((sum, entry) => sum + entry.item.total * entry.share, 0));
+}
+
+function getReservationPeriodStayDiscountAmount(reservation: Reservation, from: string, to: string, rooms: Room[]) {
+  return Math.round(getReservationPeriodStayItems(reservation, from, to, rooms)
+    .reduce((sum, entry) => sum + Math.max(0, entry.item.discountAmount ?? 0) * entry.share, 0));
+}
+
+function getReservationPeriodStayItems(reservation: Reservation, from: string, to: string, rooms: Room[]) {
+  if (!from || !to || from >= to) return [];
+  const actualCheckOut = getActualReservationCheckOutDateInput(reservation);
+  return getReservationItems(reservation, rooms)
+    .map((item) => {
+      const room = rooms.find((candidate) => candidate.id === item.roomId);
+      if (!room || !isStayBookingObject(room)) return null;
+      const effectiveCheckOut = actualCheckOut && actualCheckOut < item.checkOut ? actualCheckOut : item.checkOut;
+      if (!dateRangesOverlap(from, to, item.checkIn, effectiveCheckOut)) return null;
+      const overlapStart = item.checkIn > from ? item.checkIn : from;
+      const overlapEnd = effectiveCheckOut < to ? effectiveCheckOut : to;
+      const overlapNights = getNightsCount(overlapStart, overlapEnd);
+      const itemNights = Math.max(1, getNightsCount(item.checkIn, item.checkOut));
+      const share = clampNumber(overlapNights / itemNights, 0, 1);
+      return share > 0 ? { item, share } : null;
+    })
+    .filter((entry): entry is { item: ReservationItem; share: number } => Boolean(entry));
 }
 
 function buildCatalogAvailabilitySummary(

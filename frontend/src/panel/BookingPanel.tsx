@@ -6602,8 +6602,8 @@ export function BookingPanel() {
             <strong>{bookingPanelSummary.achievementPercent}%</strong>
           </div>
           <div>
-            <span>Согласования</span>
-            <strong>{bookingPanelSummary.pendingReservationsCount}</strong>
+            <span>Сумма предоплат</span>
+            <strong>{formatAnalyticsMoney(bookingPanelSummary.prepaymentsAmount)}</strong>
           </div>
           <div>
             <span>Новые обращения</span>
@@ -6630,16 +6630,8 @@ export function BookingPanel() {
             <strong>{bookingPanelSummary.prepaymentsCount}</strong>
           </div>
           <div>
-            <span>Сумма предоплат</span>
-            <strong>{formatAnalyticsMoney(bookingPanelSummary.prepaymentsAmount)}</strong>
-          </div>
-          <div>
-            <span>Скидки план</span>
-            <strong>{formatAnalyticsMoney(bookingPanelSummary.plannedDiscountAmount)}</strong>
-          </div>
-          <div>
-            <span>Скидки факт</span>
-            <strong>{bookingPanelSummary.actualDiscountCount} / {formatAnalyticsMoney(bookingPanelSummary.actualDiscountAmount)}</strong>
+            <span>Согласования</span>
+            <strong>{bookingPanelSummary.pendingReservationsCount}</strong>
           </div>
         </div>
       </section>

@@ -314,6 +314,26 @@ body.gpb-booking-panel-open #app {
   white-space: nowrap;
 }
 
+.gpb-booking-summary-grid .gpb-summary-achievement.is-danger {
+  background: #fff1f0;
+  border-color: #f2b8b5;
+}
+
+.gpb-booking-summary-grid .gpb-summary-achievement.is-warning {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.gpb-booking-summary-grid .gpb-summary-achievement.is-soft-success {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.gpb-booking-summary-grid .gpb-summary-achievement.is-success {
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
 .gpb-booking-summary-grid .gpb-today-weather-summary {
   grid-column: 1 / -1;
   grid-template-columns: minmax(0, 1fr) auto;

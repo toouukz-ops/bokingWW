@@ -1221,6 +1221,7 @@ export function BookingPanel() {
     () => buildBookingPanelSummary(
       pricedRooms,
       reservations,
+      guestContacts,
       availableRooms,
       checkIn,
       checkOut,
@@ -1238,6 +1239,7 @@ export function BookingPanel() {
       checkIn,
       checkOut,
       expenseEntries,
+      guestContacts,
       inventoryAirBeds,
       inventoryRollaways,
       packageDiscountPercent,
@@ -6574,6 +6576,34 @@ export function BookingPanel() {
           <div>
             <span>Факт</span>
             <strong>{formatAnalyticsMoney(bookingPanelSummary.bookedRevenue)}</strong>
+          </div>
+          <div className={`gpb-summary-achievement is-${bookingPanelSummary.achievementTone}`}>
+            <span>Достижение</span>
+            <strong>{bookingPanelSummary.achievementPercent}%</strong>
+          </div>
+          <div>
+            <span>Обращения</span>
+            <strong>{bookingPanelSummary.inquiriesCount}</strong>
+          </div>
+          <div>
+            <span>Ответы</span>
+            <strong>{bookingPanelSummary.answeredCount}</strong>
+          </div>
+          <div>
+            <span>Не отвечено</span>
+            <strong>{bookingPanelSummary.unansweredCount}</strong>
+          </div>
+          <div>
+            <span>Согласования</span>
+            <strong>{bookingPanelSummary.pendingReservationsCount}</strong>
+          </div>
+          <div>
+            <span>Предоплаты</span>
+            <strong>{bookingPanelSummary.prepaymentsCount}</strong>
+          </div>
+          <div>
+            <span>Сумма предоплат</span>
+            <strong>{formatAnalyticsMoney(bookingPanelSummary.prepaymentsAmount)}</strong>
           </div>
           <div>
             <span>Скидки план</span>
@@ -23177,6 +23207,7 @@ function getReservationDailyReminderPriority(reminder: ReservationDailyReminder)
 function buildBookingPanelSummary(
   rooms: Room[],
   reservations: Reservation[],
+  guestContacts: GuestContact[],
   availableRooms: Room[],
   checkIn: string,
   checkOut: string,
@@ -23202,6 +23233,30 @@ function buildBookingPanelSummary(
   const bookedRevenue = activeReservations.reduce((sum, reservation) => sum + getReservationPeriodStayRevenue(reservation, checkIn, checkOut, rooms), 0);
   const plannedRevenue = bookableStayRooms
     .reduce((sum, room) => sum + calculateRoomStayPrice(room, checkIn, checkOut), 0);
+  const achievementPercent = plannedRevenue > 0
+    ? Math.round(bookedRevenue / plannedRevenue * 100)
+    : 0;
+  const achievementTone = getBookingSummaryAchievementTone(achievementPercent);
+  const pendingReservationsCount = reservations.filter((reservation) =>
+    reservation.status === "pending" && getReservationPeriodStayRevenue(reservation, checkIn, checkOut, rooms) > 0
+  ).length;
+  const inquiryContacts = filterAnalyticsGuestContacts(guestContacts, { dateFrom: checkIn, dateTo: checkOut, search: "" });
+  const inquiryKeys = new Set(
+    inquiryContacts
+      .map((contact) => getAnalyticsPersonKey(contact.phone, contact.appeal))
+      .filter((key): key is string => Boolean(key))
+  );
+  const answeredKeys = new Set<string>();
+  for (const reservation of reservations) {
+    if (reservation.status === "cancelled") continue;
+    if (getReservationPeriodStayRevenue(reservation, checkIn, checkOut, rooms) <= 0) continue;
+    const key = getAnalyticsPersonKey(reservation.phone, reservation.guestFirstName);
+    if (key) answeredKeys.add(key);
+  }
+  const answeredCount = Array.from(inquiryKeys).filter((key) => answeredKeys.has(key)).length;
+  const unansweredCount = Math.max(0, inquiryKeys.size - answeredCount);
+  const prepaymentReservations = activeReservations.filter((reservation) => hasReservationPrepayment(reservation));
+  const prepaymentsAmount = prepaymentReservations.reduce((sum, reservation) => sum + getReservationFinance(reservation).displayPrepayment, 0);
   const discountedReservations = activeReservations.filter((reservation) => reservation.discountAmount > 0);
   const actualDiscountAmount = discountedReservations.reduce((sum, reservation) => sum + getReservationPeriodStayDiscountAmount(reservation, checkIn, checkOut, rooms), 0);
   const analyticsReservations = filterAnalyticsReservations(reservations, rooms, { dateFrom: checkIn, dateTo: checkOut, search: "", statusFilter: "all" });
@@ -23228,15 +23283,30 @@ function buildBookingPanelSummary(
   return {
     actualDiscountAmount,
     actualDiscountCount: discountedReservations.length,
+    achievementPercent,
+    achievementTone,
+    answeredCount,
     availableRevenue: plannedRevenue,
     availableServiceObjects: availableServiceObjects.length,
     availableStayCapacity,
     availableStayRooms: availableStayRooms.length,
     bookedRevenue,
     bookedStayRooms: bookedStayRoomIds.size,
+    inquiriesCount: inquiryKeys.size,
+    pendingReservationsCount,
     plannedDiscountAmount,
+    prepaymentsAmount,
+    prepaymentsCount: prepaymentReservations.length,
+    unansweredCount,
     totalStayRooms: bookableStayRooms.length
   };
+}
+
+function getBookingSummaryAchievementTone(percent: number) {
+  if (percent < 25) return "danger";
+  if (percent < 50) return "warning";
+  if (percent < 75) return "soft-success";
+  return "success";
 }
 
 function getReservationPeriodStayRoomIds(reservation: Reservation, from: string, to: string, rooms: Room[]) {

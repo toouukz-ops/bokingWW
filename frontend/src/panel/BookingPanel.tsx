@@ -13814,6 +13814,8 @@ function ReservationCard({
       : dateStatus === "lodging"
         ? "Проживание"
         : "";
+  const checkInStatusClassName = reservation.checkedInAt ? "is-done" : "is-done is-placeholder";
+  const checkOutStatusClassName = reservation.checkedOutAt ? "is-done" : "is-done is-placeholder";
 
   return (
     <article
@@ -13835,8 +13837,8 @@ function ReservationCard({
           Пред. {formatReservationPaymentAmount(finance.displayPrepayment)}
         </span>
         <span className={reservation.balancePaidAt ? "is-done" : balance > 0 ? "" : "is-muted"}>Ост. {formatReservationPaymentAmount(balance)}</span>
-        {reservation.checkedInAt ? <span className="is-done">Въезд</span> : null}
-        {reservation.checkedOutAt ? <span className="is-done">Выезд</span> : null}
+        <span className={checkInStatusClassName}>Въезд</span>
+        <span className={checkOutStatusClassName}>Выезд</span>
       </div>
       <div className="gpb-reservation-card-actions">
         <button type="button" onClick={onMarkBalancePaid} disabled={!canMarkBalancePaid(reservation)}>

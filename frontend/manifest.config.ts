@@ -3,7 +3,7 @@ import type { ManifestV3Export } from "@crxjs/vite-plugin";
 const manifest: ManifestV3Export = {
   manifest_version: 3,
   name: "GPB WhatsApp Booking",
-  version: "1.0.110",
+  version: "1.0.111",
   description: "Локальная панель бронирования поверх WhatsApp Web.",
   permissions: ["storage", "activeTab", "tabs"],
   host_permissions: ["<all_urls>", "https://web.whatsapp.com/*", "http://127.0.0.1:8765/*", "https://*.onrender.com/*", "https://api.open-meteo.com/*"],

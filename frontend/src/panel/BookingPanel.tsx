@@ -939,6 +939,7 @@ export function BookingPanel() {
   const [backendState, setBackendState] = useState<"checking" | "online" | "offline">("checking");
   const [activeChat, setActiveChat] = useState<ActiveChat | null>(null);
   const [guestContacts, setGuestContacts] = useState<GuestContact[]>([]);
+  const [summaryChatDialogs, setSummaryChatDialogs] = useState<ChatMessageDialog[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [expenseEntries, setExpenseEntries] = useState<ExpenseEntry[]>([]);
@@ -1194,6 +1195,23 @@ export function BookingPanel() {
     const intervalId = window.setInterval(updateReminderClock, 60_000);
     return () => window.clearInterval(intervalId);
   }, []);
+  useEffect(() => {
+    let isCancelled = false;
+    const loadSummaryChatDialogs = async () => {
+      try {
+        const dialogs = await getChatMessageDialogs();
+        if (!isCancelled) setSummaryChatDialogs(dialogs);
+      } catch {
+        if (!isCancelled) setSummaryChatDialogs([]);
+      }
+    };
+    void loadSummaryChatDialogs();
+    const intervalId = window.setInterval(loadSummaryChatDialogs, 30_000);
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
   const currentHoldOwnerId = useMemo(
     () => getCurrentRoomHoldOwnerId(activeChat, guestPhone, guestPhonePrefix, guestFirstName),
     [activeChat?.id, guestFirstName, guestPhone, guestPhonePrefix]
@@ -1221,7 +1239,7 @@ export function BookingPanel() {
     () => buildBookingPanelSummary(
       pricedRooms,
       reservations,
-      guestContacts,
+      summaryChatDialogs,
       availableRooms,
       checkIn,
       checkOut,
@@ -1239,7 +1257,6 @@ export function BookingPanel() {
       checkIn,
       checkOut,
       expenseEntries,
-      guestContacts,
       inventoryAirBeds,
       inventoryRollaways,
       packageDiscountPercent,
@@ -1248,7 +1265,8 @@ export function BookingPanel() {
       packagePeriodDiscountPercent,
       packagePeriodDiscountTo,
       reservations,
-      pricedRooms
+      pricedRooms,
+      summaryChatDialogs
     ]
   );
   const configuredLinkMethods = useMemo(() => buildSettingMethodList(LINK_METHODS, linkMethods), [linkMethods]);
@@ -6582,15 +6600,15 @@ export function BookingPanel() {
             <strong>{bookingPanelSummary.achievementPercent}%</strong>
           </div>
           <div>
-            <span>Обращения</span>
+            <span>Обращения сегодня</span>
             <strong>{bookingPanelSummary.inquiriesCount}</strong>
           </div>
           <div>
-            <span>Ответы</span>
+            <span>Ответы сегодня</span>
             <strong>{bookingPanelSummary.answeredCount}</strong>
           </div>
           <div>
-            <span>Не отвечено</span>
+            <span>Не отвечено сегодня</span>
             <strong>{bookingPanelSummary.unansweredCount}</strong>
           </div>
           <div>
@@ -23207,7 +23225,7 @@ function getReservationDailyReminderPriority(reminder: ReservationDailyReminder)
 function buildBookingPanelSummary(
   rooms: Room[],
   reservations: Reservation[],
-  guestContacts: GuestContact[],
+  chatDialogs: ChatMessageDialog[],
   availableRooms: Room[],
   checkIn: string,
   checkOut: string,
@@ -23240,21 +23258,7 @@ function buildBookingPanelSummary(
   const pendingReservationsCount = reservations.filter((reservation) =>
     reservation.status === "pending" && getReservationPeriodStayRevenue(reservation, checkIn, checkOut, rooms) > 0
   ).length;
-  const inquiryContacts = filterAnalyticsGuestContacts(guestContacts, { dateFrom: checkIn, dateTo: checkOut, search: "" });
-  const inquiryKeys = new Set(
-    inquiryContacts
-      .map((contact) => getAnalyticsPersonKey(contact.phone, contact.appeal))
-      .filter((key): key is string => Boolean(key))
-  );
-  const answeredKeys = new Set<string>();
-  for (const reservation of reservations) {
-    if (reservation.status === "cancelled") continue;
-    if (getReservationPeriodStayRevenue(reservation, checkIn, checkOut, rooms) <= 0) continue;
-    const key = getAnalyticsPersonKey(reservation.phone, reservation.guestFirstName);
-    if (key) answeredKeys.add(key);
-  }
-  const answeredCount = Array.from(inquiryKeys).filter((key) => answeredKeys.has(key)).length;
-  const unansweredCount = Math.max(0, inquiryKeys.size - answeredCount);
+  const chatActivity = buildChatActivitySummary(chatDialogs, formatDateInput(new Date()));
   const prepaymentReservations = activeReservations.filter((reservation) => hasReservationPrepayment(reservation));
   const prepaymentsAmount = prepaymentReservations.reduce((sum, reservation) => sum + getReservationFinance(reservation).displayPrepayment, 0);
   const discountedReservations = activeReservations.filter((reservation) => reservation.discountAmount > 0);
@@ -23285,19 +23289,19 @@ function buildBookingPanelSummary(
     actualDiscountCount: discountedReservations.length,
     achievementPercent,
     achievementTone,
-    answeredCount,
+    answeredCount: chatActivity.answeredCount,
     availableRevenue: plannedRevenue,
     availableServiceObjects: availableServiceObjects.length,
     availableStayCapacity,
     availableStayRooms: availableStayRooms.length,
     bookedRevenue,
     bookedStayRooms: bookedStayRoomIds.size,
-    inquiriesCount: inquiryKeys.size,
+    inquiriesCount: chatActivity.inquiriesCount,
     pendingReservationsCount,
     plannedDiscountAmount,
     prepaymentsAmount,
     prepaymentsCount: prepaymentReservations.length,
-    unansweredCount,
+    unansweredCount: chatActivity.unansweredCount,
     totalStayRooms: bookableStayRooms.length
   };
 }
@@ -23307,6 +23311,47 @@ function getBookingSummaryAchievementTone(percent: number) {
   if (percent < 50) return "warning";
   if (percent < 75) return "soft-success";
   return "success";
+}
+
+function buildChatActivitySummary(dialogs: ChatMessageDialog[], date: string) {
+  const summary = {
+    answeredCount: 0,
+    inquiriesCount: 0,
+    unansweredCount: 0
+  };
+
+  for (const dialog of mergeSavedChatDialogs(dialogs)) {
+    const messages = normalizeSavedChatMessages(dialog.messages)
+      .filter((message) => getChatMessageDateInput(message) === date);
+    if (!messages.some((message) => !message.fromMe)) continue;
+
+    summary.inquiriesCount += 1;
+    const lastGuestIndex = findLastChatMessageIndex(messages, (message) => !message.fromMe);
+    const hasOperatorReplyAfterLastGuestMessage = messages.some((message, index) => index > lastGuestIndex && message.fromMe);
+    if (hasOperatorReplyAfterLastGuestMessage) {
+      summary.answeredCount += 1;
+    } else {
+      summary.unansweredCount += 1;
+    }
+  }
+
+  return summary;
+}
+
+function findLastChatMessageIndex(messages: ChatMessageLogItem[], predicate: (message: ChatMessageLogItem) => boolean) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (predicate(messages[index])) return index;
+  }
+  return -1;
+}
+
+function getChatMessageDateInput(message: ChatMessageLogItem) {
+  const value = String(message.createdAt || message.updatedAt || message.timestamp || message.sortKey || "");
+  if (!value) return "";
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return formatDateInput(date);
 }
 
 function getReservationPeriodStayRoomIds(reservation: Reservation, from: string, to: string, rooms: Room[]) {

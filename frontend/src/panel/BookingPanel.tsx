@@ -160,6 +160,10 @@ type WeatherDayPart = {
   temperature: number;
   precipitationProbability: number;
 };
+type ContactExtractionResult = {
+  name: string;
+  phone: string;
+};
 type ExtraBedType = "air-bed" | "rollaway";
 type ExtraInventoryType = ExtraBedType | "extra-place";
 type ExtraInventoryCatalogItem = { id: string; label: string };
@@ -4833,20 +4837,20 @@ export function BookingPanel() {
     }
   }
 
-  async function extractGuestPhoneFromChat() {
+  async function extractGuestPhoneFromChat(): Promise<ContactExtractionResult | null> {
     const sourceChat = activeChat;
     const sourceChatId = sourceChat?.id ?? "";
     suppressActiveChatSyncRef.current = true;
     try {
       const fastProfile = await extractActiveChatPhoneFast(sourceChat);
       const profile = fastProfile.phone ? fastProfile : await extractActiveChatPhoneOnly(sourceChat);
-      if (sourceChatId && activeChatIdRef.current !== sourceChatId) return false;
+      if (sourceChatId && activeChatIdRef.current !== sourceChatId) return null;
       const phone = profile.phone;
       if (!phone) {
         setContactExtracted(false);
         setContactSaveState("error");
         window.setTimeout(() => setContactSaveState("idle"), 2200);
-        return false;
+        return null;
       }
       const fallbackName = getGuestNameFallbackFromPhone(phone);
       const phoneParts = splitPhoneForInput(phone);
@@ -4887,7 +4891,10 @@ export function BookingPanel() {
           await saveChatDraftForChat(sourceChat, extractedDraftPatch);
         }
       }
-      return true;
+      return {
+        name: contactName,
+        phone: normalizedPhone
+      };
     } finally {
       window.setTimeout(() => {
         suppressActiveChatSyncRef.current = false;
@@ -4898,6 +4905,7 @@ export function BookingPanel() {
   async function extractContactFromChat() {
     const extracted = await extractGuestPhoneFromChat();
     setContactExtracted(Boolean(extracted));
+    return extracted;
   }
 
   async function fillBookingContactFromSelectedChat(chat: ActiveChat) {
@@ -4952,7 +4960,10 @@ export function BookingPanel() {
       appeal: guestFirstName
     });
     if (!isManualSaleMode && !isNewBookingChatMode && (!contactExtracted || !hasPhoneForSave)) {
-      await extractContactFromChat();
+      const extracted = await extractContactFromChat();
+      if (extracted) {
+        await saveActiveContactInWhatsApp(extracted);
+      }
       return;
     }
 
@@ -4981,11 +4992,13 @@ export function BookingPanel() {
     return isCompleteContactPhone(normalizedPhone) ? normalizedPhone : "";
   }
 
-  async function saveActiveContactInWhatsApp() {
+  async function saveActiveContactInWhatsApp(contactOverride?: ContactExtractionResult) {
     setContactSaveState("saving");
     suppressActiveChatSyncRef.current = true;
-    const phoneForSave = buildPhoneWithPrefix(guestPhone, guestPhonePrefix);
-    const normalizedPhone = getCompleteContactPhoneForSave();
+    const phoneForSave = contactOverride?.phone ?? buildPhoneWithPrefix(guestPhone, guestPhonePrefix);
+    const normalizedPhone = contactOverride?.phone
+      ? formatPhoneDigits(contactOverride.phone)
+      : getCompleteContactPhoneForSave();
     debugContactFlow("save-contact-start", {
       activeChatId: activeChat?.id ?? "",
       activeChatName: activeChat?.name ?? "",
@@ -5012,7 +5025,7 @@ export function BookingPanel() {
 
     try {
       const templateName = getGuestNameFallbackFromPhone(normalizedPhone);
-      const safeName = getSafeGuestName(guestFirstName, normalizedPhone);
+      const safeName = getSafeGuestName(contactOverride?.name || guestFirstName, normalizedPhone);
       const contactName = templateName || safeName || guestFirstName;
       if (contactName && contactName !== guestFirstName) setGuestFirstName(contactName);
       debugContactFlow("save-contact-name-resolved", { templateName, safeName, contactName });
@@ -5203,7 +5216,7 @@ export function BookingPanel() {
           ? await saveNewBookingChatContact(contactName, normalizedPhone)
           : shouldOverwrite && isNewBookingChatMode
             ? await ensureExistingWhatsAppContactOrOverwrite(contactName, normalizedPhone)
-            : await saveActiveWhatsAppContact(contactName, normalizedPhone, { allowSidebar: false })
+            : await saveActiveWhatsAppContact(contactName, normalizedPhone, { allowSidebar: true })
       : false;
     debugContactFlow("booking-contact-whatsapp-result", { contactName, normalizedPhone, whatsappSaved });
     closeWhatsAppProfilePanels();
@@ -19147,6 +19160,10 @@ function profilePanelHasPhone(profilePanel: HTMLElement, phone: string) {
   const expected = normalizePhoneSearch(phone);
   if (!expected) return false;
   const visibleText = getDebugText(profilePanel);
+  const normalizedText = normalizeExtractedText(visibleText).toLowerCase();
+  if (/нет\s+в\s+списке\s+контактов|not\s+in\s+(?:your\s+)?contacts|not\s+in\s+contact\s+list/i.test(normalizedText)) {
+    return false;
+  }
   const actual = normalizePhoneSearch(extractPhoneFromText(visibleText) || visibleText);
   return Boolean(actual && (actual === expected || actual.endsWith(expected.slice(-10))));
 }

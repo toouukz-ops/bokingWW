@@ -6238,6 +6238,18 @@ export function BookingPanel() {
     });
   }
 
+  async function toggleCheckedOut(reservation: Reservation) {
+    const hasCheckedOut = Boolean(reservation.checkedOutAt);
+    const now = new Date().toISOString();
+    await updateReservation({
+      ...reservation,
+      items: getReservationItems(reservation, pricedRooms).map((item) => ({ ...item, checkedOutAt: hasCheckedOut ? undefined : now })),
+      status: "booked",
+      checkedOutAt: hasCheckedOut ? undefined : now,
+      noShowAt: undefined
+    });
+  }
+
   function ensurePaymentMethodSelected() {
     if (manualSalePaymentMethod) return true;
     setIsPaymentMethodRequiredOpen(true);
@@ -7858,6 +7870,7 @@ export function BookingPanel() {
           onDeleteReservation={removeReservation}
           onMarkBalancePaid={toggleBalancePaid}
           onMarkCheckedIn={toggleCheckedIn}
+          onMarkCheckedOut={toggleCheckedOut}
           onUpdateRoomWorkStatus={updateRoomWorkStatus}
           onUpdateReservation={updateReservation}
           onClose={() => setIsReservationsOpen(false)}
@@ -12989,6 +13002,7 @@ function ReservationsModal({
   onDeleteReservation,
   onMarkBalancePaid,
   onMarkCheckedIn,
+  onMarkCheckedOut,
   onUpdateRoomWorkStatus,
   onUpdateReservation,
   onClose
@@ -12999,6 +13013,7 @@ function ReservationsModal({
   onDeleteReservation: (reservation: Reservation) => void;
   onMarkBalancePaid: (reservation: Reservation) => void;
   onMarkCheckedIn: (reservation: Reservation) => void;
+  onMarkCheckedOut: (reservation: Reservation) => void;
   onUpdateRoomWorkStatus: (roomId: string, workStatus?: RoomWorkStatus) => Promise<void>;
   onUpdateReservation: (reservation: Reservation) => Promise<void>;
   onClose: () => void;
@@ -13339,6 +13354,7 @@ function ReservationsModal({
                       onEdit={() => setEditingReservation(reservation)}
                       onMarkBalancePaid={() => onMarkBalancePaid(reservation)}
                       onMarkCheckedIn={() => onMarkCheckedIn(reservation)}
+                      onMarkCheckedOut={() => onMarkCheckedOut(reservation)}
                     />
                   ))}
                 </div>
@@ -13791,7 +13807,8 @@ function ReservationCard({
   onDelete,
   onEdit,
   onMarkBalancePaid,
-  onMarkCheckedIn
+  onMarkCheckedIn,
+  onMarkCheckedOut
 }: {
   reservation: Reservation;
   rooms: Room[];
@@ -13805,6 +13822,7 @@ function ReservationCard({
   onEdit: () => void;
   onMarkBalancePaid: () => void;
   onMarkCheckedIn: () => void;
+  onMarkCheckedOut: () => void;
 }) {
   const displayRoomIds = visibleRoomIds?.length ? visibleRoomIds : reservation.roomIds;
   const bookedRooms = displayRoomIds
@@ -13862,6 +13880,9 @@ function ReservationCard({
         </button>
         <button type="button" onClick={onCancel} disabled={reservation.status === "cancelled" || Boolean(reservation.balancePaidAt && reservation.checkedInAt)}>
           Снять
+        </button>
+        <button type="button" onClick={onMarkCheckedOut} disabled={reservation.status === "cancelled" || Boolean(reservation.noShowAt)}>
+          {reservation.checkedOutAt ? "Выезд +" : "Выезд"}
         </button>
         <button className="gpb-icon-only-button" type="button" onClick={onEdit} title="Редактировать">
           <Pencil size={15} />
@@ -16740,7 +16761,7 @@ function buildRoomAvailabilityConflicts(
           if (isHourlyBookingObject(room)) {
             return reservation.roomIds.includes(room.id) && reservation.checkIn === checkIn;
           }
-          return getReservationItems(reservation).some((item) =>
+          return getReservationBlockingItems(reservation).some((item) =>
             item.roomId === room.id && dateRangesOverlap(checkIn, checkOut, item.checkIn, item.checkOut)
           );
         })
@@ -16964,10 +16985,11 @@ function narrowReservationForCalendarDate(reservation: Reservation, date: string
   };
 }
 
-function isBreakfastServedOnDate(reservation: Pick<Reservation, "checkIn" | "checkOut">, date: string) {
+function isBreakfastServedOnDate(reservation: Pick<Reservation, "checkIn" | "checkOut" | "checkedOutAt">, date: string) {
   if (!date || !reservation.checkIn || !reservation.checkOut) return false;
   const breakfastDate = parseDateInput(date);
-  return parseDateInput(reservation.checkIn) < breakfastDate && parseDateInput(reservation.checkOut) >= breakfastDate;
+  const effectiveCheckOut = getEffectiveReservationCheckOutDateInput(reservation);
+  return parseDateInput(reservation.checkIn) < breakfastDate && parseDateInput(effectiveCheckOut) >= breakfastDate;
 }
 
 function getReservationHourlyEndTime(reservation: Pick<Reservation, "checkInTime" | "checkOutTime" | "hourlyHours">) {
@@ -20237,20 +20259,44 @@ function getReservationItems(reservation: Reservation, rooms: Room[] = []) {
 
 function getReservationBlockingItems(reservation: Reservation, rooms: Room[] = []) {
   const items = getReservationItems(reservation, rooms);
-  if (reservation.roomIds.length !== 1 || items.length !== 1) return items;
-  const item = items[0];
+  const effectiveItems = applyActualCheckOutToReservationItems(reservation, items);
+  if (reservation.roomIds.length !== 1 || effectiveItems.length !== 1) return effectiveItems;
+  const item = effectiveItems[0];
   const roomId = reservation.roomIds[0];
-  if (!item || item.roomId !== roomId) return items;
+  if (!item || item.roomId !== roomId) return effectiveItems;
 
   const checkIn = item.checkIn && reservation.checkIn
     ? item.checkIn < reservation.checkIn ? item.checkIn : reservation.checkIn
     : item.checkIn || reservation.checkIn;
-  const checkOut = item.checkOut && reservation.checkOut
-    ? item.checkOut > reservation.checkOut ? item.checkOut : reservation.checkOut
-    : item.checkOut || reservation.checkOut;
+  const reservationCheckOut = getEffectiveReservationCheckOutDateInput(reservation);
+  const checkOut = item.checkOut && reservationCheckOut
+    ? item.checkOut > reservationCheckOut ? item.checkOut : reservationCheckOut
+    : item.checkOut || reservationCheckOut;
 
-  if (checkIn === item.checkIn && checkOut === item.checkOut) return items;
+  if (checkIn === item.checkIn && checkOut === item.checkOut) return effectiveItems;
   return [{ ...item, checkIn, checkOut }];
+}
+
+function applyActualCheckOutToReservationItems(reservation: Reservation, items: ReservationItem[]) {
+  const actualCheckOut = getActualReservationCheckOutDateInput(reservation);
+  if (!actualCheckOut) return items;
+  return items.map((item) => {
+    if (!item.checkOut || item.checkOut <= actualCheckOut) return item;
+    return { ...item, checkOut: actualCheckOut, checkedOutAt: item.checkedOutAt ?? reservation.checkedOutAt };
+  });
+}
+
+function getEffectiveReservationCheckOutDateInput(reservation: Pick<Reservation, "checkOut" | "checkedOutAt">) {
+  const actualCheckOut = getActualReservationCheckOutDateInput(reservation);
+  if (actualCheckOut && reservation.checkOut && actualCheckOut < reservation.checkOut) return actualCheckOut;
+  return reservation.checkOut;
+}
+
+function getActualReservationCheckOutDateInput(reservation: Pick<Reservation, "checkedOutAt">) {
+  if (!reservation.checkedOutAt) return "";
+  const date = new Date(reservation.checkedOutAt);
+  if (Number.isNaN(date.getTime())) return "";
+  return formatDateInput(date);
 }
 
 function buildExtendedReservationItems(items: ReservationItem[] | undefined, previousCheckOut: string, nextCheckOut: string, extensionAmount: number) {
@@ -22945,7 +22991,7 @@ function buildCleaningTimelineSegments(
   if (!isStayBookingObject(room)) return [];
   return reservations
     .filter((reservation) => reservation.status !== "cancelled")
-    .flatMap((reservation) => getReservationItems(reservation).filter((item) => item.roomId === room.id).map((item) => ({ reservation, item })))
+    .flatMap((reservation) => getReservationBlockingItems(reservation).filter((item) => item.roomId === room.id).map((item) => ({ reservation, item })))
     .map(({ reservation, item }) => {
       const dayIndex = timelineDays.findIndex((day) => day.date === item.checkOut);
       if (dayIndex < 0) return null;

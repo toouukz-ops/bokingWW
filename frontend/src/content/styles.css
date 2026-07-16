@@ -6389,6 +6389,10 @@ body.gpb-reservation-split-resizing {
   width: 112px;
 }
 
+.gpb-reservation-card-actions button:nth-child(4) {
+  width: 72px;
+}
+
 .gpb-reservation-card-actions .gpb-icon-only-button {
   display: inline-flex;
   align-items: center;

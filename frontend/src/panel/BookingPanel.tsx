@@ -1240,6 +1240,7 @@ export function BookingPanel() {
       pricedRooms,
       reservations,
       summaryChatDialogs,
+      guestContacts,
       availableRooms,
       checkIn,
       checkOut,
@@ -1257,6 +1258,7 @@ export function BookingPanel() {
       checkIn,
       checkOut,
       expenseEntries,
+      guestContacts,
       inventoryAirBeds,
       inventoryRollaways,
       packageDiscountPercent,
@@ -6600,20 +6602,28 @@ export function BookingPanel() {
             <strong>{bookingPanelSummary.achievementPercent}%</strong>
           </div>
           <div>
-            <span>Обращения сегодня</span>
-            <strong>{bookingPanelSummary.inquiriesCount}</strong>
+            <span>Согласования</span>
+            <strong>{bookingPanelSummary.pendingReservationsCount}</strong>
           </div>
           <div>
-            <span>Ответы сегодня</span>
+            <span>Новые обращения</span>
+            <strong>{bookingPanelSummary.newInquiriesCount}</strong>
+          </div>
+          <div>
+            <span>Ответы</span>
             <strong>{bookingPanelSummary.answeredCount}</strong>
           </div>
           <div>
-            <span>Не отвечено сегодня</span>
+            <span>Не отвечено</span>
             <strong>{bookingPanelSummary.unansweredCount}</strong>
           </div>
           <div>
-            <span>Согласования</span>
-            <strong>{bookingPanelSummary.pendingReservationsCount}</strong>
+            <span>Диалог без контакта</span>
+            <strong>{bookingPanelSummary.dialogsWithoutContactCount}</strong>
+          </div>
+          <div>
+            <span>Созданы контакты</span>
+            <strong>{bookingPanelSummary.createdContactsCount}</strong>
           </div>
           <div>
             <span>Предоплаты</span>
@@ -23226,6 +23236,7 @@ function buildBookingPanelSummary(
   rooms: Room[],
   reservations: Reservation[],
   chatDialogs: ChatMessageDialog[],
+  guestContacts: GuestContact[],
   availableRooms: Room[],
   checkIn: string,
   checkOut: string,
@@ -23258,7 +23269,7 @@ function buildBookingPanelSummary(
   const pendingReservationsCount = reservations.filter((reservation) =>
     reservation.status === "pending" && getReservationPeriodStayRevenue(reservation, checkIn, checkOut, rooms) > 0
   ).length;
-  const chatActivity = buildChatActivitySummary(chatDialogs, formatDateInput(new Date()));
+  const chatActivity = buildChatActivitySummary(chatDialogs, guestContacts, checkIn);
   const prepaymentReservations = activeReservations.filter((reservation) => hasReservationPrepayment(reservation));
   const prepaymentsAmount = prepaymentReservations.reduce((sum, reservation) => sum + getReservationFinance(reservation).displayPrepayment, 0);
   const discountedReservations = activeReservations.filter((reservation) => reservation.discountAmount > 0);
@@ -23296,7 +23307,9 @@ function buildBookingPanelSummary(
     availableStayRooms: availableStayRooms.length,
     bookedRevenue,
     bookedStayRooms: bookedStayRoomIds.size,
-    inquiriesCount: chatActivity.inquiriesCount,
+    createdContactsCount: chatActivity.createdContactsCount,
+    dialogsWithoutContactCount: chatActivity.dialogsWithoutContactCount,
+    newInquiriesCount: chatActivity.newInquiriesCount,
     pendingReservationsCount,
     plannedDiscountAmount,
     prepaymentsAmount,
@@ -23313,29 +23326,65 @@ function getBookingSummaryAchievementTone(percent: number) {
   return "success";
 }
 
-function buildChatActivitySummary(dialogs: ChatMessageDialog[], date: string) {
+function buildChatActivitySummary(dialogs: ChatMessageDialog[], guestContacts: GuestContact[], date: string) {
   const summary = {
     answeredCount: 0,
-    inquiriesCount: 0,
+    createdContactsCount: countCreatedGuestContactsForDate(guestContacts, date),
+    dialogsWithoutContactCount: 0,
+    newInquiriesCount: 0,
     unansweredCount: 0
   };
+  const savedContactIndex = buildSavedGuestContactIndex(guestContacts);
 
   for (const dialog of mergeSavedChatDialogs(dialogs)) {
     const messages = normalizeSavedChatMessages(dialog.messages)
       .filter((message) => getChatMessageDateInput(message) === date);
     if (!messages.some((message) => !message.fromMe)) continue;
+    if (isSavedGuestContactDialog(dialog, savedContactIndex)) continue;
 
-    summary.inquiriesCount += 1;
+    summary.newInquiriesCount += 1;
     const lastGuestIndex = findLastChatMessageIndex(messages, (message) => !message.fromMe);
     const hasOperatorReplyAfterLastGuestMessage = messages.some((message, index) => index > lastGuestIndex && message.fromMe);
     if (hasOperatorReplyAfterLastGuestMessage) {
       summary.answeredCount += 1;
+      summary.dialogsWithoutContactCount += 1;
     } else {
       summary.unansweredCount += 1;
     }
   }
 
   return summary;
+}
+
+function countCreatedGuestContactsForDate(guestContacts: GuestContact[], date: string) {
+  const contactKeys = new Set(
+    filterAnalyticsGuestContacts(guestContacts, { dateFrom: date, dateTo: date, search: "" })
+      .map((contact) => getAnalyticsPersonKey(contact.phone, contact.appeal))
+      .filter(Boolean)
+  );
+  return contactKeys.size;
+}
+
+function buildSavedGuestContactIndex(guestContacts: GuestContact[]) {
+  const phones = new Set<string>();
+  const names = new Set<string>();
+  for (const contact of guestContacts) {
+    const phone = normalizePhoneSearch(contact.phone);
+    if (phone) phones.add(phone);
+    const name = normalizeContactLookupText(contact.appeal || "");
+    if (name) names.add(name);
+  }
+  return { names, phones };
+}
+
+function isSavedGuestContactDialog(
+  dialog: ChatMessageDialog,
+  contactIndex: { names: Set<string>; phones: Set<string> }
+) {
+  const phone = normalizePhoneSearch(dialog.phone);
+  if (phone && contactIndex.phones.has(phone)) return true;
+  const title = normalizeContactLookupText(dialog.chatTitle || dialog.chatKey || "");
+  return Boolean(title && contactIndex.names.has(title));
 }
 
 function findLastChatMessageIndex(messages: ChatMessageLogItem[], predicate: (message: ChatMessageLogItem) => boolean) {

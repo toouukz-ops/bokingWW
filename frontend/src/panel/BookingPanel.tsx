@@ -2696,7 +2696,8 @@ export function BookingPanel() {
 
   async function findFallbackChatDraftForActiveChat(chat: ActiveChat, cachedDrafts?: Record<string, ChatBookingDraft>, fallbackPhone = "") {
     const drafts = cachedDrafts ?? draftCacheRef.current;
-    const chatPhone = normalizePhoneSearch(chat.phone || fallbackPhone);
+    const rawChatPhone = chat.phone || fallbackPhone;
+    const chatPhone = isSuspiciousPhoneForGuestFallbackTitle(chat.title, rawChatPhone) ? "" : normalizePhoneSearch(rawChatPhone);
     const chatTitle = normalizeContactLookupText(chat.title || "");
     if (!chatPhone && !chatTitle) return null;
     const matches = Object.values(drafts).filter((draft) => {
@@ -2788,7 +2789,16 @@ export function BookingPanel() {
       return Boolean(contactPhone && phonesMatchForContactLookup(normalizedPhone, contactPhone));
     }) : null;
     if (byPhone) return byPhone;
-    if (normalizedPhone || isGuestFallbackName(chat.title || "")) return null;
+    if (isGuestFallbackName(chat.title || "")) {
+      if (!isSuspiciousPhoneForGuestFallbackTitle(chat.title, chat.phone || "")) return null;
+
+      return guestContacts.find((contact) =>
+        isGuestFallbackName(contact.appeal || "") &&
+        normalizeContactLookupText(contact.appeal || "") === normalizedTitle &&
+        getGuestFallbackSuffix(contact.appeal || "") === normalizePhoneSearch(contact.phone).slice(-4)
+      ) ?? null;
+    }
+    if (normalizedPhone) return null;
 
     return guestContacts.find((contact) =>
       Boolean(
@@ -17092,7 +17102,8 @@ function detectActiveWhatsAppChat(): ActiveChat | null {
   const selectedTitle = getSelectedChatDisplayName();
   const headerTitle = getActiveChatDisplayName();
   const title = selectedTitle || headerTitle;
-  const phone = extractPhoneFromSelectedChat() || (!selectedTitle ? extractPhoneFromActiveChat() : "");
+  const rawPhone = extractPhoneFromSelectedChat() || (!selectedTitle ? extractPhoneFromActiveChat() : "");
+  const phone = isSuspiciousPhoneForGuestFallbackTitle(title, rawPhone) ? "" : rawPhone;
   if (!title && !phone) {
     return null;
   }
@@ -17140,7 +17151,8 @@ async function detectActiveWhatsAppChatAsync(): Promise<ActiveChat | null> {
   const headerTitle = getActiveChatDisplayName();
   const title = selectedTitle || headerTitle;
   const selectedPhone = extractPhoneFromSelectedChat();
-  const phone = selectedPhone || (!selectedTitle ? await extractPhoneFromWhatsAppStore() || extractPhoneFromActiveChat() : "");
+  const rawPhone = selectedPhone || (!selectedTitle ? await extractPhoneFromWhatsAppStore() || extractPhoneFromActiveChat() : "");
+  const phone = isSuspiciousPhoneForGuestFallbackTitle(title, rawPhone) ? "" : rawPhone;
   if (!title && !phone) {
     return null;
   }
@@ -17168,12 +17180,10 @@ function extractPhoneFromSelectedChat() {
   const selectedChat = document.querySelector<HTMLElement>('[aria-selected="true"], [data-testid="cell-frame-container"][aria-selected="true"]');
   if (!selectedChat) return "";
   const text = [
-    selectedChat.innerText ?? "",
-    ...Array.from(selectedChat.querySelectorAll<HTMLElement>("[title], [aria-label], [data-id]")).map((element) =>
+    ...Array.from(selectedChat.querySelectorAll<HTMLElement>("[data-id*='@c.us'], [data-id*='@s.whatsapp.net'], a[href^='tel:']")).map((element) =>
       [
-        element.getAttribute("title"),
-        element.getAttribute("aria-label"),
-        element.getAttribute("data-id")
+        element.getAttribute("data-id"),
+        element.getAttribute("href")
       ].filter(Boolean).join(" ")
     )
   ].join(" ");
@@ -17238,6 +17248,16 @@ function isTechnicalGuestName(value: string) {
 
 function isGuestFallbackName(value: string) {
   return /^Гость\s+\d{4}$/i.test(normalizeExtractedText(value));
+}
+
+function getGuestFallbackSuffix(value: string) {
+  return normalizeExtractedText(value).match(/^Гость\s+(\d{4})$/i)?.[1] ?? "";
+}
+
+function isSuspiciousPhoneForGuestFallbackTitle(title: string, phone: string) {
+  const suffix = getGuestFallbackSuffix(title);
+  const phoneDigits = normalizePhoneSearch(phone);
+  return Boolean(suffix && phoneDigits && phoneDigits.slice(-4) !== suffix);
 }
 
 function isGuestFallbackNameWithExtraText(value: string) {

@@ -108,6 +108,88 @@ function broadcastRealtime(event: string, data: unknown, sourceClientId = "") {
   }
 }
 
+function toReservationText(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeReservationPhone(value: unknown) {
+  const digits = toReservationText(value).replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
+  if (digits.length === 10) return `7${digits}`;
+  return digits;
+}
+
+function reservationDateRangesOverlap(leftStart: string, leftEnd: string, rightStart: string, rightEnd: string) {
+  return Boolean(leftStart && leftEnd && rightStart && rightEnd && leftStart < rightEnd && rightStart < leftEnd);
+}
+
+function getReservationBlockingItemsForServer(reservation: Record<string, unknown>) {
+  const checkIn = toReservationText(reservation.checkIn);
+  const checkOut = toReservationText(reservation.checkOut);
+  const roomIds = Array.isArray(reservation.roomIds)
+    ? reservation.roomIds.map((roomId) => toReservationText(roomId)).filter(Boolean)
+    : [];
+  const items = Array.isArray(reservation.items)
+    ? reservation.items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    : [];
+
+  if (items.length) {
+    return items
+      .map((item) => ({
+        checkIn: toReservationText(item.checkIn) || checkIn,
+        checkOut: toReservationText(item.checkOut) || checkOut,
+        roomId: toReservationText(item.roomId)
+      }))
+      .filter((item) => item.roomId && item.checkIn && item.checkOut);
+  }
+
+  return roomIds.map((roomId) => ({ checkIn, checkOut, roomId })).filter((item) => item.roomId && item.checkIn && item.checkOut);
+}
+
+function isServerBlockingReservation(reservation: Record<string, unknown>) {
+  const status = toReservationText(reservation.status);
+  return !reservation.isAddOnSale && !reservation.noShowAt && (status === "pending" || status === "booked");
+}
+
+async function validateReservationBeforeSave(id: string, reservation: Record<string, unknown>) {
+  if (!isServerBlockingReservation(reservation)) return { ok: true as const };
+
+  if (!normalizeReservationPhone(reservation.phone)) {
+    return {
+      error: "Reservation phone is required",
+      ok: false as const,
+      status: 400
+    };
+  }
+
+  const nextItems = getReservationBlockingItemsForServer({ ...reservation, id });
+  if (!nextItems.length) return { ok: true as const };
+
+  const reservations = await listReservations();
+  for (const candidate of reservations) {
+    if (candidate.id === id || !isServerBlockingReservation(candidate)) continue;
+    const candidateItems = getReservationBlockingItemsForServer(candidate);
+    const conflict = nextItems.find((nextItem) =>
+      candidateItems.some((candidateItem) =>
+        nextItem.roomId === candidateItem.roomId &&
+        reservationDateRangesOverlap(nextItem.checkIn, nextItem.checkOut, candidateItem.checkIn, candidateItem.checkOut)
+      )
+    );
+    if (!conflict) continue;
+
+    return {
+      conflictReservationId: candidate.id,
+      error: "Room is already reserved for this period",
+      ok: false as const,
+      roomId: conflict.roomId,
+      status: 409
+    };
+  }
+
+  return { ok: true as const };
+}
+
 app.get("/api/health", async () => {
   return {
     ok: true,
@@ -845,6 +927,11 @@ app.put("/api/reservations/:id", async (request, reply) => {
   const body = request.body as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object") {
     return reply.status(400).send({ error: "Invalid reservation" });
+  }
+
+  const validation = await validateReservationBeforeSave(id, body);
+  if (!validation.ok) {
+    return reply.status(validation.status).send(validation);
   }
 
   const reservation = await saveReservationData(id, body);

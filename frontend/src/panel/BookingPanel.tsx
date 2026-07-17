@@ -21737,22 +21737,107 @@ function buildAdminBookingsExport(reservations: Reservation[], rooms: Room[], se
   const urgentRoomIds = new Set(arrivals.filter((entry) => departureRoomIds.has(entry.room.id)).map((entry) => entry.room.id));
   const urgent = departures.filter((entry) => urgentRoomIds.has(entry.room.id));
   const lines = [
-    "Сводка админу",
-    `Дата: ${formatAdminShortDate(date)}`,
+    formatAdminShortDate(date),
     ""
   ];
+  const extraInventoryLines = formatAdminExtraInventoryActionLines(entries);
+  const balanceLines = formatAdminBalanceActionLines(arrivals);
 
-  lines.push(...formatAdminDaySection("УБРАТЬ В ПЕРВУЮ ОЧЕРЕДЬ", urgent, "Нет срочной уборки."));
+  lines.push("ВЫЕЗДЫ:");
+  lines.push(formatAdminRoomNumbersLine(departures) || "нет");
   lines.push("");
-  lines.push(...formatAdminDaySection("ЗАЕЗДЫ", arrivals, "Заездов нет."));
+
+  lines.push("СРОЧНАЯ УБОРКА:");
+  lines.push(formatAdminRoomNumbersLine(urgent) || "нет");
   lines.push("");
-  lines.push(...formatAdminDaySection("ВЫЕЗДЫ", departures, "Выездов нет."));
+
+  lines.push("ДОПМЕСТА:");
+  lines.push(...(extraInventoryLines.length ? extraInventoryLines : ["нет"]));
   lines.push("");
-  lines.push(...formatAdminDaySection("ПРОЖИВАЮТ", lodging, "Проживающих нет."));
+
+  lines.push("ПРИНЯТЬ ДОПЛАТУ:");
+  lines.push(...(balanceLines.length ? balanceLines : ["нет"]));
   lines.push("");
-  lines.push(`ИТОГО: срочная уборка ${urgentRoomIds.size}, заезды ${groupAdminDayEntries(arrivals).length}, выезды ${groupAdminDayEntries(departures).length}, проживают ${groupAdminDayEntries(lodging).length}`);
+
+  lines.push(...formatAdminActionSection("ЗАЕЗДЫ:", arrivals, formatAdminArrivalActionLine, "нет"));
+  lines.push("");
+  lines.push(...formatAdminActionSection("ПРОЖИВАЮТ:", lodging, formatAdminLodgingActionLine, "нет"));
+  lines.push("");
+  lines.push(`ИТОГО: выезды ${departureRoomIds.size}, срочная уборка ${urgentRoomIds.size}, заезды ${groupAdminDayEntries(arrivals).length}, проживают ${groupAdminDayEntries(lodging).length}`);
 
   return lines.join("\n").trim();
+}
+
+function formatAdminActionSection(title: string, entries: AdminDayRoomEntry[], formatter: (group: AdminDayEntryGroup) => string, emptyText: string) {
+  const groups = groupAdminDayEntries(entries);
+  return [title, ...(groups.length ? groups.map(formatter).filter(Boolean) : [emptyText])];
+}
+
+function formatAdminRoomNumbersLine(entries: AdminDayRoomEntry[]) {
+  const roomNumbers = getAdminSortedUniqueRooms(entries.map((entry) => entry.room))
+    .map((room) => room.number || formatAdminBookingObject(room));
+  return roomNumbers.join(", ");
+}
+
+function formatAdminRoomsShort(rooms: Room[]) {
+  return getAdminSortedUniqueRooms(rooms)
+    .map((room) => room.number || formatAdminBookingObject(room))
+    .join(", ");
+}
+
+function getAdminSortedUniqueRooms(rooms: Room[]) {
+  return Array.from(new Map(rooms.map((room) => [room.id, room])).values())
+    .sort((left, right) => String(left.number || "").localeCompare(String(right.number || ""), "ru", { numeric: true }));
+}
+
+function formatAdminArrivalActionLine(group: AdminDayEntryGroup) {
+  const roomsText = formatAdminRoomsShort(group.entries.map((entry) => entry.room));
+  return `${roomsText} | ${group.reservation.guestFirstName || "Гость"} | ${formatReservationCompactGuestCountText(group.reservation)}`;
+}
+
+function formatAdminLodgingActionLine(group: AdminDayEntryGroup) {
+  const firstEntry = group.entries[0];
+  if (!firstEntry) return "";
+  const roomsText = formatAdminRoomsShort(group.entries.map((entry) => entry.room));
+  return `${roomsText} | ${group.reservation.guestFirstName || "Гость"} | до ${formatAdminShortDate(firstEntry.item.checkOut)}`;
+}
+
+function formatAdminBalanceActionLines(entries: AdminDayRoomEntry[]) {
+  return groupAdminDayEntries(entries)
+    .map((group) => {
+      const balance = getAdminDayGroupBalance(group);
+      if (balance <= 0) return "";
+      const roomsText = formatAdminRoomsShort(group.entries.map((entry) => entry.room));
+      return `${roomsText} | ${group.reservation.guestFirstName || "Гость"} | ${formatPrice(balance)}`;
+    })
+    .filter(Boolean);
+}
+
+function formatAdminExtraInventoryActionLines(entries: AdminDayRoomEntry[]) {
+  const byRoom = new Map<string, { room: Room; labels: string[] }>();
+  entries.forEach((entry) => {
+    const inventoryByRoomId = entry.reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(entry.reservation);
+    const placements = getExtraInventoryPlacements(inventoryByRoomId[entry.room.id]);
+    if (!placements.length) return;
+    const current = byRoom.get(entry.room.id) ?? { room: entry.room, labels: [] };
+    placements.forEach((placement) => current.labels.push(formatAdminExtraInventoryShortLabel(placement.label)));
+    byRoom.set(entry.room.id, current);
+  });
+
+  return Array.from(byRoom.values())
+    .sort((left, right) => String(left.room.number || "").localeCompare(String(right.room.number || ""), "ru", { numeric: true }))
+    .map(({ room, labels }) => {
+      const uniqueLabels = Array.from(new Set(labels)).join(", ");
+      return `${room.number || formatAdminBookingObject(room)} - ${uniqueLabels}`;
+    });
+}
+
+function formatAdminExtraInventoryShortLabel(label = "") {
+  const normalized = label.trim().toLowerCase();
+  if (/диван/.test(normalized)) return "диван";
+  if (/матрас/.test(normalized)) return "матрас";
+  if (/расклад/.test(normalized)) return "раскладушка";
+  return normalized || "допместо";
 }
 
 type AdminDayRoomEntry = {

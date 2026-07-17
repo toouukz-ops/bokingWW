@@ -21823,7 +21823,7 @@ function formatAdminDayGroupLine(group: AdminDayEntryGroup) {
   const firstEntry = entries[0];
   if (!firstEntry) return "";
   const timeText = status === "check-in"
-    ? `заезд ${firstEntry.item.checkInTime || reservation.checkInTime || DEFAULT_CHECK_IN_TIME}`
+    ? ""
     : status === "check-out"
       ? `выезд до ${firstEntry.item.checkOutTime || reservation.checkOutTime || DEFAULT_CHECK_OUT_TIME}`
       : `до ${formatAdminShortDate(firstEntry.item.checkOut)}`;

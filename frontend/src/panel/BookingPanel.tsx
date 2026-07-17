@@ -2790,13 +2790,12 @@ export function BookingPanel() {
     }) : null;
     if (byPhone) return byPhone;
     if (isGuestFallbackName(chat.title || "")) {
-      if (!isSuspiciousPhoneForGuestFallbackTitle(chat.title, chat.phone || "")) return null;
-
-      return guestContacts.find((contact) =>
+      const fallbackMatches = guestContacts.filter((contact) =>
         isGuestFallbackName(contact.appeal || "") &&
         normalizeContactLookupText(contact.appeal || "") === normalizedTitle &&
         getGuestFallbackSuffix(contact.appeal || "") === normalizePhoneSearch(contact.phone).slice(-4)
-      ) ?? null;
+      );
+      return fallbackMatches.length === 1 ? fallbackMatches[0] : null;
     }
     if (normalizedPhone) return null;
 

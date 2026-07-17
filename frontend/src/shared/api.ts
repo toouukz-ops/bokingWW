@@ -433,18 +433,22 @@ function delay(ms: number) {
 
 export async function saveReservation(reservation: Reservation, options: { requireRemote?: boolean } = {}): Promise<Reservation> {
   const reservations = await getLocalReservations();
-  await saveReservations(reservations.filter((item) => item.id !== reservation.id).concat(reservation));
   try {
     const response = await fetch(`${API_BASE_URL}/api/reservations/${encodeURIComponent(reservation.id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(reservation)
     });
-    if (!response.ok) throw new Error(`Reservation save failed: ${response.status}`);
+    if (!response.ok) {
+      const details = await response.text().catch(() => "");
+      throw new Error(`Reservation save failed: ${response.status}${details ? ` ${details.slice(0, 500)}` : ""}`);
+    }
   } catch (error) {
     if (options.requireRemote) throw (error instanceof Error ? error : new Error("Reservation save failed"));
+    await saveReservations(reservations.filter((item) => item.id !== reservation.id).concat(reservation));
     return reservation;
   }
+  await saveReservations(reservations.filter((item) => item.id !== reservation.id).concat(reservation));
   return reservation;
 }
 

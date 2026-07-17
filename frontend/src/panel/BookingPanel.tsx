@@ -5825,7 +5825,18 @@ export function BookingPanel() {
       await saveReservation(normalizedReservation, { requireRemote: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setBookingDateWarning("Не удалось сохранить бронь на сервере. Проверьте интернет/Render и повторите действие.");
+      if (message.includes("Reservation save failed: 409")) {
+        const latestReservations = await refreshReservationsAfterSaveConflict();
+        const conflict = findReservationSaveConflict(normalizedReservation, latestReservations);
+        const conflictGuest = conflict?.guestFirstName || formatReservationPhone(conflict?.phone || "") || "другая бронь";
+        setBookingDateWarning(
+          conflict
+            ? `Бронь не сохранена: номер уже занят на эти даты (${conflictGuest}). Обновил список броней с сервера.`
+            : "Бронь не сохранена: сервер видит пересечение по номеру. Обновил список броней с сервера."
+        );
+      } else {
+        setBookingDateWarning("Не удалось сохранить бронь на сервере. Проверьте интернет/Render и повторите действие.");
+      }
       void sendDebugLog("reservation-save-remote-error", { message, reservationId: normalizedReservation.id });
       return false;
     }
@@ -5836,6 +5847,31 @@ export function BookingPanel() {
     }
     await syncReservationDraftForStatus(normalizedReservation);
     return true;
+  }
+
+  async function refreshReservationsAfterSaveConflict() {
+    try {
+      const latestReservations = await getReservations();
+      setReservations(latestReservations);
+      return latestReservations;
+    } catch {
+      return reservations;
+    }
+  }
+
+  function findReservationSaveConflict(reservation: Reservation, sourceReservations: Reservation[]) {
+    const reservationRooms = pricedRooms.filter((room) => reservation.roomIds.includes(room.id));
+    const conflicts = buildRoomAvailabilityConflicts(
+      reservationRooms,
+      sourceReservations.filter((candidate) => candidate.id !== reservation.id),
+      reservation.checkIn,
+      reservation.checkOut,
+      reservation.checkInTime,
+      reservation.checkOutTime,
+      [],
+      currentHoldOwnerId
+    ).filter((conflict) => Boolean(conflict.reservation));
+    return conflicts[0]?.reservation ?? null;
   }
 
   function ensureReservationCanBeSaved(reservation: Reservation) {

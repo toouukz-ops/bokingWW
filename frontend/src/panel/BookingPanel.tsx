@@ -2788,9 +2788,15 @@ export function BookingPanel() {
       return Boolean(contactPhone && phonesMatchForContactLookup(normalizedPhone, contactPhone));
     }) : null;
     if (byPhone) return byPhone;
+    if (normalizedPhone || isGuestFallbackName(chat.title || "")) return null;
 
     return guestContacts.find((contact) =>
-      Boolean(contact.appeal && normalizedTitle && normalizeContactLookupText(contact.appeal) === normalizedTitle)
+      Boolean(
+        contact.appeal &&
+        normalizedTitle &&
+        !isGuestFallbackName(contact.appeal) &&
+        normalizeContactLookupText(contact.appeal) === normalizedTitle
+      )
     ) ?? null;
   }
 

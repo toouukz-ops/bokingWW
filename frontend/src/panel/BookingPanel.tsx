@@ -5813,6 +5813,7 @@ export function BookingPanel() {
     const respectActiveDialogOwner = options.respectActiveDialogOwner ?? true;
     if (respectActiveDialogOwner && blockIfCurrentDialogOwnedByOther("reservation-save")) return false;
     const normalizedReservation = normalizeReservationPhoneIdentity(reservation);
+    if (!ensureReservationCanBeSaved(normalizedReservation)) return false;
     const existingReservation = reservations.find((item) => item.id === normalizedReservation.id)
       ?? (lastReservation?.id === normalizedReservation.id ? lastReservation : undefined);
     const dateChanged = existingReservation ? !reservationDateFieldsEqual(existingReservation, normalizedReservation) : true;
@@ -5834,6 +5835,58 @@ export function BookingPanel() {
       setLastReservation(normalizedReservation);
     }
     await syncReservationDraftForStatus(normalizedReservation);
+    return true;
+  }
+
+  function ensureReservationCanBeSaved(reservation: Reservation) {
+    if (reservation.isAddOnSale || reservation.status === "cancelled" || reservation.noShowAt) return true;
+    if (reservation.status !== "pending" && reservation.status !== "booked") return true;
+
+    if (!normalizePhoneSearch(reservation.phone)) {
+      setBookingDateWarning("Бронь не сохранена: сначала извлеките и сохраните телефон гостя.");
+      void sendDebugLog("reservation-save-blocked-missing-phone", {
+        guestFirstName: reservation.guestFirstName,
+        reservationId: reservation.id,
+        roomIds: reservation.roomIds,
+        checkIn: reservation.checkIn,
+        checkOut: reservation.checkOut
+      });
+      return false;
+    }
+
+    const reservationRooms = pricedRooms.filter((room) => reservation.roomIds.includes(room.id));
+    const blockingReservations = reservations.filter((candidate) => candidate.id !== reservation.id);
+    const conflicts = buildRoomAvailabilityConflicts(
+      reservationRooms,
+      blockingReservations,
+      reservation.checkIn,
+      reservation.checkOut,
+      reservation.checkInTime,
+      reservation.checkOutTime,
+      [],
+      currentHoldOwnerId
+    ).filter((conflict) => Boolean(conflict.reservation));
+
+    if (conflicts.length) {
+      const conflict = conflicts[0];
+      const roomLabel = conflict.room ? formatBookingPickerObjectLabel(conflict.room) : "номер";
+      const guestLabel = conflict.reservation?.guestFirstName || formatReservationPhone(conflict.reservation?.phone || "") || "другая бронь";
+      setBookingDateWarning(`Бронь не сохранена: ${roomLabel} уже занят на эти даты (${guestLabel}).`);
+      void sendDebugLog("reservation-save-blocked-room-conflict", {
+        reservationId: reservation.id,
+        guestFirstName: reservation.guestFirstName,
+        phone: reservation.phone,
+        checkIn: reservation.checkIn,
+        checkOut: reservation.checkOut,
+        roomIds: reservation.roomIds,
+        conflictReservationId: conflict.reservation?.id,
+        conflictGuestFirstName: conflict.reservation?.guestFirstName,
+        conflictPhone: conflict.reservation?.phone,
+        conflictRoomId: conflict.room.id
+      });
+      return false;
+    }
+
     return true;
   }
 

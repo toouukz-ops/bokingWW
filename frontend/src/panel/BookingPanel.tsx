@@ -942,6 +942,7 @@ export function BookingPanel() {
   const [summaryChatDialogs, setSummaryChatDialogs] = useState<ChatMessageDialog[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
+  const realtimeReservationLockRef = useRef<Map<string, number>>(new Map());
   const [expenseEntries, setExpenseEntries] = useState<ExpenseEntry[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [selectedBookingRoomIds, setSelectedBookingRoomIds] = useState<string[]>([]);
@@ -1585,12 +1586,29 @@ export function BookingPanel() {
       const payload = safeParseRealtimeEvent(event);
       if (!payload || typeof payload !== "object") return;
       if (payload.action === "replace" && Array.isArray(payload.items)) {
-        setReservations(payload.items as Reservation[]);
+        const incomingReservations = payload.items as Reservation[];
+        setReservations((currentReservations) => {
+          const currentById = new Map(currentReservations.map((reservation) => [reservation.id, reservation]));
+          const incomingIds = new Set(incomingReservations.map((reservation) => reservation.id));
+          const mergedReservations = incomingReservations.map((reservation) => {
+            if (!isRealtimeReservationLocked(reservation.id)) return reservation;
+            return currentById.get(reservation.id) ?? reservation;
+          });
+          currentReservations.forEach((reservation) => {
+            if (incomingIds.has(reservation.id) || !isRealtimeReservationLocked(reservation.id)) return;
+            mergedReservations.push(reservation);
+          });
+          return mergedReservations;
+        });
       }
       if (payload.action === "upsert" && payload.reservation && typeof payload.reservation === "object") {
         const reservation = payload.reservation as Reservation;
         setReservations((currentReservations) =>
-          currentReservations.filter((item) => item.id !== reservation.id).concat(reservation)
+          isRealtimeReservationLocked(reservation.id)
+            ? currentReservations
+            : currentReservations.some((item) => item.id === reservation.id)
+              ? currentReservations.map((item) => item.id === reservation.id ? reservation : item)
+              : currentReservations.concat(reservation)
         );
       }
       if (payload.action === "delete" && typeof payload.id === "string") {
@@ -5798,6 +5816,26 @@ export function BookingPanel() {
     );
   }
 
+  function lockRealtimeReservation(reservationId: string) {
+    const expiresAt = Date.now() + 15000;
+    realtimeReservationLockRef.current.set(reservationId, expiresAt);
+    window.setTimeout(() => {
+      if (realtimeReservationLockRef.current.get(reservationId) === expiresAt) {
+        realtimeReservationLockRef.current.delete(reservationId);
+      }
+    }, 15000);
+  }
+
+  function isRealtimeReservationLocked(reservationId: string) {
+    const expiresAt = realtimeReservationLockRef.current.get(reservationId) ?? 0;
+    if (!expiresAt) return false;
+    if (expiresAt <= Date.now()) {
+      realtimeReservationLockRef.current.delete(reservationId);
+      return false;
+    }
+    return true;
+  }
+
   async function updateReservation(reservation: Reservation, options: { optimisticLocal?: boolean; respectActiveDialogOwner?: boolean } = {}) {
     const respectActiveDialogOwner = options.respectActiveDialogOwner ?? true;
     if (respectActiveDialogOwner && blockIfCurrentDialogOwnedByOther("reservation-save")) return false;
@@ -5811,13 +5849,15 @@ export function BookingPanel() {
       return false;
     }
     if (options.optimisticLocal) {
+      lockRealtimeReservation(normalizedReservation.id);
       replaceReservationInState(normalizedReservation);
       if (shouldAttachReservationToActiveChat(normalizedReservation)) {
         setLastReservation(normalizedReservation);
       }
     }
+    let savedReservation = normalizedReservation;
     try {
-      await saveReservation(normalizedReservation, { clientId: syncClientIdRef.current, requireRemote: true });
+      savedReservation = await saveReservation(normalizedReservation, { clientId: syncClientIdRef.current, requireRemote: true });
     } catch (error) {
       if (options.optimisticLocal) {
         if (existingReservation) {
@@ -5845,12 +5885,12 @@ export function BookingPanel() {
       void sendDebugLog("reservation-save-remote-error", { message, reservationId: normalizedReservation.id });
       return false;
     }
-    await ensureGuestContactForReservation(normalizedReservation);
-    replaceReservationInState(normalizedReservation);
-    if (shouldAttachReservationToActiveChat(normalizedReservation)) {
-      setLastReservation(normalizedReservation);
+    await ensureGuestContactForReservation(savedReservation);
+    replaceReservationInState(savedReservation);
+    if (shouldAttachReservationToActiveChat(savedReservation)) {
+      setLastReservation(savedReservation);
     }
-    await syncReservationDraftForStatus(normalizedReservation);
+    await syncReservationDraftForStatus(savedReservation);
     return true;
   }
 

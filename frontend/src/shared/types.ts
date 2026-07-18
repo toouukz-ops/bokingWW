@@ -70,6 +70,7 @@ export interface Reservation {
   extendedAt?: string;
   noShowAt?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ReservationItem {

@@ -446,13 +446,14 @@ export async function saveReservation(reservation: Reservation, options: { clien
       const details = await response.text().catch(() => "");
       throw new Error(`Reservation save failed: ${response.status}${details ? ` ${details.slice(0, 500)}` : ""}`);
     }
+    const savedReservation = (await response.json().catch(() => reservation)) as Reservation;
+    await saveReservations(reservations.filter((item) => item.id !== savedReservation.id).concat(savedReservation));
+    return savedReservation;
   } catch (error) {
     if (options.requireRemote) throw (error instanceof Error ? error : new Error("Reservation save failed"));
     await saveReservations(reservations.filter((item) => item.id !== reservation.id).concat(reservation));
     return reservation;
   }
-  await saveReservations(reservations.filter((item) => item.id !== reservation.id).concat(reservation));
-  return reservation;
 }
 
 export async function deleteReservation(reservationId: string): Promise<void> {

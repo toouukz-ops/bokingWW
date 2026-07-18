@@ -3489,38 +3489,50 @@ body.gpb-booking-panel-open #app {
 
 .gpb-reservations-modal .gpb-catalog-header {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(260px, 440px) auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(360px, 620px) auto;
   align-items: center;
 }
 
 .gpb-reservation-available-summary {
   display: grid;
-  gap: 3px;
+  gap: 6px;
   min-width: 0;
   justify-self: center;
   width: 100%;
-  max-width: 440px;
+  max-width: 620px;
   border: 1px solid #cfe7df;
   border-radius: 8px;
   background: #f0faf6;
-  padding: 7px 12px;
+  padding: 8px 12px;
 }
 
 .gpb-reservation-available-summary strong {
-  overflow: hidden;
   color: #0f6b57;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.gpb-reservation-available-summary div {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
 .gpb-reservation-available-summary span {
-  overflow: hidden;
+  color: #607080;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gpb-reservation-available-summary b {
   color: #16202a;
   font-size: 13px;
   font-weight: 800;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .gpb-empty-guests-modal {

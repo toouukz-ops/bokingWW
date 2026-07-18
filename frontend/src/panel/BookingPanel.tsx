@@ -13203,8 +13203,8 @@ function ReservationsModal({
     .filter((row) => !selectedDate || row.roomIds.length > 0), [rooms, selectedDate, visibleReservations]);
   const visibleReservationsForAdminCopy = useMemo(() => visibleReservationRows
     .map(({ reservation }) => narrowReservationForCalendarDate(reservation, selectedDate, rooms)), [rooms, selectedDate, visibleReservationRows]);
-  const availableRoomNumbers = useMemo(
-    () => buildAvailableRoomNumbersForCalendarDate(rooms, reservations, selectedDate),
+  const roomAvailabilitySummary = useMemo(
+    () => buildRoomAvailabilitySummaryForCalendarDate(rooms, reservations, selectedDate),
     [rooms, reservations, selectedDate]
   );
 
@@ -13296,8 +13296,15 @@ function ReservationsModal({
             <span>Календарь занятости, фильтры и управление бронями.</span>
           </div>
           <div className="gpb-reservation-available-summary">
-            <strong>Свободные номера {selectedDate ? formatNumericDayMonth(selectedDate) : ""}</strong>
-            <span>{availableRoomNumbers.length ? availableRoomNumbers.join(", ") : "нет свободных номеров"}</span>
+            <strong>Доступность {selectedDate ? formatNumericDayMonth(selectedDate) : ""}</strong>
+            <div>
+              <span>Свободны</span>
+              <b>{roomAvailabilitySummary.free.length ? roomAvailabilitySummary.free.join(", ") : "нет"}</b>
+            </div>
+            <div>
+              <span>Освободятся</span>
+              <b>{roomAvailabilitySummary.releasing.length ? roomAvailabilitySummary.releasing.join(", ") : "нет"}</b>
+            </div>
           </div>
           <div className="gpb-catalog-header-actions">
             <button type="button" onClick={handleCopyAdminBookings} title="Скопировать брони для администратора">
@@ -17105,23 +17112,41 @@ function getReservationCalendarRoomIdsForDate(reservation: Reservation, date: st
   return [...orderedRoomIds, ...missingRoomIds];
 }
 
-function buildAvailableRoomNumbersForCalendarDate(rooms: Room[], reservations: Reservation[], date: string) {
-  if (!date) return [];
+function buildRoomAvailabilitySummaryForCalendarDate(rooms: Room[], reservations: Reservation[], date: string) {
+  if (!date) return { free: [], releasing: [] };
+  const nextDate = formatDateInput(addDays(parseDateInput(date), 1));
+  const activeReservations = reservations.filter((reservation) => reservation.status === "booked" && !reservation.noShowAt && !isReservationCheckedOut(reservation));
   const occupiedRoomIds = new Set(
-    reservations
-      .filter((reservation) => reservation.status === "booked")
-      .flatMap((reservation) => getReservationCalendarRoomIdsForDate(reservation, date, rooms))
+    activeReservations
+      .flatMap((reservation) => getReservationBlockingItems(reservation, rooms))
+      .filter((item) => dateRangesOverlap(date, nextDate, item.checkIn, item.checkOut))
+      .map((item) => item.roomId)
   );
-  return rooms
+  const releasingRoomIds = new Set(
+    activeReservations
+      .flatMap((reservation) => getReservationBlockingItems(reservation, rooms))
+      .filter((item) => item.checkOut === date && !occupiedRoomIds.has(item.roomId))
+      .map((item) => item.roomId)
+  );
+  const availableRooms = rooms
     .filter((room) =>
       isRoomAvailableInBookingPanel(room) &&
       isRoomIncludedInBookingSummary(room) &&
-      isStayBookingObject(room) &&
-      !occupiedRoomIds.has(room.id)
+      isStayBookingObject(room)
     )
-    .sort((left, right) => left.sortOrder - right.sortOrder || String(left.number || "").localeCompare(String(right.number || ""), "ru", { numeric: true }))
-    .map((room) => String(room.number || room.title || "").trim())
-    .filter(Boolean);
+    .sort((left, right) => left.sortOrder - right.sortOrder || String(left.number || "").localeCompare(String(right.number || ""), "ru", { numeric: true }));
+  const formatRoom = (room: Room) => String(room.number || room.title || "").trim();
+
+  return {
+    free: availableRooms
+      .filter((room) => !occupiedRoomIds.has(room.id) && !releasingRoomIds.has(room.id))
+      .map(formatRoom)
+      .filter(Boolean),
+    releasing: availableRooms
+      .filter((room) => releasingRoomIds.has(room.id))
+      .map(formatRoom)
+      .filter(Boolean)
+  };
 }
 
 function narrowReservationForCalendarDate(reservation: Reservation, date: string, rooms: Room[] = []) {

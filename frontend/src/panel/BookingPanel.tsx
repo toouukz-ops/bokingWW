@@ -1195,23 +1195,6 @@ export function BookingPanel() {
     const intervalId = window.setInterval(updateReminderClock, 60_000);
     return () => window.clearInterval(intervalId);
   }, []);
-  useEffect(() => {
-    let isCancelled = false;
-    const loadSummaryChatDialogs = async () => {
-      try {
-        const dialogs = await getChatMessageDialogs();
-        if (!isCancelled) setSummaryChatDialogs(dialogs);
-      } catch {
-        if (!isCancelled) setSummaryChatDialogs([]);
-      }
-    };
-    void loadSummaryChatDialogs();
-    const intervalId = window.setInterval(loadSummaryChatDialogs, 30_000);
-    return () => {
-      isCancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, []);
   const currentHoldOwnerId = useMemo(
     () => getCurrentRoomHoldOwnerId(activeChat, guestPhone, guestPhonePrefix, guestFirstName),
     [activeChat?.id, guestFirstName, guestPhone, guestPhonePrefix]
@@ -11964,13 +11947,6 @@ function SettingsModal({
     setLocalExtraPlaceChildPercent(String(inventoryExtraPlaceChildPercent));
   }, [inventoryExtraPlaceChildPercent]);
 
-  useEffect(() => {
-    if (activeSettingsSection !== "dialogs") return;
-    if (savedChatDialogStatus === "idle") {
-      void loadSavedChatDialogs();
-    }
-  }, [activeSettingsSection, savedChatDialogStatus]);
-
   async function saveOperatorName() {
     setOperatorSaveState("saving");
     try {
@@ -12278,7 +12254,7 @@ function SettingsModal({
               <Copy size={20} />
               <h2>Диалоги</h2>
             </div>
-            <p className="gpb-settings-note">Сообщения автоматически складываются сюда из открытых чатов. Медиа не сохраняются.</p>
+            <p className="gpb-settings-note">Сообщения складываются на сервер. Здесь они загружаются только по кнопке.</p>
             <div className="gpb-dialogs-settings-actions">
               <button className="gpb-settings-add-button" type="button" onClick={loadSavedChatDialogs} disabled={savedChatDialogStatus === "loading"}>
                 <RefreshCw size={15} />

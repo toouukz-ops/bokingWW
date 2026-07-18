@@ -6418,7 +6418,7 @@ export function BookingPanel() {
       status: "booked",
       checkedOutAt: hasCheckedOut ? undefined : now,
       noShowAt: undefined
-    });
+    }, { optimisticLocal: true });
   }
 
   function ensurePaymentMethodSelected() {

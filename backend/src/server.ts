@@ -147,6 +147,16 @@ function getReservationBlockingItemsForServer(reservation: Record<string, unknow
   return roomIds.map((roomId) => ({ checkIn, checkOut, roomId })).filter((item) => item.roomId && item.checkIn && item.checkOut);
 }
 
+function reservationBlockingItemsEqual(
+  leftItems: Array<{ checkIn: string; checkOut: string; roomId: string }>,
+  rightItems: Array<{ checkIn: string; checkOut: string; roomId: string }>
+) {
+  const serialize = (item: { checkIn: string; checkOut: string; roomId: string }) => `${item.roomId}|${item.checkIn}|${item.checkOut}`;
+  const left = leftItems.map(serialize).sort();
+  const right = rightItems.map(serialize).sort();
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
 function isServerBlockingReservation(reservation: Record<string, unknown>) {
   const status = toReservationText(reservation.status);
   return !reservation.isAddOnSale && !reservation.noShowAt && (status === "pending" || status === "booked");
@@ -167,6 +177,15 @@ async function validateReservationBeforeSave(id: string, reservation: Record<str
   if (!nextItems.length) return { ok: true as const };
 
   const reservations = await listReservations();
+  const existingReservation = reservations.find((candidate) => candidate.id === id);
+  if (
+    existingReservation &&
+    isServerBlockingReservation(existingReservation) &&
+    reservationBlockingItemsEqual(nextItems, getReservationBlockingItemsForServer(existingReservation))
+  ) {
+    return { ok: true as const };
+  }
+
   for (const candidate of reservations) {
     if (candidate.id === id || !isServerBlockingReservation(candidate)) continue;
     const candidateItems = getReservationBlockingItemsForServer(candidate);

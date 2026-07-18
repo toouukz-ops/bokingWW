@@ -6577,7 +6577,9 @@ export function BookingPanel() {
     }, existingReservation);
 
     setSendState("sending");
-    await updateReservation(confirmedReservation);
+    if (!existingReservation || reservationConfirmationNeedsSave(existingReservation, confirmedReservation)) {
+      await updateReservation(confirmedReservation);
+    }
     setPrepaymentAlreadyPaid(Boolean(confirmedReservation.prepaymentReceivedAt));
     const inserted = await insertTextIntoActiveWhatsAppChat(buildReservationPaymentConfirmationMessage(confirmedReservation, rooms));
     setSendState(inserted ? "sent" : "error");
@@ -22231,6 +22233,14 @@ function formatReservationConfirmationRooms(reservation: Reservation, rooms: Roo
   }).join(", ");
 }
 
+function reservationConfirmationNeedsSave(existingReservation: Reservation, confirmedReservation: Reservation) {
+  return existingReservation.status !== confirmedReservation.status ||
+    existingReservation.paymentMethod !== confirmedReservation.paymentMethod ||
+    (existingReservation.paidAmount ?? 0) !== (confirmedReservation.paidAmount ?? 0) ||
+    existingReservation.prepaymentReceivedAt !== confirmedReservation.prepaymentReceivedAt ||
+    existingReservation.balancePaidAt !== confirmedReservation.balancePaidAt;
+}
+
 function formatReservationConfirmationServiceLines(reservation: Reservation, rooms: Room[]) {
   const reservationItems = getReservationItems(reservation, rooms);
   return reservationItems
@@ -24883,8 +24893,8 @@ function buildReservationPaymentConfirmationMessage(reservation: Reservation, ro
     hasPayment ? "Оплата поступила." : "Бронь подтверждена без предоплаты.",
     "Подтверждение брони",
     `Номера: ${formatReservationConfirmationRooms(reservation, rooms)}`,
-    hasDifferentPeriods || !firstNightlyItem ? "" : `Заезд: ${formatKazakhDate(firstNightlyItem.checkIn || reservation.checkIn)} ${firstNightlyItem.checkInTime || DEFAULT_CHECK_IN_TIME}`,
-    hasDifferentPeriods || !firstNightlyItem ? "" : `Выезд: ${formatKazakhDate(firstNightlyItem.checkOut || reservation.checkOut)} ${firstNightlyItem.checkOutTime || DEFAULT_CHECK_OUT_TIME}`,
+    hasDifferentPeriods || !firstNightlyItem ? "" : `Заезд: ${formatKazakhDate(firstNightlyItem.checkIn || reservation.checkIn)} ${DEFAULT_CHECK_IN_TIME}`,
+    hasDifferentPeriods || !firstNightlyItem ? "" : `Выезд: ${formatKazakhDate(firstNightlyItem.checkOut || reservation.checkOut)} ${DEFAULT_CHECK_OUT_TIME}`,
     serviceLines,
     formatReservationGuestCountText(reservation),
     `Итого: ${formatPrice(reservation.total)}`,

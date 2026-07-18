@@ -1440,7 +1440,7 @@ export function BookingPanel() {
 
   useEffect(() => {
     const stopDomProbe = () => undefined;
-    const stopClickTrace = startWhatsAppManualClickTrace();
+    const stopClickTrace = () => undefined;
     const stopAutoSendGuard = startWhatsAppAutoSendGuard();
     return () => {
       stopDomProbe();

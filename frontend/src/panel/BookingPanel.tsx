@@ -13291,10 +13291,6 @@ function ReservationsModal({
     <div className="gpb-modal-backdrop">
       <div className="gpb-catalog-modal gpb-reservations-modal" role="dialog" aria-modal="true" aria-label="Брони">
         <header className="gpb-catalog-header">
-          <div>
-            <strong>Брони</strong>
-            <span>Календарь занятости, фильтры и управление бронями.</span>
-          </div>
           <div className="gpb-reservation-available-summary">
             <strong>Доступность {selectedDate ? formatNumericDayMonth(selectedDate) : ""}</strong>
             <span>/</span>

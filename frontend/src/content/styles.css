@@ -3489,7 +3489,7 @@ body.gpb-booking-panel-open #app {
 
 .gpb-reservations-modal .gpb-catalog-header {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(360px, 620px) auto;
+  grid-template-columns: minmax(420px, 1fr) auto;
   align-items: center;
 }
 
@@ -3498,9 +3498,9 @@ body.gpb-booking-panel-open #app {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  justify-self: center;
+  justify-self: start;
   width: 100%;
-  max-width: 620px;
+  max-width: 920px;
   border: 1px solid #cfe7df;
   border-radius: 8px;
   background: #f0faf6;

@@ -431,10 +431,13 @@ function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-export async function saveReservation(reservation: Reservation, options: { requireRemote?: boolean } = {}): Promise<Reservation> {
+export async function saveReservation(reservation: Reservation, options: { clientId?: string; requireRemote?: boolean } = {}): Promise<Reservation> {
   const reservations = await getLocalReservations();
   try {
-    const response = await fetch(`${API_BASE_URL}/api/reservations/${encodeURIComponent(reservation.id)}`, {
+    const params = new URLSearchParams();
+    if (options.clientId) params.set("clientId", options.clientId);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const response = await fetch(`${API_BASE_URL}/api/reservations/${encodeURIComponent(reservation.id)}${suffix}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(reservation)

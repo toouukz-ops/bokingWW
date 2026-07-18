@@ -917,13 +917,15 @@ app.get("/api/reservations", async () => {
 
 app.put("/api/reservations", async (request) => {
   const body = request.body as { items?: Array<Record<string, unknown>> } | undefined;
+  const query = request.query as { clientId?: string };
   const items = await replaceReservations(Array.isArray(body?.items) ? body.items : []);
-  broadcastRealtime("reservations.changed", { action: "replace", items });
+  broadcastRealtime("reservations.changed", { action: "replace", items }, query.clientId);
   return items;
 });
 
 app.put("/api/reservations/:id", async (request, reply) => {
   const { id } = request.params as { id: string };
+  const query = request.query as { clientId?: string };
   const body = request.body as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object") {
     return reply.status(400).send({ error: "Invalid reservation" });
@@ -935,14 +937,15 @@ app.put("/api/reservations/:id", async (request, reply) => {
   }
 
   const reservation = await saveReservationData(id, body);
-  broadcastRealtime("reservations.changed", { action: "upsert", reservation });
+  broadcastRealtime("reservations.changed", { action: "upsert", reservation }, query.clientId);
   return reservation;
 });
 
 app.delete("/api/reservations/:id", async (request, reply) => {
   const { id } = request.params as { id: string };
+  const query = request.query as { clientId?: string };
   await deleteReservationData(id);
-  broadcastRealtime("reservations.changed", { action: "delete", id: decodeURIComponent(id) });
+  broadcastRealtime("reservations.changed", { action: "delete", id: decodeURIComponent(id) }, query.clientId);
   return reply.status(204).send();
 });
 

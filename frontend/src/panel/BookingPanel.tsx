@@ -5817,7 +5817,7 @@ export function BookingPanel() {
       }
     }
     try {
-      await saveReservation(normalizedReservation, { requireRemote: true });
+      await saveReservation(normalizedReservation, { clientId: syncClientIdRef.current, requireRemote: true });
     } catch (error) {
       if (options.optimisticLocal) {
         if (existingReservation) {

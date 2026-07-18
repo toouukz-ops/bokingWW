@@ -1753,7 +1753,7 @@ export function BookingPanel() {
       const nextChat = detectActiveWhatsAppChat();
       setActiveChat((currentChat) => {
         if (suppressActiveChatSyncRef.current) return currentChat;
-        if (!nextChat && currentChat?.phone && findVisibleProfilePanel()) {
+        if (!nextChat && currentChat?.phone && (findVisibleProfilePanel() || isWhatsAppMediaDialogOpen())) {
           return currentChat;
         }
         return isSameDetectedChat(currentChat, nextChat) ? currentChat : nextChat;
@@ -17259,13 +17259,13 @@ function getActiveChatDisplayName() {
 }
 
 function getSelectedChatDisplayName() {
-  const selectedChat = document.querySelector<HTMLElement>('[aria-selected="true"], [data-testid="cell-frame-container"][aria-selected="true"]');
+  const selectedChat = getSelectedWhatsAppChatElement();
   const candidates = getContactNameCandidates(selectedChat);
   return candidates[0] ?? "";
 }
 
 function extractPhoneFromSelectedChat() {
-  const selectedChat = document.querySelector<HTMLElement>('[aria-selected="true"], [data-testid="cell-frame-container"][aria-selected="true"]');
+  const selectedChat = getSelectedWhatsAppChatElement();
   if (!selectedChat) return "";
   const text = [
     ...Array.from(selectedChat.querySelectorAll<HTMLElement>("[data-id*='@c.us'], [data-id*='@s.whatsapp.net'], a[href^='tel:']")).map((element) =>
@@ -17276,6 +17276,11 @@ function extractPhoneFromSelectedChat() {
     )
   ].join(" ");
   return extractPhoneFromText(text);
+}
+
+function getSelectedWhatsAppChatElement() {
+  return Array.from(document.querySelectorAll<HTMLElement>('[aria-selected="true"], [data-testid="cell-frame-container"][aria-selected="true"]'))
+    .find((element) => isVisibleElement(element) && !element.closest('[role="dialog"]')) ?? null;
 }
 
 function getContactNameCandidates(root?: HTMLElement | null) {
@@ -17290,6 +17295,7 @@ function getContactNameCandidates(root?: HTMLElement | null) {
 function isLikelyContactName(value: string) {
   if (!value) return false;
   if (isGuestFallbackName(value)) return true;
+  if (/^(фото|видео|медиа|изображение|картинка|photo|video|media|image|picture)$/i.test(value)) return false;
   if (/ic-|data-icon|wds-|status-|refreshed/i.test(value)) return false;
   if (value.length > 80) return false;
   if (extractPhoneFromText(value)) return false;
@@ -17299,6 +17305,14 @@ function isLikelyContactName(value: string) {
   if (/^\d{1,2}:\d{2}$/.test(value)) return false;
   if (/chat-filled|status-refreshed|wa-wordmark|new-chat|непрочитанное|избранное|группы/i.test(value)) return false;
   return !/^(сведения профиля|данные контакта|информация и номер телефона|сведения о компании|данные компании|contact info|profile details|business info|бизнес[\s\u2010-\u2015-]?аккаунт|business[\s\u2010-\u2015-]?account|online|онлайн|в сети|поиск|печатает|typing|last seen|был\(-а\).*|был\(а\).*|был.*|сегодня|вчера.*)$/i.test(value);
+}
+
+function isWhatsAppMediaDialogOpen() {
+  return Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]'))
+    .some((dialog) =>
+      isVisibleElement(dialog) &&
+      /(^|\s)(фото|видео|медиа|photo|video|media|image)(\s|$)/i.test(normalizeExtractedText(dialog.innerText || dialog.getAttribute("aria-label") || ""))
+    );
 }
 
 function getSafeGuestName(name: string, phone: string) {

@@ -5790,7 +5790,15 @@ export function BookingPanel() {
     setDeleteReservationTarget(null);
   }
 
-  async function updateReservation(reservation: Reservation, options: { respectActiveDialogOwner?: boolean } = {}) {
+  function replaceReservationInState(nextReservation: Reservation) {
+    setReservations((currentReservations) =>
+      currentReservations.some((item) => item.id === nextReservation.id)
+        ? currentReservations.map((item) => item.id === nextReservation.id ? nextReservation : item)
+        : currentReservations.concat(nextReservation)
+    );
+  }
+
+  async function updateReservation(reservation: Reservation, options: { optimisticLocal?: boolean; respectActiveDialogOwner?: boolean } = {}) {
     const respectActiveDialogOwner = options.respectActiveDialogOwner ?? true;
     if (respectActiveDialogOwner && blockIfCurrentDialogOwnedByOther("reservation-save")) return false;
     const normalizedReservation = normalizeReservationPhoneIdentity(reservation);
@@ -5802,9 +5810,25 @@ export function BookingPanel() {
       setBookingDateWarning(buildPastReservationWarning(normalizedReservation));
       return false;
     }
+    if (options.optimisticLocal) {
+      replaceReservationInState(normalizedReservation);
+      if (shouldAttachReservationToActiveChat(normalizedReservation)) {
+        setLastReservation(normalizedReservation);
+      }
+    }
     try {
       await saveReservation(normalizedReservation, { requireRemote: true });
     } catch (error) {
+      if (options.optimisticLocal) {
+        if (existingReservation) {
+          replaceReservationInState(existingReservation);
+          if (shouldAttachReservationToActiveChat(existingReservation)) {
+            setLastReservation(existingReservation);
+          }
+        } else {
+          setReservations((currentReservations) => currentReservations.filter((item) => item.id !== normalizedReservation.id));
+        }
+      }
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("Reservation save failed: 409")) {
         const latestReservations = await refreshReservationsAfterSaveConflict();
@@ -5822,7 +5846,7 @@ export function BookingPanel() {
       return false;
     }
     await ensureGuestContactForReservation(normalizedReservation);
-    setReservations((currentReservations) => currentReservations.filter((item) => item.id !== normalizedReservation.id).concat(normalizedReservation));
+    replaceReservationInState(normalizedReservation);
     if (shouldAttachReservationToActiveChat(normalizedReservation)) {
       setLastReservation(normalizedReservation);
     }
@@ -5968,7 +5992,7 @@ export function BookingPanel() {
         status: "booked",
         paidAmount: nextPaidAmount,
         balancePaidAt: allBalancesPaid ? now : reservation.balancePaidAt
-      });
+      }, { optimisticLocal: true });
       return;
     }
 
@@ -5994,7 +6018,7 @@ export function BookingPanel() {
           method: manualSalePaymentMethod || reservation.paymentMethod,
           paidAt: now
         })
-    });
+    }, { optimisticLocal: true });
   }
 
   async function togglePrepaymentPaid(reservation: Reservation) {
@@ -6332,7 +6356,7 @@ export function BookingPanel() {
         status: "booked",
         checkedInAt: reservation.checkedInAt ?? now,
         noShowAt: undefined
-      });
+      }, { optimisticLocal: true });
       return;
     }
 
@@ -6342,7 +6366,7 @@ export function BookingPanel() {
       status: "booked",
       checkedInAt: hasCheckedIn ? undefined : now,
       noShowAt: undefined
-    });
+    }, { optimisticLocal: true });
   }
 
   async function toggleCheckedOut(reservation: Reservation) {

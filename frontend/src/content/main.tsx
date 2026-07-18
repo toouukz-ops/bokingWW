@@ -153,6 +153,7 @@ function buildChatStatusIndex(): Promise<ChatStatusIndex> {
           const phone = normalizePhone(reservation.phone);
           setForcedStatus(index.byPhone, phone, status);
           if (reservation.phone) setForcedStatus(index.byChatId, createChatId(`phone:${reservation.phone}`), status);
+          if (reservation.guestFirstName) setForcedStatus(index.byChatId, createChatId(`title:${reservation.guestFirstName}`), status);
           setLatestTitleStatus(index, reservation.guestFirstName, status);
           addStatusIndexItem(index, { phone, status, title: reservation.guestFirstName });
         });

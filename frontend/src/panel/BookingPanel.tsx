@@ -102,6 +102,7 @@ const CUSTOM_HOLIDAY_DATES_STORAGE_KEY = "gpb-custom-holiday-dates";
 const CUSTOM_AMENITY_OPTIONS_STORAGE_KEY = "gpb-custom-amenity-options";
 const CUSTOM_FOOD_OPTIONS_STORAGE_KEY = "gpb-custom-food-options";
 const ROOM_HOLDS_STORAGE_KEY = "gpb-room-holds";
+const LOCAL_RESERVATIONS_STORAGE_KEY = "gpb-booking-reservations";
 const SYNC_CLIENT_ID_STORAGE_KEY = "gpb-sync-client-id";
 const OPERATOR_NAME_STORAGE_KEY = "gpb-operator-name";
 const CHAT_MESSAGE_KEYS_STORAGE_KEY = "gpb-chat-message-keys";
@@ -135,6 +136,14 @@ const BOOKING_ERROR_CANCEL_REASON = "Ошибка бронирования";
 const PANEL_WIDTH_RATIO = 0.4;
 const DAY_MS = 24 * 60 * 60 * 1000;
 let whatsAppAutoSendProtectionUntil = 0;
+
+function saveReservationsToLocalStatusCache(reservations: Reservation[]) {
+  try {
+    chrome.storage.local.set({ [LOCAL_RESERVATIONS_STORAGE_KEY]: reservations }, () => undefined);
+  } catch {
+    return;
+  }
+}
 
 function debugContactFlow(event: string, details: Record<string, unknown> = {}) {
   console.debug(`[GPB contact] ${event}`, details);
@@ -1603,21 +1612,27 @@ export function BookingPanel() {
             if (incomingIds.has(reservation.id) || !isRealtimeReservationLocked(reservation.id)) return;
             mergedReservations.push(reservation);
           });
+          saveReservationsToLocalStatusCache(mergedReservations);
           return mergedReservations;
         });
       }
       if (payload.action === "upsert" && payload.reservation && typeof payload.reservation === "object") {
         const reservation = payload.reservation as Reservation;
-        setReservations((currentReservations) =>
-          isRealtimeReservationLocked(reservation.id)
-            ? currentReservations
-            : currentReservations.some((item) => item.id === reservation.id)
-              ? currentReservations.map((item) => item.id === reservation.id ? reservation : item)
-              : currentReservations.concat(reservation)
-        );
+        setReservations((currentReservations) => {
+          if (isRealtimeReservationLocked(reservation.id)) return currentReservations;
+          const nextReservations = currentReservations.some((item) => item.id === reservation.id)
+            ? currentReservations.map((item) => item.id === reservation.id ? reservation : item)
+            : currentReservations.concat(reservation);
+          saveReservationsToLocalStatusCache(nextReservations);
+          return nextReservations;
+        });
       }
       if (payload.action === "delete" && typeof payload.id === "string") {
-        setReservations((currentReservations) => currentReservations.filter((reservation) => reservation.id !== payload.id));
+        setReservations((currentReservations) => {
+          const nextReservations = currentReservations.filter((reservation) => reservation.id !== payload.id);
+          saveReservationsToLocalStatusCache(nextReservations);
+          return nextReservations;
+        });
       }
     });
     events.addEventListener("chat-drafts.changed", (event) => {
@@ -5165,6 +5180,7 @@ export function BookingPanel() {
 
     const draftPatch: Partial<ChatBookingDraft> = {
       adminComment: reservation.adminComment ?? adminComment,
+      agreementSent: reservation.status === "pending",
       checkIn: reservation.checkIn,
       checkOut: reservation.checkOut,
       checkInTime: reservation.checkInTime,
@@ -5814,11 +5830,13 @@ export function BookingPanel() {
   }
 
   function replaceReservationInState(nextReservation: Reservation) {
-    setReservations((currentReservations) =>
-      currentReservations.some((item) => item.id === nextReservation.id)
+    setReservations((currentReservations) => {
+      const nextReservations = currentReservations.some((item) => item.id === nextReservation.id)
         ? currentReservations.map((item) => item.id === nextReservation.id ? nextReservation : item)
-        : currentReservations.concat(nextReservation)
-    );
+        : currentReservations.concat(nextReservation);
+      saveReservationsToLocalStatusCache(nextReservations);
+      return nextReservations;
+    });
   }
 
   function lockRealtimeReservation(reservationId: string) {
@@ -6577,9 +6595,23 @@ export function BookingPanel() {
     }, existingReservation);
 
     setSendState("sending");
-    if (!existingReservation || reservationConfirmationNeedsSave(existingReservation, confirmedReservation)) {
-      await updateReservation(confirmedReservation);
+    const needsReservationSave = !existingReservation || reservationConfirmationNeedsSave(existingReservation, confirmedReservation);
+    if (needsReservationSave) {
+      const saved = await updateReservation(confirmedReservation);
+      if (!saved) {
+        setSendState("error");
+        window.setTimeout(() => setSendState("idle"), 2600);
+        return;
+      }
+    } else {
+      await ensureGuestContactForReservation(confirmedReservation);
+      replaceReservationInState(confirmedReservation);
+      if (shouldAttachReservationToActiveChat(confirmedReservation)) {
+        setLastReservation(confirmedReservation);
+      }
+      await syncReservationDraftForStatus(confirmedReservation);
     }
+    setAgreementSent(false);
     setPrepaymentAlreadyPaid(Boolean(confirmedReservation.prepaymentReceivedAt));
     const inserted = await insertTextIntoActiveWhatsAppChat(buildReservationPaymentConfirmationMessage(confirmedReservation, rooms, defaultCheckInTime));
     setSendState(inserted ? "sent" : "error");

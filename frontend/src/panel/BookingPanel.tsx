@@ -7221,7 +7221,7 @@ export function BookingPanel() {
                   </button>
                 </div>
                 {sendState === "error" ? (
-                  <div className="gpb-send-error">Не нашел поле сообщения. Откройте нужный чат WhatsApp и попробуйте еще раз.</div>
+                  <div className="gpb-send-error">Не удалось отправить. Проверьте, что чат WhatsApp открыт, и попробуйте еще раз.</div>
                 ) : null}
               </>
             ) : (
@@ -25079,6 +25079,46 @@ async function createIncludedCardImageBlob(page: IncludedCardPage) {
 }
 
 async function createAvailableRoomsSnapshotBlob(datesNode: HTMLElement, catalogNode: HTMLElement) {
+  try {
+    return await createAvailableRoomsDomSnapshotBlob(datesNode, catalogNode);
+  } catch (error) {
+    console.warn("[GPB] DOM available rooms snapshot failed, falling back to tab capture", error);
+  }
+
+  return createAvailableRoomsVisibleTabSnapshotBlob(datesNode, catalogNode);
+}
+
+async function createAvailableRoomsDomSnapshotBlob(datesNode: HTMLElement, catalogNode: HTMLElement) {
+  if (document.fonts?.ready) await document.fonts.ready;
+
+  const restoreScroll = prepareAvailableRoomsSnapshotViewport(datesNode, catalogNode);
+  try {
+    await waitForNextPaint();
+    await waitForNextPaint();
+    const { default: html2canvas } = await import("html2canvas");
+    const screenshot = await html2canvas(document.body, {
+      backgroundColor: "#f4f7f4",
+      height: window.innerHeight,
+      logging: false,
+      scale: Math.min(2, Math.max(1, window.devicePixelRatio || 1)),
+      scrollX: -window.scrollX,
+      scrollY: -window.scrollY,
+      useCORS: true,
+      width: window.innerWidth,
+      windowHeight: window.innerHeight,
+      windowWidth: window.innerWidth
+    });
+    const scaleX = screenshot.width / Math.max(1, window.innerWidth);
+    const scaleY = screenshot.height / Math.max(1, window.innerHeight);
+    const capture = getAvailableRoomsCaptureRect(datesNode, catalogNode, scaleX, scaleY);
+    if (!capture) throw new Error("Не видно блока витрины для скриншота");
+    return createAvailableRoomsCroppedSnapshotBlob(screenshot, capture);
+  } finally {
+    restoreScroll();
+  }
+}
+
+async function createAvailableRoomsVisibleTabSnapshotBlob(datesNode: HTMLElement, catalogNode: HTMLElement) {
   if (document.fonts?.ready) await document.fonts.ready;
 
   const restoreScroll = prepareAvailableRoomsSnapshotViewport(datesNode, catalogNode);
@@ -25099,7 +25139,10 @@ async function createAvailableRoomsSnapshotBlob(datesNode: HTMLElement, catalogN
   }
 
   if (!screenshot || !capture) throw new Error("Не видно блока витрины для скриншота");
+  return createAvailableRoomsCroppedSnapshotBlob(screenshot, capture);
+}
 
+async function createAvailableRoomsCroppedSnapshotBlob(screenshot: CanvasImageSource, capture: CaptureRect) {
   const canvas = document.createElement("canvas");
   canvas.width = capture.width;
   canvas.height = capture.height;
@@ -26348,6 +26391,12 @@ async function sendMediaFilesThroughAttachmentToActiveWhatsAppChat(files: File[]
 }
 
 async function sendMediaFilesToActiveWhatsAppChat(files: File[], caption: string) {
+  const pasted = await sendMediaFilesByPasteToActiveWhatsAppChat(files, caption);
+  if (pasted) return true;
+  return sendMediaFilesThroughAttachmentToActiveWhatsAppChat(files, caption);
+}
+
+async function sendMediaFilesByPasteToActiveWhatsAppChat(files: File[], caption: string) {
   try {
     const chatInput = findWhatsAppMessageInput();
     if (!chatInput) {
@@ -26389,44 +26438,7 @@ async function sendMediaFilesToActiveWhatsAppChat(files: File[], caption: string
 }
 
 async function sendImageFileToActiveWhatsAppChat(file: File, caption: string) {
-  try {
-    const chatInput = findWhatsAppMessageInput();
-    if (!chatInput) {
-      return false;
-    }
-
-    chatInput.focus();
-    const pasted = pasteFileIntoWhatsAppInput(chatInput, file);
-    if (!pasted) {
-      return false;
-    }
-
-    const captionInput = await waitForElement(findWhatsAppMediaCaptionInput, 6000);
-    if (!captionInput) {
-      return false;
-    }
-
-    if (caption) {
-      captionInput.focus();
-      clearWhatsAppInput(captionInput);
-      await pasteTextIntoWhatsAppInput(captionInput, caption);
-    }
-
-    const sendButton = await waitForElement(findWhatsAppSendButton, 6000);
-    if (!sendButton) {
-      return false;
-    }
-
-    sendButton.click();
-    await waitForMediaPreviewClose(captionInput, 9000);
-    await waitForElement(findWhatsAppMessageInput, 9000);
-    await stabilizeWhatsAppComposerAfterAutoMediaSend();
-    await waitForDelay(1200);
-    notifyWhatsAppMessageSent();
-    return true;
-  } catch {
-    return false;
-  }
+  return sendMediaFilesToActiveWhatsAppChat([file], caption);
 }
 
 async function createFileFromMediaPath(path: string) {

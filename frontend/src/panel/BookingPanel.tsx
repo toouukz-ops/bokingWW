@@ -1439,7 +1439,7 @@ export function BookingPanel() {
   const bookingPaymentAmount = isManualSaleMode ? effectiveBookingTotals.total : effectiveBookingTotals.prepayment;
 
   useEffect(() => {
-    const stopDomProbe = startWhatsAppContactDomProbe();
+    const stopDomProbe = () => undefined;
     const stopClickTrace = startWhatsAppManualClickTrace();
     const stopAutoSendGuard = startWhatsAppAutoSendGuard();
     return () => {

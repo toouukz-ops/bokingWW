@@ -13297,14 +13297,10 @@ function ReservationsModal({
           </div>
           <div className="gpb-reservation-available-summary">
             <strong>Доступность {selectedDate ? formatNumericDayMonth(selectedDate) : ""}</strong>
-            <div>
-              <span>Свободны</span>
-              <b>{roomAvailabilitySummary.free.length ? roomAvailabilitySummary.free.join(", ") : "нет"}</b>
-            </div>
-            <div>
-              <span>Освободятся</span>
-              <b>{roomAvailabilitySummary.releasing.length ? roomAvailabilitySummary.releasing.join(", ") : "нет"}</b>
-            </div>
+            <span>/</span>
+            <p><span>Свободны:</span> <b>{roomAvailabilitySummary.free.length ? roomAvailabilitySummary.free.join(", ") : "нет"}</b></p>
+            <span>/</span>
+            <p><span>Освободятся:</span> <b>{roomAvailabilitySummary.releasing.length ? roomAvailabilitySummary.releasing.join(", ") : "нет"}</b></p>
           </div>
           <div className="gpb-catalog-header-actions">
             <button type="button" onClick={handleCopyAdminBookings} title="Скопировать брони для администратора">

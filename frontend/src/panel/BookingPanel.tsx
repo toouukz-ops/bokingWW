@@ -3771,7 +3771,7 @@ export function BookingPanel() {
       await waitForNextPaint();
       const blob = await createAvailableRoomsSnapshotBlob(bookingDatesSnapshotRef.current, catalogSnapshotRef.current);
       const file = new File([blob], `available-rooms-${checkIn || "today"}.jpg`, { type: "image/jpeg" });
-      const sent = await sendImageFileToActiveWhatsAppChat(file, "");
+      const sent = await sendImageFileToActiveWhatsAppChatWithAttachmentFallback(file, "");
       if (sent) await markCatalogStatus("price-sent");
       setSendState(sent ? "sent" : "error");
     } catch (error) {
@@ -26391,12 +26391,6 @@ async function sendMediaFilesThroughAttachmentToActiveWhatsAppChat(files: File[]
 }
 
 async function sendMediaFilesToActiveWhatsAppChat(files: File[], caption: string) {
-  const pasted = await sendMediaFilesByPasteToActiveWhatsAppChat(files, caption);
-  if (pasted) return true;
-  return sendMediaFilesThroughAttachmentToActiveWhatsAppChat(files, caption);
-}
-
-async function sendMediaFilesByPasteToActiveWhatsAppChat(files: File[], caption: string) {
   try {
     const chatInput = findWhatsAppMessageInput();
     if (!chatInput) {
@@ -26439,6 +26433,12 @@ async function sendMediaFilesByPasteToActiveWhatsAppChat(files: File[], caption:
 
 async function sendImageFileToActiveWhatsAppChat(file: File, caption: string) {
   return sendMediaFilesToActiveWhatsAppChat([file], caption);
+}
+
+async function sendImageFileToActiveWhatsAppChatWithAttachmentFallback(file: File, caption: string) {
+  const pasted = await sendMediaFilesToActiveWhatsAppChat([file], caption);
+  if (pasted) return true;
+  return sendMediaFilesThroughAttachmentToActiveWhatsAppChat([file], caption);
 }
 
 async function createFileFromMediaPath(path: string) {

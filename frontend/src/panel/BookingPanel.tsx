@@ -6581,7 +6581,7 @@ export function BookingPanel() {
       await updateReservation(confirmedReservation);
     }
     setPrepaymentAlreadyPaid(Boolean(confirmedReservation.prepaymentReceivedAt));
-    const inserted = await insertTextIntoActiveWhatsAppChat(buildReservationPaymentConfirmationMessage(confirmedReservation, rooms));
+    const inserted = await insertTextIntoActiveWhatsAppChat(buildReservationPaymentConfirmationMessage(confirmedReservation, rooms, defaultCheckInTime));
     setSendState(inserted ? "sent" : "error");
     window.setTimeout(() => setSendState("idle"), 2600);
   }
@@ -24875,7 +24875,7 @@ function buildReservationTotalMessage(reservation: Reservation, rooms: Room[]) {
   return lines.join("\n").trim();
 }
 
-function buildReservationPaymentConfirmationMessage(reservation: Reservation, rooms: Room[]) {
+function buildReservationPaymentConfirmationMessage(reservation: Reservation, rooms: Room[], defaultStayCheckInTime = DEFAULT_CHECK_IN_TIME) {
   const paidAmount = Math.max(0, reservation.paidAmount ?? 0);
   const balance = Math.max(0, reservation.total - paidAmount);
   const paymentLabel = getManualSalePaymentLabel(reservation.paymentMethod ?? "");
@@ -24893,7 +24893,7 @@ function buildReservationPaymentConfirmationMessage(reservation: Reservation, ro
     hasPayment ? "Оплата поступила." : "Бронь подтверждена без предоплаты.",
     "Подтверждение брони",
     `Номера: ${formatReservationConfirmationRooms(reservation, rooms)}`,
-    hasDifferentPeriods || !firstNightlyItem ? "" : `Заезд: ${formatKazakhDate(firstNightlyItem.checkIn || reservation.checkIn)} ${DEFAULT_CHECK_IN_TIME}`,
+    hasDifferentPeriods || !firstNightlyItem ? "" : `Заезд: ${formatKazakhDate(firstNightlyItem.checkIn || reservation.checkIn)} ${defaultStayCheckInTime || DEFAULT_CHECK_IN_TIME}`,
     hasDifferentPeriods || !firstNightlyItem ? "" : `Выезд: ${formatKazakhDate(firstNightlyItem.checkOut || reservation.checkOut)} ${DEFAULT_CHECK_OUT_TIME}`,
     serviceLines,
     formatReservationGuestCountText(reservation),

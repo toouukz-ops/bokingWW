@@ -2118,11 +2118,9 @@ export function BookingPanel() {
 
   async function loadReservations() {
     const loadedReservations = await getReservations();
-    const identityRepairedReservations = await repairLocalPhoneIdentityLinks(loadedReservations);
-    const processedReservations = await processNoShowReservations(identityRepairedReservations);
+    const processedReservations = await processNoShowReservations(loadedReservations);
     const checkedOutReservations = await processAutoCheckedOutReservations(processedReservations);
-    const repairedReservations = await repairReservationDatesFromChatDrafts(checkedOutReservations);
-    setReservations(repairedReservations);
+    setReservations(checkedOutReservations);
   }
 
   async function repairLocalPhoneIdentityLinks(sourceReservations: Reservation[]) {

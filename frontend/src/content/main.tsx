@@ -82,7 +82,7 @@ function startWhatsAppChatStatusOverlay() {
   window.addEventListener("resize", scheduleApplyChatStatuses);
   chatStatusPollTimer = window.setInterval(() => {
     void refreshChatStatusIndex();
-  }, 10_000);
+  }, 2500);
   scheduleApplyChatStatuses();
 
   try {

@@ -1,6 +1,6 @@
 {
   "name": "gpb-whatsapp-booking-extension",
-  "version": "1.0.129",
+  "version": "1.0.128",
   "private": true,
   "type": "module",
   "scripts": {

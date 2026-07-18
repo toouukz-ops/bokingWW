@@ -134,22 +134,10 @@ const DEFAULT_RESERVATION_CALENDAR_LIST_HEIGHT = 280;
 const BOOKING_ERROR_CANCEL_REASON = "Ошибка бронирования";
 const PANEL_WIDTH_RATIO = 0.4;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const ACTIVE_CHAT_POLL_INTERVAL_MS = 1500;
-const CHAT_MESSAGE_SAVE_INTERVAL_MS = 15_000;
-const CHAT_DIALOGS_SUMMARY_REFRESH_INTERVAL_MS = 120_000;
-const ENABLE_HEAVY_WHATSAPP_DIAGNOSTICS = false;
-const IMPORTANT_DEBUG_EVENT_PATTERN = /error|failed|blocked|timeout/i;
 let whatsAppAutoSendProtectionUntil = 0;
 
-function noopCleanup() {
-  return;
-}
-
 function debugContactFlow(event: string, details: Record<string, unknown> = {}) {
-  if (!ENABLE_HEAVY_WHATSAPP_DIAGNOSTICS && !IMPORTANT_DEBUG_EVENT_PATTERN.test(event)) return;
-  if (ENABLE_HEAVY_WHATSAPP_DIAGNOSTICS) {
-    console.debug(`[GPB contact] ${event}`, details);
-  }
+  console.debug(`[GPB contact] ${event}`, details);
   void sendDebugLog(event, details);
 }
 
@@ -1218,7 +1206,7 @@ export function BookingPanel() {
       }
     };
     void loadSummaryChatDialogs();
-    const intervalId = window.setInterval(loadSummaryChatDialogs, CHAT_DIALOGS_SUMMARY_REFRESH_INTERVAL_MS);
+    const intervalId = window.setInterval(loadSummaryChatDialogs, 30_000);
     return () => {
       isCancelled = true;
       window.clearInterval(intervalId);
@@ -1451,8 +1439,8 @@ export function BookingPanel() {
   const bookingPaymentAmount = isManualSaleMode ? effectiveBookingTotals.total : effectiveBookingTotals.prepayment;
 
   useEffect(() => {
-    const stopDomProbe = ENABLE_HEAVY_WHATSAPP_DIAGNOSTICS ? startWhatsAppContactDomProbe() : noopCleanup;
-    const stopClickTrace = ENABLE_HEAVY_WHATSAPP_DIAGNOSTICS ? startWhatsAppManualClickTrace() : noopCleanup;
+    const stopDomProbe = startWhatsAppContactDomProbe();
+    const stopClickTrace = startWhatsAppManualClickTrace();
     const stopAutoSendGuard = startWhatsAppAutoSendGuard();
     return () => {
       stopDomProbe();
@@ -1778,7 +1766,7 @@ export function BookingPanel() {
     };
 
     updateActiveChat();
-    const intervalId = window.setInterval(updateActiveChat, ACTIVE_CHAT_POLL_INTERVAL_MS);
+    const intervalId = window.setInterval(updateActiveChat, 800);
     return () => window.clearInterval(intervalId);
   }, [startupCleanDone]);
 
@@ -1957,7 +1945,7 @@ export function BookingPanel() {
     };
 
     const timeoutId = window.setTimeout(() => void saveVisibleMessages(), 1000);
-    const intervalId = window.setInterval(() => void saveVisibleMessages(), CHAT_MESSAGE_SAVE_INTERVAL_MS);
+    const intervalId = window.setInterval(() => void saveVisibleMessages(), 8000);
     const handleFocus = () => void saveVisibleMessages();
     window.addEventListener("focus", handleFocus);
     return () => {

@@ -22208,7 +22208,8 @@ function formatReservationConfirmationRooms(reservation: Reservation, rooms: Roo
       item,
       room: rooms.find((room) => room.id === item.roomId)
     }))
-    .filter((entry): entry is { item: ReservationItem; room: Room } => Boolean(entry.room));
+    .filter((entry): entry is { item: ReservationItem; room: Room } => Boolean(entry.room))
+    .filter(({ room }) => !isHourlyBookingObject(room));
 
   if (!bookedItems.length) return "не указаны";
 
@@ -22228,6 +22229,25 @@ function formatReservationConfirmationRooms(reservation: Reservation, rooms: Roo
     const number = room.number ? `${getObjectTypeLabel(room)} ${room.number}` : getObjectTypeLabel(room);
     return [number, room.title].filter(Boolean).join(" | ");
   }).join(", ");
+}
+
+function formatReservationConfirmationServiceLines(reservation: Reservation, rooms: Room[]) {
+  const reservationItems = getReservationItems(reservation, rooms);
+  return reservationItems
+    .map((item) => ({
+      item,
+      room: rooms.find((room) => room.id === item.roomId)
+    }))
+    .filter((entry): entry is { item: ReservationItem; room: Room } => Boolean(entry.room) && isHourlyBookingObject(entry.room))
+    .map(({ item, room }) => {
+      const hours = Math.max(2, reservation.hourlyHours || 2);
+      const checkIn = item.checkIn || reservation.checkIn;
+      const checkInTime = item.checkInTime || reservation.checkInTime;
+      const checkOutTime = item.checkOutTime || reservation.checkOutTime || addHoursToTimeInput(checkInTime, hours);
+      const label = room.objectType === "sauna" ? "Сауна" : room.title || getObjectTypeLabel(room);
+      return `${label}: ${formatKazakhDate(checkIn)} с ${checkInTime} по ${checkOutTime}, ${hours} ч.`;
+    })
+    .join("\n");
 }
 
 function formatAdminGuestCountText(reservation: Reservation) {
@@ -24850,14 +24870,22 @@ function buildReservationPaymentConfirmationMessage(reservation: Reservation, ro
   const balance = Math.max(0, reservation.total - paidAmount);
   const paymentLabel = getManualSalePaymentLabel(reservation.paymentMethod ?? "");
   const hasPayment = paidAmount > 0 || Boolean(reservation.prepaymentReceivedAt || reservation.balancePaidAt);
-  const hasDifferentPeriods = reservationItemsHaveDifferentPeriods(getReservationItems(reservation, rooms));
+  const reservationItems = getReservationItems(reservation, rooms);
+  const nightlyItems = reservationItems.filter((item) => {
+    const room = rooms.find((candidate) => candidate.id === item.roomId);
+    return room && !isHourlyBookingObject(room);
+  });
+  const firstNightlyItem = nightlyItems[0];
+  const hasDifferentPeriods = reservationItemsHaveDifferentPeriods(nightlyItems);
+  const serviceLines = formatReservationConfirmationServiceLines(reservation, rooms);
   return [
     reservation.guestFirstName || "Гость",
     hasPayment ? "Оплата поступила." : "Бронь подтверждена без предоплаты.",
     "Подтверждение брони",
     `Номера: ${formatReservationConfirmationRooms(reservation, rooms)}`,
-    hasDifferentPeriods ? "" : `Заезд: ${formatKazakhDate(reservation.checkIn)} ${reservation.checkInTime}`,
-    hasDifferentPeriods ? "" : `Выезд: ${formatKazakhDate(reservation.checkOut)} ${reservation.checkOutTime}`,
+    hasDifferentPeriods || !firstNightlyItem ? "" : `Заезд: ${formatKazakhDate(firstNightlyItem.checkIn || reservation.checkIn)} ${firstNightlyItem.checkInTime || DEFAULT_CHECK_IN_TIME}`,
+    hasDifferentPeriods || !firstNightlyItem ? "" : `Выезд: ${formatKazakhDate(firstNightlyItem.checkOut || reservation.checkOut)} ${firstNightlyItem.checkOutTime || DEFAULT_CHECK_OUT_TIME}`,
+    serviceLines,
     formatReservationGuestCountText(reservation),
     `Итого: ${formatPrice(reservation.total)}`,
     hasPayment ? `*Получено: ${formatPrice(paidAmount)}*` : "Оплата: 100% при заезде",

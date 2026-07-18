@@ -1384,8 +1384,13 @@ export function BookingPanel() {
     periodDiscountEnabled && isPeriodDiscountEligible ? packagePeriodDiscountPercent : 0
   );
   const selectedHourlyConflicts = useMemo(
-    () => proposalRooms.flatMap((room) => isHourlyBookingObject(room) ? getHourlyRoomTimeConflicts(room, reservations, checkIn, checkInTime, checkOutTime) : []),
-    [checkIn, checkInTime, checkOutTime, proposalRooms, reservations]
+    () => proposalRooms.flatMap((room) =>
+      isHourlyBookingObject(room)
+        ? getHourlyRoomTimeConflicts(room, reservations, checkIn, checkInTime, checkOutTime)
+          .filter((conflict) => conflict.reservation?.id !== lastReservation?.id)
+        : []
+    ),
+    [checkIn, checkInTime, checkOutTime, lastReservation?.id, proposalRooms, reservations]
   );
   const hasHourlyBookingObject = proposalRooms.some(isHourlyBookingObject);
   const activeExtraInventoryByRoomId = filterExtraInventoryByRooms(extraInventoryByRoomId, proposalRooms);

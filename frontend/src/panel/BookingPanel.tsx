@@ -7407,9 +7407,9 @@ export function BookingPanel() {
                     <Image size={17} />
                     <span>{sendState === "sending" ? "..." : "Витрина"}</span>
                   </button>
-                  <button className="gpb-secondary gpb-send-object-button" type="button" onClick={sendMenuPdfToWhatsApp} disabled={!activeMenuItems.length || sendState === "sending"}>
+                  <button className="gpb-secondary gpb-send-object-button" type="button" onClick={() => void sendInteractiveMenuLinkToWhatsApp()} disabled={!activeMenuItems.length || !getReservationForMenuLink() || menuLinkSendState === "sending"}>
                     <Utensils size={17} />
-                    <span>{sendState === "sending" ? "..." : "Меню"}</span>
+                    <span>{menuLinkSendState === "sending" ? "..." : "Меню"}</span>
                   </button>
                 </div>
                 {sendState === "error" ? (

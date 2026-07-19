@@ -24388,11 +24388,14 @@ function buildMenuOrderAdminText(order: MenuOrder) {
 }
 
 function formatMenuOrderReadyTime(order: MenuOrder) {
+  if (order.servingMode !== "arrival") return "по готовности";
   return [order.readyDate ? formatShortDayMonth(order.readyDate) : "", order.readyTime].filter(Boolean).join(" ");
 }
 
 function getMenuOrderServingModeLabel(mode: MenuOrder["servingMode"]) {
-  return mode === "takeaway" ? "упаковать с собой" : "подать на месте";
+  if (mode === "takeaway") return "упаковать с собой";
+  if (mode === "arrival") return "подготовить к приезду";
+  return "подать по готовности";
 }
 
 function getMenuOrderPaymentStatusLabel(status: MenuOrder["paymentStatus"]) {

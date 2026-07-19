@@ -267,7 +267,7 @@ export interface MenuItem {
 }
 
 export type MenuOrderSource = "reservation-link" | "qr";
-export type MenuOrderServingMode = "dine-in" | "takeaway";
+export type MenuOrderServingMode = "ready" | "takeaway" | "arrival";
 export type MenuOrderStatus = "new" | "confirmed" | "sentToKitchen" | "cooking" | "ready" | "done" | "cancelled";
 export type MenuOrderPaymentStatus = "unpaid" | "paid" | "payOnArrival";
 

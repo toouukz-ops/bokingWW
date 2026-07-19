@@ -259,7 +259,8 @@ function normalizeMenuOrderPayload(payload: Record<string, unknown>) {
     ? payload.roomNumbers.map((room) => toSafeString(room)).filter(Boolean)
     : [];
   const total = items.reduce((sum, item) => sum + item.total, 0);
-  const servingMode = toSafeString(payload.servingMode) === "takeaway" ? "takeaway" : "dine-in";
+  const servingModeText = toSafeString(payload.servingMode);
+  const servingMode = servingModeText === "takeaway" || servingModeText === "arrival" ? servingModeText : "ready";
   const paymentStatusText = toSafeString(payload.paymentStatus);
   const paymentStatus = paymentStatusText === "paid" || paymentStatusText === "payOnArrival" ? paymentStatusText : "unpaid";
   const statusText = toSafeString(payload.status);
@@ -334,7 +335,8 @@ function buildPublicMenuPage(reservationId: string) {
     label { display: grid; gap: 5px; font-size: 13px; font-weight: 800; color: #495667; }
     input, textarea, select { width: 100%; border: 1px solid #cfd8df; border-radius: 7px; min-height: 42px; padding: 9px 10px; font: inherit; background: white; }
     textarea { min-height: 74px; resize: vertical; }
-    .toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .schedule-fields[hidden] { display: none; }
+    .toggle { display: grid; grid-template-columns: 1fr; gap: 8px; }
     .toggle button { border: 1px solid #cfd8df; background: white; border-radius: 7px; min-height: 42px; font-weight: 800; cursor: pointer; }
     .toggle button.active { border-color: #0f6b57; background: #e9f7f2; color: #0f6b57; }
     .total { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 20px; font-weight: 900; }
@@ -357,11 +359,15 @@ function buildPublicMenuPage(reservationId: string) {
         <h2>Ваш заказ</h2>
         <div id="cart"></div>
         <div class="form">
-          <label>Время готовности<input id="readyTime" type="time"></label>
           <label>Как подать заказ</label>
           <div class="toggle">
-            <button type="button" class="active" id="dineIn">Подать на месте</button>
+            <button type="button" class="active" id="ready">Подать по готовности</button>
             <button type="button" id="takeaway">Упаковать с собой</button>
+            <button type="button" id="arrival">Подготовить к приезду</button>
+          </div>
+          <div class="schedule-fields" id="scheduleFields" hidden>
+            <label>Дата готовности<input id="readyDate" type="date"></label>
+            <label>Время готовности<input id="readyTime" type="time"></label>
           </div>
           <label>Комментарий<textarea id="comment" placeholder="Например: без лука, приборы положить"></textarea></label>
         </div>
@@ -376,7 +382,7 @@ function buildPublicMenuPage(reservationId: string) {
     const menuParams = new URLSearchParams(window.location.search);
     const menuGuestName = (menuParams.get("name") || "").trim();
     const menuGuestPhone = (menuParams.get("phone") || "").trim();
-    const state = { items: [], reservation: null, cart: {}, servingMode: "dine-in" };
+    const state = { items: [], reservation: null, cart: {}, servingMode: "ready" };
     const money = (value) => new Intl.NumberFormat("ru-RU").format(value || 0) + " тг";
     const today = () => new Date().toISOString().slice(0, 10);
     function mediaUrl(path) { return path ? path : ""; }
@@ -423,6 +429,16 @@ function buildPublicMenuPage(reservationId: string) {
       }
       document.getElementById("total").textContent = money(lines.reduce((sum, line) => sum + line.price * line.quantity, 0));
     }
+    function getOrderTotal() {
+      return Object.values(state.cart).reduce((sum, line) => sum + line.price * line.quantity, 0);
+    }
+    function setServingMode(mode) {
+      state.servingMode = mode;
+      ["ready", "takeaway", "arrival"].forEach((id) => {
+        document.getElementById(id).classList.toggle("active", id === mode);
+      });
+      document.getElementById("scheduleFields").hidden = mode !== "arrival";
+    }
     window.changeQty = function(id, delta) {
       const item = state.items.find((entry) => entry.id === id);
       if (!item) return;
@@ -439,15 +455,21 @@ function buildPublicMenuPage(reservationId: string) {
         setStatus("Выберите хотя бы одну позицию.", "error");
         return;
       }
-      const readyTime = document.getElementById("readyTime").value;
-      if (!readyTime) {
-        setStatus("Укажите время готовности.", "error");
+      const readyDate = document.getElementById("readyDate").value || "";
+      const readyTime = document.getElementById("readyTime").value || "";
+      if (state.servingMode === "arrival" && (!readyDate || !readyTime)) {
+        setStatus("Укажите дату и время готовности.", "error");
         return;
       }
       const r = state.reservation || {};
       const guestName = r.guestName || menuGuestName || "Гость";
       const phone = r.phone || menuGuestPhone;
       const roomNumbers = r.roomNumbers || [];
+      const total = getOrderTotal();
+      const confirmationText = state.servingMode === "arrival"
+        ? "Вы делаете заказ на " + readyDate + " " + readyTime + " на сумму " + money(total) + ".\\nВсе верно?"
+        : "Вы делаете заказ на сумму " + money(total) + ".\\nВсе верно?";
+      if (!window.confirm(confirmationText)) return;
       const order = {
         source: reservationId ? "reservation-link" : "qr",
         reservationId,
@@ -455,7 +477,7 @@ function buildPublicMenuPage(reservationId: string) {
         phone,
         roomNumbers,
         checkIn: r.checkIn || "",
-        readyDate: r.checkIn || today(),
+        readyDate: state.servingMode === "arrival" ? readyDate : today(),
         readyTime,
         servingMode: state.servingMode,
         comment: document.getElementById("comment").value || "",
@@ -494,16 +516,9 @@ function buildPublicMenuPage(reservationId: string) {
         document.getElementById("menu").innerHTML = '<div class="empty">Не удалось загрузить меню.</div>';
       }
     }
-    document.getElementById("dineIn").onclick = () => {
-      state.servingMode = "dine-in";
-      document.getElementById("dineIn").classList.add("active");
-      document.getElementById("takeaway").classList.remove("active");
-    };
-    document.getElementById("takeaway").onclick = () => {
-      state.servingMode = "takeaway";
-      document.getElementById("takeaway").classList.add("active");
-      document.getElementById("dineIn").classList.remove("active");
-    };
+    document.getElementById("ready").onclick = () => setServingMode("ready");
+    document.getElementById("takeaway").onclick = () => setServingMode("takeaway");
+    document.getElementById("arrival").onclick = () => setServingMode("arrival");
     document.getElementById("submit").onclick = submitOrder;
     boot();
   </script>

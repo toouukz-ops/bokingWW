@@ -1123,6 +1123,7 @@ function normalizeGuestContact(contact: GuestContact): GuestContact {
 function normalizeGuestPhone(value: string) {
   const digits = value.replace(/\D/g, "");
   if (!digits) return value.trim();
+  if (/^70\d{9}$/.test(digits)) return `+7${digits.slice(0, 10)}`;
   if (/^8\d{10}$/.test(digits)) return `+7${digits.slice(1)}`;
   if (/^7\d{10}$/.test(digits)) return `+${digits}`;
   if (/^\d{10}$/.test(digits)) return `+7${digits}`;

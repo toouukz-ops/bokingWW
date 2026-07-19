@@ -77,6 +77,7 @@ async function migrateLegacyGuestContacts() {
   const contacts = db.collection("guestContacts");
   const indexes = await contacts.indexes();
   if (indexes.some((index) => index.name === "phone_1")) {
+    await repairMalformedKazakhstanGuestContacts();
     return;
   }
 
@@ -110,9 +111,37 @@ async function migrateLegacyGuestContacts() {
   }
 }
 
+async function repairMalformedKazakhstanGuestContacts() {
+  const contacts = db.collection("guestContacts");
+  const malformedContacts = await contacts.find({ phone: /^\+70\d{9}$/ }, { maxTimeMS: 5000 }).toArray();
+
+  for (const contact of malformedContacts) {
+    const phone = typeof contact.phone === "string" ? normalizeGuestPhone(contact.phone) : "";
+    if (!phone || phone === contact.phone) continue;
+
+    const existingContact = await contacts.findOne({ phone }, { maxTimeMS: 3000 });
+    if (existingContact) {
+      await contacts.deleteOne({ _id: contact._id }, { maxTimeMS: 3000 });
+      continue;
+    }
+
+    await contacts.updateOne(
+      { _id: contact._id },
+      {
+        $set: {
+          phone,
+          updatedAt: new Date()
+        }
+      },
+      { maxTimeMS: 3000 }
+    );
+  }
+}
+
 function normalizeGuestPhone(value: string) {
   const digits = value.replace(/\D/g, "");
   if (!digits) return value.trim();
+  if (/^70\d{9}$/.test(digits)) return `+7${digits.slice(0, 10)}`;
   if (/^8\d{10}$/.test(digits)) return `+7${digits.slice(1)}`;
   if (/^7\d{10}$/.test(digits)) return `+${digits}`;
   if (/^\d{10}$/.test(digits)) return `+7${digits}`;

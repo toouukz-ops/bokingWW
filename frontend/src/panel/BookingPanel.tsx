@@ -19256,6 +19256,7 @@ function formatPhoneDigits(value: string) {
   const trimmed = value.trim();
   const digits = value.replace(/\D/g, "");
   if (!digits) return "";
+  if (/^70\d{9}$/.test(digits)) return `+7${digits.slice(0, 10)}`;
   if (trimmed.startsWith("+") && digits.length >= 8 && digits.length <= 15) return `+${digits}`;
   if (/^8\d{10}$/.test(digits)) return digits.replace(/^8/, "+7");
   if (/^7\d{10}$/.test(digits)) return `+${digits}`;
@@ -19283,6 +19284,7 @@ function buildPhoneWithPrefix(value: string, prefix: string) {
   const prefixDigits = prefix.replace(/\D/g, "");
   const valueDigits = trimmedValue.replace(/\D/g, "");
   if (!valueDigits) return "";
+  if (prefixDigits === "7" && /^70\d{9}$/.test(valueDigits)) return `+7${valueDigits.slice(0, 10)}`;
   if (valueDigits.length > 10) return formatPhoneDigits(trimmedValue);
   return `+${prefixDigits}${valueDigits}`;
 }

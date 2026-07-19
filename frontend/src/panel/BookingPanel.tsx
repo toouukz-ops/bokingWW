@@ -1143,7 +1143,6 @@ export function BookingPanel() {
   const activeChatRef = useRef<ActiveChat | null>(null);
   const menuAdminPhoneRef = useRef("");
   const menuCookPhoneRef = useRef("");
-  const menuOrderAutoSendIdsRef = useRef<Record<string, boolean>>({});
   const isRestoringChatDraftRef = useRef(false);
   const suppressActiveChatSyncRef = useRef(false);
   const clearedBookingPhoneRef = useRef("");
@@ -1683,7 +1682,6 @@ export function BookingPanel() {
             ? currentOrders.map((item) => item.id === order.id ? order : item)
             : [order, ...currentOrders]
         );
-        void autoSendMenuOrder(order);
       }
     });
 
@@ -3986,90 +3984,6 @@ export function BookingPanel() {
     window.setTimeout(() => {
       setMenuOrderCopyState((current) => ({ ...current, [`${order.id}:${audience}`]: "idle" }));
     }, 1800);
-  }
-
-  function phoneDigitsMatchTarget(candidate: string, targetPhone: string) {
-    const candidateDigits = normalizePhoneSearch(candidate);
-    const targetDigits = normalizePhoneSearch(targetPhone);
-    const targetTail = targetDigits.slice(-10);
-    return Boolean(candidateDigits && targetTail && candidateDigits.endsWith(targetTail));
-  }
-
-  async function isMenuAutoSendTargetVerified(phone: string, contactName: string) {
-    const activeChatPhone = (await extractActiveChatPhoneFast({
-      id: "",
-      title: getActiveChatDisplayName(),
-      phone: ""
-    })).phone;
-    const headerText = normalizeExtractedText(document.querySelector<HTMLElement>("#main header")?.innerText ?? "");
-    const selectedText = normalizeExtractedText(getSelectedWhatsAppChatElement()?.innerText ?? "");
-    const candidates = [
-      activeChatPhone,
-      extractPhoneFromActiveChat(),
-      extractPhoneFromSelectedChat(),
-      headerText,
-      selectedText
-    ];
-    const verified = candidates.some((candidate) => phoneDigitsMatchTarget(candidate, phone));
-    debugContactFlow("menu-auto-send-target-check", {
-      contactName,
-      targetPhone: formatPhoneDigits(phone),
-      activeChatPhone,
-      activeName: getActiveChatDisplayName(),
-      verified
-    });
-    return verified;
-  }
-
-  async function sendMenuOrderToWhatsAppPhone(phone: string, contactName: string, text: string) {
-    const normalizedPhone = formatPhoneDigits(phone);
-    if (!normalizedPhone) return false;
-
-    const opened = await openWhatsAppChatByPhone(normalizedPhone, "");
-    if (!opened) return false;
-    await waitForDelay(350);
-    const verified = await isMenuAutoSendTargetVerified(normalizedPhone, contactName);
-    if (!verified) {
-      debugContactFlow("menu-auto-send-target-mismatch", {
-        contactName,
-        targetPhone: normalizedPhone,
-        activeName: getActiveChatDisplayName()
-      });
-      return false;
-    }
-    return sendTextToActiveWhatsAppChat(text);
-  }
-
-  async function autoSendMenuOrder(order: MenuOrder) {
-    if (order.status !== "new" || menuOrderAutoSendIdsRef.current[order.id]) return;
-
-    const cookPhone = menuCookPhoneRef.current.trim();
-    const adminPhone = menuAdminPhoneRef.current.trim();
-    if (!cookPhone && !adminPhone) return;
-
-    menuOrderAutoSendIdsRef.current[order.id] = true;
-    const cookSent = cookPhone
-      ? await sendMenuOrderToWhatsAppPhone(cookPhone, "Повар", buildMenuOrderCookText(order))
-      : false;
-    const adminSent = adminPhone
-      ? await sendMenuOrderToWhatsAppPhone(adminPhone, "Админ", buildMenuOrderAdminText(order))
-      : false;
-
-    if (cookSent || adminSent) {
-      const nextOrder: MenuOrder = {
-        ...order,
-        status: cookSent ? "sentToKitchen" : order.status,
-        updatedAt: new Date().toISOString()
-      };
-      setMenuOrders((currentOrders) => currentOrders.map((item) => item.id === order.id ? nextOrder : item));
-      try {
-        await saveMenuOrder(nextOrder);
-      } catch {
-        // Заказ уже сохранен; если отметка отправки не записалась, не блокируем работу панели.
-      }
-    } else {
-      delete menuOrderAutoSendIdsRef.current[order.id];
-    }
   }
 
   async function sendRoomPhotoFromCard(room: Room) {

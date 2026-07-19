@@ -5340,13 +5340,15 @@ export function BookingPanel() {
     }
   }
 
-  async function extractGuestPhoneFromChat(): Promise<ContactExtractionResult | null> {
+  async function extractGuestPhoneFromChat(options: { allowProfileLookup?: boolean } = {}): Promise<ContactExtractionResult | null> {
     const sourceChat = activeChat;
     const sourceChatId = sourceChat?.id ?? "";
     suppressActiveChatSyncRef.current = true;
     try {
       const fastProfile = await extractActiveChatPhoneFast(sourceChat);
-      const profile = fastProfile.phone ? fastProfile : await extractActiveChatPhoneOnly(sourceChat);
+      const profile = fastProfile.phone || !options.allowProfileLookup
+        ? fastProfile
+        : await extractActiveChatPhoneOnly(sourceChat);
       if (sourceChatId && activeChatIdRef.current !== sourceChatId) return null;
       const phone = profile.phone;
       if (!phone) {

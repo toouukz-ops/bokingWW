@@ -190,6 +190,9 @@ export interface PaymentSettings {
   objectGalleryVideoPaths: string[];
   includedCardPages: IncludedCardPage[];
   menuItems: MenuItem[];
+  menuAdminPhone: string;
+  menuCookPhone: string;
+  menuIntroText: string;
   pricePdfRoomIds: string[];
   pricePdfSummaryOptions: string[];
   pricePdfLinkIds: string[];
@@ -261,6 +264,40 @@ export interface MenuItem {
   price: number;
   cookingTime: string;
   composition: string;
+}
+
+export type MenuOrderSource = "reservation-link" | "qr";
+export type MenuOrderServingMode = "dine-in" | "takeaway";
+export type MenuOrderStatus = "new" | "confirmed" | "sentToKitchen" | "cooking" | "ready" | "done" | "cancelled";
+export type MenuOrderPaymentStatus = "unpaid" | "paid" | "payOnArrival";
+
+export interface MenuOrderItem {
+  id: string;
+  menuItemId: string;
+  title: string;
+  price: number;
+  quantity: number;
+  total: number;
+}
+
+export interface MenuOrder {
+  id: string;
+  source: MenuOrderSource;
+  reservationId: string;
+  guestName: string;
+  phone: string;
+  roomNumbers: string[];
+  checkIn: string;
+  readyDate: string;
+  readyTime: string;
+  servingMode: MenuOrderServingMode;
+  comment: string;
+  items: MenuOrderItem[];
+  total: number;
+  status: MenuOrderStatus;
+  paymentStatus: MenuOrderPaymentStatus;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ActiveChat {

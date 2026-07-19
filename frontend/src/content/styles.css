@@ -7281,6 +7281,48 @@ body.gpb-reservation-split-resizing {
   padding: 9px;
 }
 
+.gpb-menu-public-settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+  border: 1px solid #d8eee6;
+  border-radius: 8px;
+  background: #f4fbf8;
+  padding: 9px;
+}
+
+.gpb-menu-public-settings label {
+  display: grid;
+  gap: 5px;
+  color: #425466;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.gpb-menu-public-settings .is-wide,
+.gpb-menu-public-settings button {
+  grid-column: 1 / -1;
+}
+
+.gpb-menu-public-settings input,
+.gpb-menu-public-settings textarea {
+  width: 100%;
+  border: 1px solid #cfd6dd;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #16202a;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.gpb-menu-public-settings textarea {
+  min-height: 78px;
+  resize: vertical;
+}
+
 .gpb-menu-bulk-price > span {
   color: #16202a;
   font-size: 13px;
@@ -9448,6 +9490,22 @@ body.gpb-reservation-split-resizing {
   white-space: nowrap;
 }
 
+.gpb-client-media-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.gpb-client-media-actions .gpb-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .gpb-client-media-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
@@ -9459,6 +9517,123 @@ body.gpb-reservation-split-resizing {
   border: 1px solid #d8dee5;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.gpb-menu-orders-section {
+  display: grid;
+  gap: 10px;
+}
+
+.gpb-menu-orders-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gpb-menu-orders-head > div {
+  display: grid;
+  gap: 2px;
+}
+
+.gpb-menu-orders-head strong {
+  color: #16202a;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.gpb-menu-orders-head span {
+  color: #68717c;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.gpb-menu-orders-head button,
+.gpb-menu-order-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.gpb-menu-orders-list {
+  display: grid;
+  gap: 8px;
+}
+
+.gpb-menu-order-card {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #d8dee5;
+  border-left: 4px solid #0f6b57;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.gpb-menu-order-main,
+.gpb-menu-order-meta,
+.gpb-menu-order-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gpb-menu-order-main {
+  justify-content: space-between;
+}
+
+.gpb-menu-order-main > div {
+  display: grid;
+  gap: 2px;
+}
+
+.gpb-menu-order-main strong,
+.gpb-menu-order-main b {
+  color: #16202a;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.gpb-menu-order-main span,
+.gpb-menu-order-card p {
+  color: #68717c;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.gpb-menu-order-meta span {
+  border-radius: 999px;
+  background: #e9f7f2;
+  color: #0f6b57;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 4px 8px;
+}
+
+.gpb-menu-order-items {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.gpb-menu-order-items span {
+  border: 1px solid #d8dee5;
+  border-radius: 999px;
+  background: #f7f9fb;
+  color: #25313d;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 4px 8px;
+}
+
+.gpb-menu-order-card p {
+  margin: 0;
 }
 
 .gpb-client-media-preview {

@@ -1,4 +1,4 @@
-import type { ActiveDialog, AiReplySuggestions, BookingDraft, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, PaymentSettings, Reservation, Room, RoomHold } from "./types";
+import type { ActiveDialog, AiReplySuggestions, BookingDraft, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, MenuOrder, PaymentSettings, Reservation, Room, RoomHold } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://bokingww.onrender.com";
 const LOCAL_ROOMS_STORAGE_KEY = "gpb-booking-rooms";
@@ -649,6 +649,11 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
         objectGalleryVideoPaths,
         includedCardPages,
         menuItems,
+        menuAdminPhone: typeof settings?.menuAdminPhone === "string" ? settings.menuAdminPhone : "",
+        menuCookPhone: typeof settings?.menuCookPhone === "string" ? settings.menuCookPhone : "",
+        menuIntroText: typeof settings?.menuIntroText === "string" && settings.menuIntroText.trim()
+          ? settings.menuIntroText
+          : "Не тратьте время на поиск еды. Оформите заказ заранее, и к вашему приезду в Green Pine Burabay еда будет готова.",
         pricePdfRoomIds,
         pricePdfSummaryOptions,
         pricePdfLinkIds,
@@ -706,6 +711,22 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
 export async function savePaymentSettings(settings: PaymentSettings): Promise<void> {
   await saveLocalPaymentSettings(settings);
   await savePaymentSettingsToServer(settings);
+}
+
+export async function getMenuOrders(): Promise<MenuOrder[]> {
+  const response = await fetch(`${API_BASE_URL}/api/menu-orders`);
+  if (!response.ok) throw new Error(`Menu orders request failed: ${response.status}`);
+  return (await response.json()) as MenuOrder[];
+}
+
+export async function saveMenuOrder(order: MenuOrder): Promise<MenuOrder> {
+  const response = await fetch(`${API_BASE_URL}/api/menu-orders/${encodeURIComponent(order.id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(order)
+  });
+  if (!response.ok) throw new Error(`Menu order save failed: ${response.status}`);
+  return (await response.json()) as MenuOrder;
 }
 
 export async function getExpenseCategories(): Promise<ExpenseCategory[]> {

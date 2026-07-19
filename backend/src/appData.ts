@@ -9,6 +9,7 @@ const chatMessages = db.collection<Record<string, unknown> & { chatKey: string; 
 const aiReplyLogs = db.collection<Record<string, unknown> & { createdAt: Date }>("aiReplyLogs");
 const roomHolds = db.collection<Record<string, unknown> & { id: string; expiresAt: string }>("roomHolds");
 const activeDialogs = db.collection<Record<string, unknown> & { chatKey: string; clientId: string; expiresAt: string }>("activeDialogs");
+const menuOrders = db.collection<Record<string, unknown> & { id: string }>("menuOrders");
 
 export async function listReservations() {
   return reservations.find().sort({ createdAt: -1 }).toArray();
@@ -55,6 +56,32 @@ export async function savePaymentSettingsData(value: unknown) {
     { upsert: true }
   );
   return value;
+}
+
+export async function listMenuOrders() {
+  return menuOrders.find().sort({ createdAt: -1 }).toArray();
+}
+
+export async function saveMenuOrderData(id: string, order: Record<string, unknown>) {
+  const now = new Date();
+  const { createdAt, ...orderData } = stripMongoIdFields(order) as Record<string, unknown>;
+  const document = {
+    ...orderData,
+    id,
+    updatedAt: now.toISOString()
+  };
+  await menuOrders.updateOne(
+    { id },
+    {
+      $set: document,
+      $setOnInsert: { createdAt: typeof createdAt === "string" ? createdAt : now.toISOString() }
+    },
+    { upsert: true }
+  );
+  return {
+    ...document,
+    createdAt: typeof createdAt === "string" ? createdAt : now.toISOString()
+  };
 }
 
 export async function listExpenseCategories() {

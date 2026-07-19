@@ -18,6 +18,7 @@ import {
   listActiveDialogs,
   listExpenseCategories,
   listExpenseEntries,
+  listMenuOrders,
   listReservations,
   listRoomHolds,
   releaseActiveDialogData,
@@ -28,6 +29,7 @@ import {
   saveChatDraftData,
   saveAiReplyLogData,
   saveChatMessagesData,
+  saveMenuOrderData,
   savePaymentSettingsData,
   saveReservationData,
   saveRoomHoldData
@@ -209,11 +211,359 @@ async function validateReservationBeforeSave(id: string, reservation: Record<str
   return { ok: true as const };
 }
 
+function getPublicMenuItems(settings: unknown) {
+  const menuItems = settings && typeof settings === "object" && !Array.isArray(settings) && Array.isArray((settings as Record<string, unknown>).menuItems)
+    ? (settings as Record<string, unknown>).menuItems as unknown[]
+    : [];
+  return menuItems
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    .map((item) => ({
+      id: toSafeString(item.id),
+      title: toSafeString(item.title),
+      photoPath: toSafeString(item.photoPath),
+      price: toSafeNumber(item.price),
+      cookingTime: toSafeString(item.cookingTime),
+      composition: toSafeString(item.composition)
+    }))
+    .filter((item) => item.id && item.title && item.price >= 0);
+}
+
+function getPublicMenuIntroText(settings: unknown) {
+  if (settings && typeof settings === "object" && !Array.isArray(settings)) {
+    const introText = toSafeString((settings as Record<string, unknown>).menuIntroText);
+    if (introText) return introText;
+  }
+  return "Не тратьте время на поиск еды. Оформите заказ заранее, и к вашему приезду в Green Pine Burabay еда будет готова.";
+}
+
+function normalizeMenuOrderPayload(payload: Record<string, unknown>) {
+  const now = new Date().toISOString();
+  const items = Array.isArray(payload.items)
+    ? payload.items
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+      .map((item) => {
+        const quantity = Math.max(1, Math.min(99, Math.round(toSafeNumber(item.quantity) || 1)));
+        const price = Math.max(0, toSafeNumber(item.price));
+        return {
+          id: toSafeString(item.id) || `order-item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          menuItemId: toSafeString(item.menuItemId),
+          title: toSafeString(item.title),
+          price,
+          quantity,
+          total: price * quantity
+        };
+      })
+      .filter((item) => item.menuItemId && item.title && item.quantity > 0)
+    : [];
+  const roomNumbers = Array.isArray(payload.roomNumbers)
+    ? payload.roomNumbers.map((room) => toSafeString(room)).filter(Boolean)
+    : [];
+  const total = items.reduce((sum, item) => sum + item.total, 0);
+  const servingMode = toSafeString(payload.servingMode) === "takeaway" ? "takeaway" : "dine-in";
+  const paymentStatusText = toSafeString(payload.paymentStatus);
+  const paymentStatus = paymentStatusText === "paid" || paymentStatusText === "payOnArrival" ? paymentStatusText : "unpaid";
+  const statusText = toSafeString(payload.status);
+  const validStatuses = new Set(["new", "confirmed", "sentToKitchen", "cooking", "ready", "done", "cancelled"]);
+
+  return {
+    id: toSafeString(payload.id) || `menu-order-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    source: toSafeString(payload.source) === "qr" ? "qr" : "reservation-link",
+    reservationId: toSafeString(payload.reservationId),
+    guestName: toSafeString(payload.guestName) || "Гость",
+    phone: toSafeString(payload.phone),
+    roomNumbers,
+    checkIn: toSafeString(payload.checkIn),
+    readyDate: toDateInput(payload.readyDate) || new Date().toISOString().slice(0, 10),
+    readyTime: /^\d{2}:\d{2}$/.test(toSafeString(payload.readyTime)) ? toSafeString(payload.readyTime) : "",
+    servingMode,
+    comment: toSafeString(payload.comment).slice(0, 600),
+    items,
+    total,
+    status: validStatuses.has(statusText) ? statusText : "new",
+    paymentStatus,
+    createdAt: toSafeString(payload.createdAt) || now,
+    updatedAt: now
+  };
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildPublicMenuPage(reservationId: string) {
+  const safeReservationId = escapeHtml(reservationId);
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Меню Green Pine Burabay</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, Arial, sans-serif; color: #17212b; background: #f5f7f8; }
+    .page { max-width: 1120px; margin: 0 auto; padding: 18px; }
+    .hero { background: #0f6b57; color: white; border-radius: 8px; padding: 22px; margin-bottom: 16px; }
+    .hero h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.1; }
+    .hero p { margin: 0; font-size: 16px; line-height: 1.45; max-width: 720px; }
+    .guest { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; font-weight: 700; }
+    .guest span { background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.22); border-radius: 999px; padding: 7px 10px; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+    .card, .cart { background: white; border: 1px solid #d9e1e6; border-radius: 8px; overflow: hidden; }
+    .photo { width: 100%; aspect-ratio: 4 / 3; background: #e8edf0; object-fit: cover; display: block; }
+    .body { padding: 12px; }
+    .title { display: flex; justify-content: space-between; gap: 10px; font-weight: 800; font-size: 17px; }
+    .price { color: #0f6b57; white-space: nowrap; }
+    .meta { margin: 8px 0 0; color: #637080; font-size: 13px; line-height: 1.35; }
+    .actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 12px; }
+    .qty { display: inline-flex; align-items: center; border: 1px solid #cfd8df; border-radius: 7px; overflow: hidden; }
+    .qty button, .add, .submit { border: 0; min-height: 38px; font-weight: 800; cursor: pointer; }
+    .qty button { width: 38px; background: white; color: #0f6b57; font-size: 18px; }
+    .qty span { width: 34px; text-align: center; font-weight: 800; }
+    .add, .submit { background: #0f6b57; color: white; border-radius: 7px; padding: 0 14px; }
+    .cart { position: sticky; top: 12px; padding: 14px; }
+    .cart h2 { margin: 0 0 12px; font-size: 20px; }
+    .cart-line { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 9px 0; border-bottom: 1px solid #eef1f3; }
+    .cart-line small { color: #637080; }
+    .form { display: grid; gap: 10px; margin-top: 12px; }
+    label { display: grid; gap: 5px; font-size: 13px; font-weight: 800; color: #495667; }
+    input, textarea, select { width: 100%; border: 1px solid #cfd8df; border-radius: 7px; min-height: 42px; padding: 9px 10px; font: inherit; background: white; }
+    textarea { min-height: 74px; resize: vertical; }
+    .toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .toggle button { border: 1px solid #cfd8df; background: white; border-radius: 7px; min-height: 42px; font-weight: 800; cursor: pointer; }
+    .toggle button.active { border-color: #0f6b57; background: #e9f7f2; color: #0f6b57; }
+    .total { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 20px; font-weight: 900; }
+    .empty, .status { color: #637080; line-height: 1.4; }
+    .status.success { color: #0f6b57; font-weight: 800; }
+    .status.error { color: #b42318; font-weight: 800; }
+    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } .cart { position: static; } .page { padding: 10px; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <h1>Меню Green Pine Burabay</h1>
+      <p id="intro">Не тратьте время на поиск еды. Оформите заказ заранее, и к вашему приезду в Green Pine Burabay еда будет готова.</p>
+      <div class="guest" id="guest"></div>
+    </section>
+    <main class="layout">
+      <section class="grid" id="menu"></section>
+      <aside class="cart">
+        <h2>Ваш заказ</h2>
+        <div id="cart"></div>
+        <div class="form">
+          <label>Время готовности<input id="readyTime" type="time"></label>
+          <label>Как подать заказ</label>
+          <div class="toggle">
+            <button type="button" class="active" id="dineIn">Подать на месте</button>
+            <button type="button" id="takeaway">Упаковать с собой</button>
+          </div>
+          <label>Комментарий<textarea id="comment" placeholder="Например: без лука, приборы положить"></textarea></label>
+        </div>
+        <div class="total"><span>Итого</span><span id="total">0 тг</span></div>
+        <button class="submit" style="width:100%;margin-top:12px" id="submit">Оформить заказ</button>
+        <p class="status" id="status"></p>
+      </aside>
+    </main>
+  </div>
+  <script>
+    const reservationId = "${safeReservationId}";
+    const state = { items: [], reservation: null, cart: {}, servingMode: "dine-in" };
+    const money = (value) => new Intl.NumberFormat("ru-RU").format(value || 0) + " тг";
+    const today = () => new Date().toISOString().slice(0, 10);
+    function mediaUrl(path) { return path ? path : ""; }
+    function setStatus(text, tone) {
+      const node = document.getElementById("status");
+      node.textContent = text || "";
+      node.className = "status" + (tone ? " " + tone : "");
+    }
+    function renderGuest() {
+      const guest = document.getElementById("guest");
+      const r = state.reservation || {};
+      guest.innerHTML = [
+        r.guestName || "",
+        (r.roomNumbers || []).length ? "Номер " + r.roomNumbers.join(", ") : "",
+        r.checkIn ? "Заезд " + r.checkIn : ""
+      ].filter(Boolean).map((item) => "<span>" + item + "</span>").join("");
+    }
+    function renderMenu() {
+      const menu = document.getElementById("menu");
+      if (!state.items.length) {
+        menu.innerHTML = '<div class="empty">Меню пока не заполнено.</div>';
+        return;
+      }
+      menu.innerHTML = state.items.map((item) => {
+        const count = state.cart[item.id]?.quantity || 0;
+        return '<article class="card">' +
+          (item.photoPath ? '<img class="photo" src="' + mediaUrl(item.photoPath) + '" alt="">' : '<div class="photo"></div>') +
+          '<div class="body">' +
+          '<div class="title"><span>' + item.title + '</span><span class="price">' + money(item.price) + '</span></div>' +
+          '<p class="meta">' + [item.composition, item.cookingTime ? "Время: " + item.cookingTime : ""].filter(Boolean).join("<br>") + '</p>' +
+          '<div class="actions"><div class="qty"><button type="button" onclick="changeQty(\\'' + item.id + '\\', -1)">-</button><span>' + count + '</span><button type="button" onclick="changeQty(\\'' + item.id + '\\', 1)">+</button></div>' +
+          '<button class="add" type="button" onclick="changeQty(\\'' + item.id + '\\', 1)">Добавить</button></div>' +
+          '</div></article>';
+      }).join("");
+    }
+    function renderCart() {
+      const cart = document.getElementById("cart");
+      const lines = Object.values(state.cart);
+      if (!lines.length) {
+        cart.innerHTML = '<p class="empty">Выберите блюда из меню.</p>';
+      } else {
+        cart.innerHTML = lines.map((line) => '<div class="cart-line"><div><strong>' + line.title + '</strong><br><small>' + line.quantity + ' x ' + money(line.price) + '</small></div><strong>' + money(line.price * line.quantity) + '</strong></div>').join("");
+      }
+      document.getElementById("total").textContent = money(lines.reduce((sum, line) => sum + line.price * line.quantity, 0));
+    }
+    window.changeQty = function(id, delta) {
+      const item = state.items.find((entry) => entry.id === id);
+      if (!item) return;
+      const current = state.cart[id]?.quantity || 0;
+      const next = Math.max(0, current + delta);
+      if (!next) delete state.cart[id];
+      else state.cart[id] = { menuItemId: item.id, title: item.title, price: item.price, quantity: next };
+      renderMenu();
+      renderCart();
+    };
+    async function submitOrder() {
+      const lines = Object.values(state.cart);
+      if (!lines.length) {
+        setStatus("Выберите хотя бы одну позицию.", "error");
+        return;
+      }
+      const readyTime = document.getElementById("readyTime").value;
+      if (!readyTime) {
+        setStatus("Укажите время готовности.", "error");
+        return;
+      }
+      const r = state.reservation || {};
+      const order = {
+        source: "reservation-link",
+        reservationId,
+        guestName: r.guestName || "Гость",
+        phone: r.phone || "",
+        roomNumbers: r.roomNumbers || [],
+        checkIn: r.checkIn || "",
+        readyDate: r.checkIn || today(),
+        readyTime,
+        servingMode: state.servingMode,
+        comment: document.getElementById("comment").value || "",
+        items: lines.map((line) => ({ ...line, id: "item-" + line.menuItemId, total: line.price * line.quantity })),
+        status: "new",
+        paymentStatus: "unpaid"
+      };
+      setStatus("Отправляем заказ...", "");
+      document.getElementById("submit").disabled = true;
+      try {
+        const response = await fetch("/api/public/menu-orders", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(order)
+        });
+        if (!response.ok) throw new Error("request failed");
+        setStatus("Заказ принят. Администратор и кухня увидят его в системе.", "success");
+      } catch {
+        setStatus("Не удалось отправить заказ. Попробуйте еще раз.", "error");
+        document.getElementById("submit").disabled = false;
+      }
+    }
+    async function boot() {
+      try {
+        const response = await fetch("/api/public/menu/" + encodeURIComponent(reservationId));
+        if (!response.ok) throw new Error("menu failed");
+        const data = await response.json();
+        state.items = data.menuItems || [];
+        state.reservation = data.reservation || null;
+        document.getElementById("intro").textContent = data.introText || document.getElementById("intro").textContent;
+        renderGuest();
+        renderMenu();
+        renderCart();
+      } catch {
+        document.getElementById("menu").innerHTML = '<div class="empty">Не удалось загрузить меню.</div>';
+      }
+    }
+    document.getElementById("dineIn").onclick = () => {
+      state.servingMode = "dine-in";
+      document.getElementById("dineIn").classList.add("active");
+      document.getElementById("takeaway").classList.remove("active");
+    };
+    document.getElementById("takeaway").onclick = () => {
+      state.servingMode = "takeaway";
+      document.getElementById("takeaway").classList.add("active");
+      document.getElementById("dineIn").classList.remove("active");
+    };
+    document.getElementById("submit").onclick = submitOrder;
+    boot();
+  </script>
+</body>
+</html>`;
+}
+
 app.get("/api/health", async () => {
   return {
     ok: true,
     service: "gpb-whatsapp-booking-backend"
   };
+});
+
+app.get("/menu/r/:reservationId", async (request, reply) => {
+  const { reservationId } = request.params as { reservationId: string };
+  reply.type("text/html; charset=utf-8");
+  return buildPublicMenuPage(reservationId);
+});
+
+app.get("/api/public/menu/:reservationId", async (request, reply) => {
+  const { reservationId } = request.params as { reservationId: string };
+  const reservations = await listReservations();
+  const reservation = reservations.find((item) => item.id === reservationId);
+  if (!reservation) return reply.status(404).send({ error: "Reservation not found" });
+
+  const settings = await getPaymentSettingsData();
+  const rooms = await listRooms();
+  const roomIds = Array.isArray(reservation.roomIds) ? reservation.roomIds.map((roomId) => String(roomId)) : [];
+  const reservationRooms = rooms.filter((room) => roomIds.includes(room.id));
+  const menuItems = getPublicMenuItems(settings);
+
+  return {
+    introText: getPublicMenuIntroText(settings),
+    menuItems,
+    reservation: {
+      id: reservation.id,
+      guestName: toSafeString(reservation.guestFirstName) || "Гость",
+      phone: toSafeString(reservation.phone),
+      checkIn: toSafeString(reservation.checkIn),
+      roomNumbers: reservationRooms.map((room) => toSafeString(room.number) || toSafeString(room.title)).filter(Boolean)
+    }
+  };
+});
+
+app.post("/api/public/menu-orders", async (request, reply) => {
+  const body = request.body as Record<string, unknown> | undefined;
+  if (!body || typeof body !== "object") return reply.status(400).send({ error: "Invalid menu order" });
+
+  const order = normalizeMenuOrderPayload(body);
+  if (!order.items.length) return reply.status(400).send({ error: "Order items are required" });
+
+  const savedOrder = await saveMenuOrderData(order.id, order);
+  broadcastRealtime("menu-orders.changed", { action: "upsert", order: savedOrder });
+  return savedOrder;
+});
+
+app.get("/api/menu-orders", async () => {
+  return listMenuOrders();
+});
+
+app.put("/api/menu-orders/:id", async (request) => {
+  const { id } = request.params as { id: string };
+  const body = request.body as Record<string, unknown> | undefined;
+  const order = normalizeMenuOrderPayload({ ...(body ?? {}), id });
+  const savedOrder = await saveMenuOrderData(id, order);
+  broadcastRealtime("menu-orders.changed", { action: "upsert", order: savedOrder });
+  return savedOrder;
 });
 
 app.get("/api/debug/logs", async () => {

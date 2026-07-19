@@ -66,6 +66,7 @@ import {
   getHealth,
   getChatMessageDialogs,
   getMediaUrl,
+  getMenuOrders,
   getPaymentSettings,
   getRealtimeEventsUrl,
   getReservations,
@@ -78,6 +79,7 @@ import {
   saveGuestContact,
   saveExpenseCategories,
   saveExpenseEntries,
+  saveMenuOrder,
   savePaymentSettings,
   saveChatBookingDraft,
   saveChatMessages,
@@ -89,7 +91,7 @@ import {
   uploadRoomMedia
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
-import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, PaymentSettings, QuickReplyButton, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, RoomWorkStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
+import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, MenuOrder, PaymentSettings, QuickReplyButton, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, RoomWorkStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -133,6 +135,7 @@ const DEFAULT_TIMELINE_REPAIR_COLOR = "#d12b2b";
 const RESERVATION_CALENDAR_LIST_HEIGHT_KEY = "gpb-reservation-calendar-list-height";
 const DEFAULT_RESERVATION_CALENDAR_LIST_HEIGHT = 280;
 const BOOKING_ERROR_CANCEL_REASON = "Ошибка бронирования";
+const PUBLIC_MENU_BASE_URL = "https://bokingww.onrender.com";
 const PANEL_WIDTH_RATIO = 0.4;
 const DAY_MS = 24 * 60 * 60 * 1000;
 let whatsAppAutoSendProtectionUntil = 0;
@@ -1027,6 +1030,12 @@ export function BookingPanel() {
     status: "idle" | "uploading" | "error";
   }>({ message: "", status: "idle" });
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [menuAdminPhone, setMenuAdminPhone] = useState("");
+  const [menuCookPhone, setMenuCookPhone] = useState("");
+  const [menuIntroText, setMenuIntroText] = useState("");
+  const [menuOrders, setMenuOrders] = useState<MenuOrder[]>([]);
+  const [menuLinkSendState, setMenuLinkSendState] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [menuOrderCopyState, setMenuOrderCopyState] = useState<Record<string, "idle" | "copied" | "error">>({});
   const [menuUploadItemId, setMenuUploadItemId] = useState("");
   const [menuUploadError, setMenuUploadError] = useState("");
   const [quickReplyButtons, setQuickReplyButtons] = useState<QuickReplyButton[]>([]);
@@ -1308,6 +1317,10 @@ export function BookingPanel() {
     () => menuItems.filter((item) => item.title.trim()),
     [menuItems]
   );
+  const recentMenuOrders = useMemo(
+    () => [...menuOrders].sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt))).slice(0, 8),
+    [menuOrders]
+  );
   const objectGalleryMediaItems = useMemo(
     () => [
       ...objectGalleryPhotoPaths.map((path, index) => ({
@@ -1520,6 +1533,7 @@ export function BookingPanel() {
     loadPanelRooms();
     loadReservations();
     loadPaymentSettings();
+    loadMenuOrders();
     loadGuestContacts();
     loadPanelExpenseEntries();
   }, []);
@@ -1654,6 +1668,18 @@ export function BookingPanel() {
         const nextCache = { ...draftCacheRef.current };
         delete nextCache[payload.chatId];
         draftCacheRef.current = nextCache;
+      }
+    });
+    events.addEventListener("menu-orders.changed", (event) => {
+      const payload = safeParseRealtimeEvent(event);
+      if (!payload || typeof payload !== "object") return;
+      if (payload.action === "upsert" && payload.order && typeof payload.order === "object") {
+        const order = payload.order as MenuOrder;
+        setMenuOrders((currentOrders) =>
+          currentOrders.some((item) => item.id === order.id)
+            ? currentOrders.map((item) => item.id === order.id ? order : item)
+            : [order, ...currentOrders]
+        );
       }
     });
 
@@ -2360,6 +2386,9 @@ export function BookingPanel() {
     setObjectGalleryVideoPaths(settings.objectGalleryVideoPaths);
     setIncludedCardPages(settings.includedCardPages);
     setMenuItems(settings.menuItems);
+    setMenuAdminPhone(settings.menuAdminPhone);
+    setMenuCookPhone(settings.menuCookPhone);
+    setMenuIntroText(settings.menuIntroText);
     setPricePdfRoomIds(settings.pricePdfRoomIds);
     const storedPricePdfSummaryOptions = settings.pricePdfSummaryOptions.filter(isPricePdfSummaryOptionKey);
     setPricePdfSummaryOptions(
@@ -2413,6 +2442,14 @@ export function BookingPanel() {
     setReservationReminderRepeatHours(settings.reservationReminderRepeatHours);
   }
 
+  async function loadMenuOrders() {
+    try {
+      setMenuOrders(await getMenuOrders());
+    } catch {
+      setMenuOrders([]);
+    }
+  }
+
   function buildPaymentSettingsPatch(overrides: Partial<PaymentSettings> = {}) {
     return {
       paymentLink,
@@ -2425,6 +2462,9 @@ export function BookingPanel() {
       objectGalleryVideoPaths,
       includedCardPages,
       menuItems,
+      menuAdminPhone,
+      menuCookPhone,
+      menuIntroText,
       pricePdfRoomIds,
       pricePdfSummaryOptions,
       pricePdfLinkIds,
@@ -3849,6 +3889,67 @@ export function BookingPanel() {
     }
   }
 
+  function getReservationForMenuLink() {
+    return lastReservation ?? currentReservationDraft;
+  }
+
+  function buildReservationMenuLink(reservation: Reservation) {
+    return `${PUBLIC_MENU_BASE_URL}/menu/r/${encodeURIComponent(reservation.id)}`;
+  }
+
+  function buildReservationMenuInvitation(reservation: Reservation) {
+    return [
+      "Меню Green Pine Burabay",
+      "",
+      "Не тратьте время на поиск еды. Сделайте заказ заранее, и к вашему приезду в гостиницу еда будет готова.",
+      "Можно выбрать время готовности и способ подачи: подать на месте или упаковать с собой.",
+      "",
+      buildReservationMenuLink(reservation)
+    ].join("\n");
+  }
+
+  async function sendInteractiveMenuLinkToWhatsApp() {
+    const reservation = getReservationForMenuLink();
+    if (!reservation) {
+      setMenuLinkSendState("error");
+      window.setTimeout(() => setMenuLinkSendState("idle"), 2200);
+      return;
+    }
+
+    suppressActiveChatSyncRef.current = true;
+    setMenuLinkSendState("sending");
+    try {
+      const sent = await sendTextToActiveWhatsAppChat(buildReservationMenuInvitation(reservation));
+      if (sent) await markCatalogStatus("price-sent");
+      setMenuLinkSendState(sent ? "sent" : "error");
+    } catch {
+      setMenuLinkSendState("error");
+    } finally {
+      window.setTimeout(() => {
+        suppressActiveChatSyncRef.current = false;
+        setMenuLinkSendState("idle");
+      }, 2600);
+    }
+  }
+
+  async function copyMenuOrderText(order: MenuOrder, audience: "admin" | "cook") {
+    const text = audience === "cook" ? buildMenuOrderCookText(order) : buildMenuOrderAdminText(order);
+    const copied = await copyTextToClipboard(text);
+    setMenuOrderCopyState((current) => ({ ...current, [`${order.id}:${audience}`]: copied ? "copied" : "error" }));
+    if (copied && audience === "cook" && order.status === "new") {
+      const nextOrder: MenuOrder = { ...order, status: "sentToKitchen", updatedAt: new Date().toISOString() };
+      setMenuOrders((currentOrders) => currentOrders.map((item) => item.id === order.id ? nextOrder : item));
+      try {
+        await saveMenuOrder(nextOrder);
+      } catch {
+        setMenuOrders((currentOrders) => currentOrders.map((item) => item.id === order.id ? order : item));
+      }
+    }
+    window.setTimeout(() => {
+      setMenuOrderCopyState((current) => ({ ...current, [`${order.id}:${audience}`]: "idle" }));
+    }, 1800);
+  }
+
   async function sendRoomPhotoFromCard(room: Room) {
     if (!room.photoPaths.length || isBookingConfirmed) return;
 
@@ -4522,6 +4623,13 @@ export function BookingPanel() {
 
   async function handleMenuItemsSave() {
     await savePaymentSettings(buildPaymentSettingsPatch({ menuItems }));
+  }
+
+  async function handleMenuSettingsSave(patch: Pick<PaymentSettings, "menuAdminPhone" | "menuCookPhone" | "menuIntroText">) {
+    setMenuAdminPhone(patch.menuAdminPhone);
+    setMenuCookPhone(patch.menuCookPhone);
+    setMenuIntroText(patch.menuIntroText);
+    await savePaymentSettings(buildPaymentSettingsPatch(patch));
   }
 
   async function handleMenuItemsBulkPriceChange(percent: number) {
@@ -7889,6 +7997,23 @@ export function BookingPanel() {
                 <strong>Галерея меню</strong>
                 <span>{menuGalleryItems.length} фото</span>
               </div>
+              <div className="gpb-client-media-actions">
+                <button
+                  className="gpb-primary"
+                  type="button"
+                  onClick={() => void sendInteractiveMenuLinkToWhatsApp()}
+                  disabled={!getReservationForMenuLink() || menuLinkSendState === "sending"}
+                >
+                  <Send size={14} />
+                  <span>
+                    {menuLinkSendState === "sending"
+                      ? "Отправляю..."
+                      : menuLinkSendState === "sent"
+                        ? "Отправлено"
+                        : "Отправить интерактивное меню"}
+                  </span>
+                </button>
+              </div>
               {menuGalleryItems.length ? (
                 <div className="gpb-client-media-grid">
                   {menuGalleryItems.map((item) => (
@@ -7919,6 +8044,55 @@ export function BookingPanel() {
           </div>
         </details>
       </section>
+
+      {recentMenuOrders.length ? (
+        <section className="gpb-section gpb-menu-orders-section">
+          <div className="gpb-menu-orders-head">
+            <div>
+              <strong>Заказы меню</strong>
+              <span>Последние заявки с интерактивного меню</span>
+            </div>
+            <button className="gpb-secondary" type="button" onClick={() => void loadMenuOrders()}>
+              <RefreshCw size={14} />
+              <span>Обновить</span>
+            </button>
+          </div>
+          <div className="gpb-menu-orders-list">
+            {recentMenuOrders.map((order) => (
+              <article className={`gpb-menu-order-card is-${order.status}`} key={order.id}>
+                <div className="gpb-menu-order-main">
+                  <div>
+                    <strong>{order.guestName}</strong>
+                    <span>{order.roomNumbers.length ? `Номер ${order.roomNumbers.join(", ")}` : "номер не указан"} · {formatMenuOrderReadyTime(order)}</span>
+                  </div>
+                  <b>{formatPrice(order.total)}</b>
+                </div>
+                <div className="gpb-menu-order-meta">
+                  <span>{getMenuOrderServingModeLabel(order.servingMode)}</span>
+                  <span>{getMenuOrderStatusLabel(order.status)}</span>
+                  <span>{getMenuOrderPaymentStatusLabel(order.paymentStatus)}</span>
+                </div>
+                <div className="gpb-menu-order-items">
+                  {order.items.map((item) => (
+                    <span key={item.id}>{item.title} x{item.quantity}</span>
+                  ))}
+                </div>
+                {order.comment.trim() ? <p>{order.comment.trim()}</p> : null}
+                <div className="gpb-menu-order-actions">
+                  <button className="gpb-secondary" type="button" onClick={() => void copyMenuOrderText(order, "cook")}>
+                    <Copy size={14} />
+                    <span>{menuOrderCopyState[`${order.id}:cook`] === "copied" ? "Скопировано" : "Повару"}</span>
+                  </button>
+                  <button className="gpb-secondary" type="button" onClick={() => void copyMenuOrderText(order, "admin")}>
+                    <Copy size={14} />
+                    <span>{menuOrderCopyState[`${order.id}:admin`] === "copied" ? "Скопировано" : "Админу"}</span>
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {isQuickPhraseFormOpen ? (
         <div className="gpb-create-backdrop gpb-quick-phrase-modal-backdrop">
@@ -8206,6 +8380,9 @@ export function BookingPanel() {
           companyRequisites={companyRequisites}
           defaultCheckInTime={defaultCheckInTime}
           linkMethods={linkMethods}
+          menuAdminPhone={menuAdminPhone}
+          menuCookPhone={menuCookPhone}
+          menuIntroText={menuIntroText}
           menuItems={menuItems}
           menuUploadItemId={menuUploadItemId}
           menuUploadError={menuUploadError}
@@ -8263,6 +8440,7 @@ export function BookingPanel() {
           onMenuItemPhotoUpload={handleMenuItemPhotoUpload}
           onMenuPhotosDownload={() => void downloadAllMenuPhotos()}
           onMenuItemsBulkPriceChange={handleMenuItemsBulkPriceChange}
+          onMenuSettingsSave={handleMenuSettingsSave}
           onMenuItemsSave={handleMenuItemsSave}
           onObjectGalleryDelete={handleObjectGalleryDelete}
           onObjectGalleryPhotoDescriptionChange={handleObjectGalleryPhotoDescriptionChange}
@@ -11756,6 +11934,9 @@ function SettingsModal({
   companyRequisites,
   defaultCheckInTime,
   linkMethods,
+  menuAdminPhone,
+  menuCookPhone,
+  menuIntroText,
   menuItems,
   menuUploadItemId,
   menuUploadError,
@@ -11813,6 +11994,7 @@ function SettingsModal({
   onMenuItemPhotoUpload,
   onMenuPhotosDownload,
   onMenuItemsBulkPriceChange,
+  onMenuSettingsSave,
   onMenuItemsSave,
   onObjectGalleryDelete,
   onObjectGalleryPhotoDescriptionChange,
@@ -11844,6 +12026,9 @@ function SettingsModal({
   companyRequisites: Record<string, string>;
   defaultCheckInTime: string;
   linkMethods: Record<string, string>;
+  menuAdminPhone: string;
+  menuCookPhone: string;
+  menuIntroText: string;
   menuItems: MenuItem[];
   menuUploadItemId: string;
   menuUploadError: string;
@@ -11901,6 +12086,7 @@ function SettingsModal({
   onMenuItemPhotoUpload: (itemId: string, fileList: FileList | null) => void;
   onMenuPhotosDownload: () => void;
   onMenuItemsBulkPriceChange: (percent: number) => void;
+  onMenuSettingsSave: (patch: Pick<PaymentSettings, "menuAdminPhone" | "menuCookPhone" | "menuIntroText">) => void;
   onMenuItemsSave: () => void;
   onObjectGalleryDelete: (path: string) => void;
   onObjectGalleryPhotoDescriptionChange: (path: string, description: string) => void;
@@ -11968,6 +12154,10 @@ function SettingsModal({
   const [localOperatorName, setLocalOperatorName] = useState(operatorName);
   const [operatorSaveState, setOperatorSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [menuBulkPricePercent, setMenuBulkPricePercent] = useState(0);
+  const [localMenuAdminPhone, setLocalMenuAdminPhone] = useState(menuAdminPhone);
+  const [localMenuCookPhone, setLocalMenuCookPhone] = useState(menuCookPhone);
+  const [localMenuIntroText, setLocalMenuIntroText] = useState(menuIntroText);
+  const [menuSettingsSaveState, setMenuSettingsSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const backupInputRef = useRef<HTMLInputElement | null>(null);
   const [backupMessage, setBackupMessage] = useState("");
   const [backupStatus, setBackupStatus] = useState<"idle" | "busy" | "error">("idle");
@@ -12029,6 +12219,18 @@ function SettingsModal({
   }, [quickReplyButtons]);
 
   useEffect(() => {
+    setLocalMenuAdminPhone(menuAdminPhone);
+  }, [menuAdminPhone]);
+
+  useEffect(() => {
+    setLocalMenuCookPhone(menuCookPhone);
+  }, [menuCookPhone]);
+
+  useEffect(() => {
+    setLocalMenuIntroText(menuIntroText);
+  }, [menuIntroText]);
+
+  useEffect(() => {
     setLocalChatBotObjectDescription(chatBotObjectDescription);
   }, [chatBotObjectDescription]);
 
@@ -12056,6 +12258,21 @@ function SettingsModal({
       window.setTimeout(() => setOperatorSaveState("idle"), 1800);
     } catch {
       setOperatorSaveState("error");
+    }
+  }
+
+  async function saveMenuSettings() {
+    setMenuSettingsSaveState("saving");
+    try {
+      await onMenuSettingsSave({
+        menuAdminPhone: localMenuAdminPhone,
+        menuCookPhone: localMenuCookPhone,
+        menuIntroText: localMenuIntroText
+      });
+      setMenuSettingsSaveState("saved");
+      window.setTimeout(() => setMenuSettingsSaveState("idle"), 1800);
+    } catch {
+      setMenuSettingsSaveState("error");
     }
   }
 
@@ -12722,6 +12939,23 @@ function SettingsModal({
                 <h2>Меню</h2>
               </div>
               <p className="gpb-settings-note">Блюда для допродаж и PDF-меню. Укажите название, фото, цену, время приготовления и состав.</p>
+              <div className="gpb-menu-public-settings">
+                <label>
+                  Телефон повара
+                  <input placeholder="+7 700 000 00 00" value={localMenuCookPhone} onChange={(event) => setLocalMenuCookPhone(event.target.value)} />
+                </label>
+                <label>
+                  Телефон админа
+                  <input placeholder="+7 700 000 00 00" value={localMenuAdminPhone} onChange={(event) => setLocalMenuAdminPhone(event.target.value)} />
+                </label>
+                <label className="is-wide">
+                  Текст на странице меню
+                  <textarea value={localMenuIntroText} onChange={(event) => setLocalMenuIntroText(event.target.value)} />
+                </label>
+                <button className="gpb-primary" type="button" onClick={() => void saveMenuSettings()} disabled={menuSettingsSaveState === "saving"}>
+                  {menuSettingsSaveState === "saving" ? "Сохраняю..." : menuSettingsSaveState === "saved" ? "Сохранено" : "Сохранить настройки меню"}
+                </button>
+              </div>
               <div className="gpb-menu-bulk-price">
                 <span>Пакетное изменение цен</span>
                 <div className="gpb-menu-bulk-controls">
@@ -24094,6 +24328,60 @@ function buildMenuItemPhotoCaption(item: MenuItem) {
     item.cookingTime ? `Время приготовления: ${item.cookingTime}` : "",
     item.composition ? `Состав: ${item.composition}` : ""
   ].filter(Boolean).join("\n");
+}
+
+function buildMenuOrderCookText(order: MenuOrder) {
+  return [
+    "Новый заказ",
+    `Время: ${formatMenuOrderReadyTime(order)}`,
+    order.roomNumbers.length ? `Номер: ${order.roomNumbers.join(", ")}` : "",
+    `Гость: ${order.guestName}`,
+    `Подача: ${getMenuOrderServingModeLabel(order.servingMode)}`,
+    "",
+    ...order.items.map((item, index) => `${index + 1}. ${item.title} x${item.quantity}`),
+    order.comment.trim() ? `\nКомментарий: ${order.comment.trim()}` : "",
+    `Итого: ${formatPrice(order.total)}`
+  ].filter(Boolean).join("\n");
+}
+
+function buildMenuOrderAdminText(order: MenuOrder) {
+  return [
+    "Заказ по меню",
+    "",
+    `${order.guestName}${order.roomNumbers.length ? ` | Номер ${order.roomNumbers.join(", ")}` : ""}`,
+    order.phone ? `Телефон: ${formatReservationPhone(order.phone)}` : "",
+    `Время: ${formatMenuOrderReadyTime(order)}`,
+    `Подача: ${getMenuOrderServingModeLabel(order.servingMode)}`,
+    "",
+    ...order.items.map((item, index) => `${index + 1}. ${item.title} x${item.quantity} = ${formatPrice(item.total)}`),
+    order.comment.trim() ? `\nКомментарий: ${order.comment.trim()}` : "",
+    `Итого: ${formatPrice(order.total)}`,
+    `Оплата: ${getMenuOrderPaymentStatusLabel(order.paymentStatus)}`
+  ].filter(Boolean).join("\n");
+}
+
+function formatMenuOrderReadyTime(order: MenuOrder) {
+  return [order.readyDate ? formatShortDayMonth(order.readyDate) : "", order.readyTime].filter(Boolean).join(" ");
+}
+
+function getMenuOrderServingModeLabel(mode: MenuOrder["servingMode"]) {
+  return mode === "takeaway" ? "упаковать с собой" : "подать на месте";
+}
+
+function getMenuOrderPaymentStatusLabel(status: MenuOrder["paymentStatus"]) {
+  if (status === "paid") return "оплачено";
+  if (status === "payOnArrival") return "при заезде";
+  return "не оплачено";
+}
+
+function getMenuOrderStatusLabel(status: MenuOrder["status"]) {
+  if (status === "sentToKitchen") return "передан повару";
+  if (status === "confirmed") return "подтвержден";
+  if (status === "cooking") return "готовится";
+  if (status === "ready") return "готов";
+  if (status === "done") return "закрыт";
+  if (status === "cancelled") return "отменен";
+  return "новый";
 }
 
 function formatAnalyticsMoney(price: number) {

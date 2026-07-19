@@ -2,8 +2,9 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyReply } from "fastify";
 import { createReadStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { stat } from "node:fs/promises";
+import { dirname } from "node:path";
 import sharp from "sharp";
 import {
   claimActiveDialogData,
@@ -86,19 +87,30 @@ app.get("/uploads/thumb/*", async (request, reply) => {
   const sourceSuffix = requestedPath.endsWith(".webp") ? requestedPath.slice(0, -5) : requestedPath;
   const sourcePath = `/uploads/${sourceSuffix}`;
   const thumbnailPath = `/uploads/thumb/${sourceSuffix}.webp`;
+  const localThumbnailPath = getLocalUploadPath(thumbnailPath);
+
+  if (localThumbnailPath) {
+    try {
+      await stat(localThumbnailPath);
+      return sendUploadMedia(thumbnailPath, reply);
+    } catch {
+      // Continue with durable cache/source lookup.
+    }
+  }
 
   const storedThumbnail = await getStoredMedia(thumbnailPath);
   if (storedThumbnail) {
+    const thumbnail = await readStoredMediaBuffer(thumbnailPath);
+    await writeLocalUploadBuffer(thumbnailPath, thumbnail);
     reply.header("Cache-Control", mediaCacheControl);
+    reply.header("content-length", String(thumbnail.length));
     reply.type("image/webp");
-    if (typeof storedThumbnail.length === "number") {
-      reply.header("content-length", String(storedThumbnail.length));
-    }
-    return reply.send(openStoredMediaStream(storedThumbnail._id));
+    return reply.send(thumbnail);
   }
 
   try {
     const thumbnail = await createMenuThumbnail(sourcePath);
+    await writeLocalUploadBuffer(thumbnailPath, thumbnail);
     await saveStoredMediaBuffer(thumbnailPath, thumbnail);
     reply.header("Cache-Control", mediaCacheControl);
     reply.header("content-length", String(thumbnail.length));
@@ -176,6 +188,14 @@ async function readStoredMediaBuffer(publicPath: string) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
+}
+
+async function writeLocalUploadBuffer(publicPath: string, data: Buffer) {
+  const localPath = getLocalUploadPath(publicPath);
+  if (!localPath) return;
+
+  await mkdir(dirname(localPath), { recursive: true });
+  await writeFile(localPath, data);
 }
 
 const frontendDebugLogs: Array<{
@@ -525,10 +545,12 @@ function buildPublicMenuPage(reservationId: string) {
         menu.innerHTML = '<div class="empty">Меню пока не заполнено.</div>';
         return;
       }
-      menu.innerHTML = state.items.map((item) => {
+      menu.innerHTML = state.items.map((item, index) => {
         const count = state.cart[item.id]?.quantity || 0;
+        const imageLoading = index < 2 ? "eager" : "lazy";
+        const imagePriority = index === 0 ? "high" : "auto";
         return '<article class="card">' +
-          (item.photoPath ? '<img class="photo" src="' + mediaUrl(item.photoPath) + '" alt="" loading="lazy" decoding="async">' : '<div class="photo"></div>') +
+          (item.photoPath ? '<img class="photo" src="' + mediaUrl(item.photoPath) + '" alt="" loading="' + imageLoading + '" fetchpriority="' + imagePriority + '" decoding="async">' : '<div class="photo"></div>') +
           '<div class="body">' +
           '<div class="title"><span>' + item.title + '</span><span class="price">' + money(item.price) + '</span></div>' +
           '<p class="meta">' + [item.composition, item.cookingTime ? "Время: " + item.cookingTime : ""].filter(Boolean).join("<br>") + '</p>' +

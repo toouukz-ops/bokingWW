@@ -9028,11 +9028,11 @@ function MenuOrdersWorkspaceOverlay({
                 <div className="gpb-menu-orders-workspace-actions">
                   <button className={`gpb-primary ${copyState === "copied" ? "is-done" : ""}`} type="button" onClick={() => onCopyCook(selectedOrder, draftText)}>
                     <Copy size={15} />
-                    <span>{copyState === "copied" ? "Скопировано" : copyState === "error" ? "Не скопировано" : "Скопировать повару"}</span>
+                    <span>{copyState === "copied" ? "Скопировано" : copyState === "error" ? "Ошибка" : "Копировать"}</span>
                   </button>
                   <button className="gpb-primary" type="button" onClick={() => onMarkDone(selectedOrder)}>
                     <Check size={15} />
-                    <span>Заказ выдан</span>
+                    <span>Выдан</span>
                   </button>
                   <button className="gpb-secondary is-danger" type="button" onClick={() => onDelete(selectedOrder)} title="Удалить заказ">
                     <Trash2 size={15} />

@@ -9889,15 +9889,18 @@ body.gpb-reservation-split-resizing {
 }
 
 .gpb-menu-orders-workspace {
-  width: min(1040px, calc(100vw - 28px));
-  max-height: min(780px, calc(100vh - 34px));
+  width: min(980px, calc(100vw - 28px));
+  max-height: min(700px, calc(100vh - 34px));
+  overflow: hidden;
 }
 
 .gpb-menu-orders-workspace-body {
   display: grid;
-  grid-template-columns: 270px minmax(0, 1fr);
-  gap: 10px;
-  min-height: 520px;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 0;
+  max-height: calc(min(700px, 100vh - 34px) - 98px);
+  overflow: hidden;
 }
 
 .gpb-menu-orders-workspace-list {
@@ -9911,7 +9914,7 @@ body.gpb-reservation-split-resizing {
 
 .gpb-menu-orders-workspace-list button {
   display: grid;
-  gap: 3px;
+  gap: 2px;
   width: 100%;
   border: 1px solid #d8dee5;
   border-radius: 7px;
@@ -9920,7 +9923,7 @@ body.gpb-reservation-split-resizing {
   cursor: pointer;
   font: inherit;
   text-align: left;
-  padding: 8px;
+  padding: 7px 8px;
 }
 
 .gpb-menu-orders-workspace-list button.is-active {
@@ -9931,7 +9934,7 @@ body.gpb-reservation-split-resizing {
 .gpb-menu-orders-workspace-list strong {
   overflow: hidden;
   color: #16202a;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 950;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -9942,7 +9945,7 @@ body.gpb-reservation-split-resizing {
 .gpb-menu-orders-workspace-list p {
   margin: 0;
   color: #64707d;
-  font-size: 11px;
+  font-size: 10px;
   font-style: normal;
   font-weight: 800;
 }
@@ -9953,38 +9956,40 @@ body.gpb-reservation-split-resizing {
 
 .gpb-menu-orders-workspace-editor {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  gap: 8px;
+  grid-template-rows: auto auto minmax(220px, 1fr) auto;
+  gap: 7px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .gpb-menu-orders-workspace-summary {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   flex-wrap: wrap;
   border: 1px solid #d8e5f2;
   border-radius: 7px;
   background: #f8fbfd;
-  padding: 8px;
+  min-height: 54px;
+  padding: 7px 9px;
 }
 
 .gpb-menu-orders-workspace-summary strong {
   color: #16202a;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 950;
 }
 
 .gpb-menu-orders-workspace-summary span {
   color: #64707d;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 850;
 }
 
 .gpb-menu-orders-workspace-summary b {
   margin-left: auto;
   color: #0f6b57;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 950;
 }
 
@@ -9996,21 +10001,22 @@ body.gpb-reservation-split-resizing {
   border-radius: 999px;
   background: #e8f7f1;
   color: #0f6b57;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
-  padding: 6px 10px;
+  padding: 5px 9px;
 }
 
 .gpb-menu-orders-workspace-editor textarea {
   width: 100%;
-  min-height: 330px;
+  min-height: 240px;
+  max-height: 100%;
   resize: vertical;
   border: 1px solid #cfd6dd;
   border-radius: 8px;
   background: #ffffff;
   color: #16202a;
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
   line-height: 1.45;
   padding: 10px;
@@ -10018,16 +10024,28 @@ body.gpb-reservation-split-resizing {
 
 .gpb-menu-orders-workspace-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 42px;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr) 40px;
+  gap: 7px;
+  min-width: 0;
 }
 
 .gpb-menu-orders-workspace-actions button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  min-height: 42px;
+  gap: 6px;
+  min-width: 0;
+  min-height: 38px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.gpb-menu-orders-workspace-actions button:last-child {
+  padding: 0;
 }
 
 .gpb-menu-orders-workspace-actions .is-done {

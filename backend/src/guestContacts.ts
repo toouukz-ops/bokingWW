@@ -21,6 +21,11 @@ export async function listGuestContacts(): Promise<GuestContact[]> {
   return documents.map(mapGuestContactDocument);
 }
 
+export async function getGuestContact(phone: string): Promise<GuestContact | null> {
+  const document = await guestContacts.findOne({ phone: normalizeGuestPhone(phone) }, { maxTimeMS: 3000 });
+  return document ? mapGuestContactDocument(document) : null;
+}
+
 export async function saveGuestContact(contact: GuestContact): Promise<GuestContact> {
   const now = new Date();
   const normalizedContact = {

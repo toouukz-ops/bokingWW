@@ -41,7 +41,7 @@ import { exportServerBackup, importServerBackup } from "./backup.js";
 import { createStubDraft, bookingDraftRequestSchema } from "./booking.js";
 import { config } from "./config.js";
 import { closeDatabase, connectDatabase, pingDatabase } from "./db.js";
-import { deleteGuestContact, guestContactSchema, listGuestContacts, saveGuestContact } from "./guestContacts.js";
+import { deleteGuestContact, getGuestContact, guestContactSchema, listGuestContacts, saveGuestContact } from "./guestContacts.js";
 import { cropPhotoFile, deleteMediaFile, ensureWhatsappVideoFile, getLocalUploadPath, saveRoomMediaFile, uploadsRoot } from "./media.js";
 import { getMediaContentType, getStoredMedia, openStoredMediaStream, saveStoredMediaBuffer } from "./mediaStore.js";
 import { createOpenAiClient } from "./openai.js";
@@ -1636,6 +1636,20 @@ app.get("/api/guest-contacts", async (_request, reply) => {
   } catch (error) {
     return reply.status(503).send({
       error: "Guest contacts unavailable",
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.get("/api/guest-contacts/:phone", async (request, reply) => {
+  const { phone } = request.params as { phone: string };
+  try {
+    const contact = await withTimeout(getGuestContact(decodeURIComponent(phone)), 3500, "Guest contact lookup timeout");
+    if (!contact) return reply.status(404).send({ error: "Guest contact not found" });
+    return contact;
+  } catch (error) {
+    return reply.status(503).send({
+      error: "Guest contact lookup unavailable",
       details: error instanceof Error ? error.message : String(error)
     });
   }

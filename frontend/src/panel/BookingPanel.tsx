@@ -64,6 +64,7 @@ import {
   getAiReplySuggestions,
   getExpenseCategories,
   getExpenseEntries,
+  getGuestContact,
   getGuestContacts,
   getHealth,
   getChatMessageDialogs,
@@ -1610,6 +1611,42 @@ export function BookingPanel() {
     loadGuestContacts();
     loadPanelExpenseEntries();
   }, []);
+
+  useEffect(() => {
+    const normalizedPhone = contactDatabasePhone;
+    if (!isCompleteContactPhone(normalizedPhone) || contactDatabaseRecord) return;
+
+    let isCancelled = false;
+    getGuestContact(normalizedPhone)
+      .then((contact) => {
+        if (isCancelled || !contact) return;
+        setGuestContacts((currentContacts) =>
+          currentContacts
+            .filter((currentContact) => !phonesMatchForContactLookup(currentContact.phone, contact.phone))
+            .concat(contact)
+        );
+        setContactServerSyncByPhone((current) => ({ ...current, [normalizePhoneSearch(contact.phone)]: "synced" }));
+      })
+      .catch((error) => {
+        debugContactFlow("guest-contact-single-lookup-error", {
+          message: error instanceof Error ? error.message : String(error),
+          phone: normalizedPhone
+        });
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [contactDatabasePhone, contactDatabaseRecord?.phone]);
+
+  useEffect(() => {
+    if (!isCompleteContactPhone(contactInputPhoneForLookup)) return;
+    const fallbackName = getGuestNameFallbackFromPhone(contactInputPhoneForLookup);
+    if (!fallbackName) return;
+    if (!guestFirstName || isGuestFallbackName(guestFirstName)) {
+      setGuestFirstName((currentName) => currentName === fallbackName ? currentName : fallbackName);
+    }
+  }, [contactInputPhoneForLookup, guestFirstName]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {

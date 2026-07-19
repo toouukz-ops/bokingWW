@@ -152,6 +152,23 @@ export async function getGuestContacts(): Promise<GuestContact[]> {
   return refreshGuestContactsFromServer(localContacts);
 }
 
+export async function getGuestContact(phone: string): Promise<GuestContact | null> {
+  const localContacts = await getLocalGuestContacts();
+  const phoneKey = normalizeGuestPhoneForLookup(phone);
+  const localContact = localContacts.find((contact) => normalizeGuestPhoneForLookup(contact.phone) === phoneKey);
+  if (localContact) return localContact;
+
+  const response = await fetch(`${API_BASE_URL}/api/guest-contacts/${encodeURIComponent(phone)}`);
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`Guest contact lookup failed: ${response.status}`);
+  }
+
+  const contact = normalizeGuestContact(await response.json());
+  await upsertLocalGuestContact(contact);
+  return contact;
+}
+
 export async function saveGuestContact(contact: GuestContact): Promise<GuestContact> {
   const normalizedContact = normalizeGuestContact(contact);
   await upsertLocalGuestContact(normalizedContact);

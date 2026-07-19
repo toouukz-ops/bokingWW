@@ -1753,7 +1753,12 @@ app.put("/api/expense-entries", async (request) => {
   return replaceExpenseEntries(Array.isArray(body?.items) ? body.items : []);
 });
 
-app.get("/api/chat-drafts", async () => {
+app.get("/api/chat-drafts", async (request) => {
+  const query = request.query as Record<string, string | undefined>;
+  if (query.full !== "1") {
+    return { drafts: {} };
+  }
+
   return { drafts: await getChatDraftData() };
 });
 

@@ -154,14 +154,7 @@ function getLocalChatStatusSources(): Promise<{ drafts: Record<string, ChatBooki
 }
 
 async function fetchServerChatDrafts() {
-  try {
-    const response = await fetchWithTimeout(`${API_BASE_URL}/api/chat-drafts`, 1200);
-    if (!response.ok) return {};
-    const payload = await response.json() as { drafts?: Record<string, ChatBookingDraft> };
-    return normalizeChatDrafts(payload.drafts);
-  } catch {
-    return {};
-  }
+  return {};
 }
 
 async function fetchServerReservations() {

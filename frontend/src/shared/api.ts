@@ -820,17 +820,7 @@ export async function getChatBookingDraft(chatId: string): Promise<ChatBookingDr
 }
 
 export async function getAllChatBookingDrafts(): Promise<Record<string, ChatBookingDraft>> {
-  const localDrafts = await getChatBookingDrafts();
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/chat-drafts`);
-    if (!response.ok) throw new Error(`Chat drafts request failed: ${response.status}`);
-    const payload = (await response.json()) as { drafts?: Record<string, ChatBookingDraft> };
-    const serverDrafts = payload.drafts && typeof payload.drafts === "object" && !Array.isArray(payload.drafts) ? payload.drafts : {};
-    await saveChatBookingDrafts(serverDrafts);
-    return serverDrafts;
-  } catch {
-    return localDrafts;
-  }
+  return getChatBookingDrafts();
 }
 
 export async function saveChatBookingDraft(chatId: string, draft: ChatBookingDraft): Promise<void> {

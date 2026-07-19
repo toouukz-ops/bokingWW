@@ -75,6 +75,11 @@ async function migrateLegacyRooms() {
 
 async function migrateLegacyGuestContacts() {
   const contacts = db.collection("guestContacts");
+  const indexes = await contacts.indexes();
+  if (indexes.some((index) => index.name === "phone_1")) {
+    return;
+  }
+
   const documents = await contacts.find().toArray();
   const byPhone = new Map<string, typeof documents>();
 

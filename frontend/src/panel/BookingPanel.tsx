@@ -5480,12 +5480,18 @@ export function BookingPanel() {
       appeal: guestFirstName
     });
     if (!isManualPhoneEntryMode && !hasPhoneForSave) {
-      setContactSaveState("error");
-      setContactLookupNotice({
-        tone: "error",
-        text: "Телефон чата не определен. Введите номер вручную и нажмите Сохранить."
-      });
-      window.setTimeout(() => setContactSaveState("idle"), 2400);
+      setContactSaveState("saving");
+      const extracted = await extractGuestPhoneFromChat();
+      if (extracted?.phone) {
+        await saveActiveContactInWhatsApp(extracted);
+      } else {
+        setContactSaveState("error");
+        setContactLookupNotice({
+          tone: "error",
+          text: "Телефон чата не определен. Введите номер вручную и нажмите Сохранить."
+        });
+        window.setTimeout(() => setContactSaveState("idle"), 2400);
+      }
       return;
     }
 

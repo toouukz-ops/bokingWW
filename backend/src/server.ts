@@ -331,6 +331,8 @@ function buildPublicMenuPage(reservationId: string) {
     .cart-line { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 9px 0; border-bottom: 1px solid #eef1f3; }
     .cart-line small { color: #637080; }
     .form { display: grid; gap: 10px; margin-top: 12px; }
+    .guest-fields { display: grid; gap: 10px; }
+    .guest-fields[hidden] { display: none; }
     label { display: grid; gap: 5px; font-size: 13px; font-weight: 800; color: #495667; }
     input, textarea, select { width: 100%; border: 1px solid #cfd8df; border-radius: 7px; min-height: 42px; padding: 9px 10px; font: inherit; background: white; }
     textarea { min-height: 74px; resize: vertical; }
@@ -358,6 +360,11 @@ function buildPublicMenuPage(reservationId: string) {
         <div id="cart"></div>
         <div class="form">
           <label>Время готовности<input id="readyTime" type="time"></label>
+          <div class="guest-fields" id="guestFields" hidden>
+            <label>Имя<input id="guestName" placeholder="Ваше имя"></label>
+            <label>Телефон<input id="guestPhone" placeholder="+7 ..."></label>
+            <label>Номер / столик<input id="guestRoom" placeholder="Например: 109 или столик"></label>
+          </div>
           <label>Как подать заказ</label>
           <div class="toggle">
             <button type="button" class="active" id="dineIn">Подать на месте</button>
@@ -385,11 +392,12 @@ function buildPublicMenuPage(reservationId: string) {
     function renderGuest() {
       const guest = document.getElementById("guest");
       const r = state.reservation || {};
-      guest.innerHTML = [
+      const tags = [
         r.guestName || "",
         (r.roomNumbers || []).length ? "Номер " + r.roomNumbers.join(", ") : "",
         r.checkIn ? "Заезд " + r.checkIn : ""
-      ].filter(Boolean).map((item) => "<span>" + item + "</span>").join("");
+      ].filter(Boolean);
+      guest.innerHTML = (tags.length ? tags : ["Гость кафе"]).map((item) => "<span>" + item + "</span>").join("");
     }
     function renderMenu() {
       const menu = document.getElementById("menu");
@@ -441,12 +449,16 @@ function buildPublicMenuPage(reservationId: string) {
         return;
       }
       const r = state.reservation || {};
+      const guestName = r.guestName || document.getElementById("guestName").value.trim() || "Гость";
+      const phone = r.phone || document.getElementById("guestPhone").value.trim();
+      const guestRoom = document.getElementById("guestRoom").value.trim();
+      const roomNumbers = (r.roomNumbers || []).length ? r.roomNumbers : (guestRoom ? [guestRoom] : []);
       const order = {
-        source: "reservation-link",
+        source: reservationId ? "reservation-link" : "qr",
         reservationId,
-        guestName: r.guestName || "Гость",
-        phone: r.phone || "",
-        roomNumbers: r.roomNumbers || [],
+        guestName,
+        phone,
+        roomNumbers,
         checkIn: r.checkIn || "",
         readyDate: r.checkIn || today(),
         readyTime,
@@ -473,11 +485,13 @@ function buildPublicMenuPage(reservationId: string) {
     }
     async function boot() {
       try {
-        const response = await fetch("/api/public/menu/" + encodeURIComponent(reservationId));
+        const menuApiUrl = reservationId ? "/api/public/menu/" + encodeURIComponent(reservationId) : "/api/public/menu";
+        const response = await fetch(menuApiUrl);
         if (!response.ok) throw new Error("menu failed");
         const data = await response.json();
         state.items = data.menuItems || [];
         state.reservation = data.reservation || null;
+        document.getElementById("guestFields").hidden = Boolean(state.reservation);
         document.getElementById("intro").textContent = data.introText || document.getElementById("intro").textContent;
         renderGuest();
         renderMenu();
@@ -514,6 +528,22 @@ app.get("/menu/r/:reservationId", async (request, reply) => {
   const { reservationId } = request.params as { reservationId: string };
   reply.type("text/html; charset=utf-8");
   return buildPublicMenuPage(reservationId);
+});
+
+app.get("/menu", async (_request, reply) => {
+  reply.type("text/html; charset=utf-8");
+  return buildPublicMenuPage("");
+});
+
+app.get("/api/public/menu", async () => {
+  const settings = await getPaymentSettingsData();
+  const menuItems = getPublicMenuItems(settings);
+
+  return {
+    introText: getPublicMenuIntroText(settings),
+    menuItems,
+    reservation: null
+  };
 });
 
 app.get("/api/public/menu/:reservationId", async (request, reply) => {

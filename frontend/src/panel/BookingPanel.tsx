@@ -3909,11 +3909,11 @@ export function BookingPanel() {
       )[0] ?? null;
   }
 
-  function buildReservationMenuLink(reservation: Reservation) {
-    return `${PUBLIC_MENU_BASE_URL}/menu/r/${encodeURIComponent(reservation.id)}`;
+  function buildReservationMenuLink(reservation?: Reservation | null) {
+    return reservation ? `${PUBLIC_MENU_BASE_URL}/menu/r/${encodeURIComponent(reservation.id)}` : `${PUBLIC_MENU_BASE_URL}/menu`;
   }
 
-  function buildReservationMenuInvitation(reservation: Reservation) {
+  function buildReservationMenuInvitation(reservation?: Reservation | null) {
     return [
       "Меню Green Pine Burabay",
       "",
@@ -3926,11 +3926,6 @@ export function BookingPanel() {
 
   async function sendInteractiveMenuLinkToWhatsApp() {
     const reservation = getReservationForMenuLink();
-    if (!reservation) {
-      setMenuLinkSendState("error");
-      window.setTimeout(() => setMenuLinkSendState("idle"), 2200);
-      return;
-    }
 
     suppressActiveChatSyncRef.current = true;
     setMenuLinkSendState("sending");
@@ -7423,7 +7418,7 @@ export function BookingPanel() {
                     <Image size={17} />
                     <span>{sendState === "sending" ? "..." : "Витрина"}</span>
                   </button>
-                  <button className="gpb-secondary gpb-send-object-button" type="button" onClick={() => void sendInteractiveMenuLinkToWhatsApp()} disabled={!activeMenuItems.length || !getReservationForMenuLink() || menuLinkSendState === "sending"}>
+                  <button className="gpb-secondary gpb-send-object-button" type="button" onClick={() => void sendInteractiveMenuLinkToWhatsApp()} disabled={!activeMenuItems.length || menuLinkSendState === "sending"}>
                     <Utensils size={17} />
                     <span>{menuLinkSendState === "sending" ? "..." : "Меню"}</span>
                   </button>
@@ -8018,7 +8013,7 @@ export function BookingPanel() {
                   className="gpb-primary"
                   type="button"
                   onClick={() => void sendInteractiveMenuLinkToWhatsApp()}
-                  disabled={!getReservationForMenuLink() || menuLinkSendState === "sending"}
+                  disabled={!activeMenuItems.length || menuLinkSendState === "sending"}
                 >
                   <Send size={14} />
                   <span>

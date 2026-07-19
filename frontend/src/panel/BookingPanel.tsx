@@ -4024,8 +4024,8 @@ export function BookingPanel() {
     }
   }
 
-  async function copyMenuOrderText(order: MenuOrder, audience: "admin" | "cook") {
-    const text = audience === "cook" ? buildMenuOrderCookText(order) : buildMenuOrderAdminText(order);
+  async function copyMenuOrderText(order: MenuOrder, audience: "admin" | "cook", overrideText?: string) {
+    const text = overrideText ?? (audience === "cook" ? buildMenuOrderCookText(order) : buildMenuOrderAdminText(order));
     const copied = await copyTextToClipboard(text);
     setMenuOrderCopyState((current) => ({ ...current, [`${order.id}:${audience}`]: copied ? "copied" : "error" }));
     if (copied && audience === "cook" && order.status === "new") {
@@ -7990,32 +7990,13 @@ export function BookingPanel() {
                     <div className="gpb-extra-details-body">
                       <div className="gpb-guest-menu-orders-list">
                       {currentChatMenuOrders.map((order) => (
-                        <article className={`gpb-guest-menu-order-row is-${order.status}`} key={order.id}>
-                          <div className="gpb-guest-menu-order-preview">
-                            <MenuOrderPreviewImage menuItems={menuItems} order={order} />
-                          </div>
-                          <div className="gpb-guest-menu-order-info">
-                            <strong>{order.guestName} · {formatPrice(order.total)}</strong>
-                            <span>{formatReservationPhone(order.phone) || "телефон не указан"} · {formatMenuOrderReadyTime(order)} · {getMenuOrderStatusLabel(order.status)}</span>
-                          </div>
-                          <div className="gpb-guest-menu-order-items" title={order.items.map((item) => `${item.title} x${item.quantity}`).join(", ")}>
-                            {order.items.slice(0, 3).map((item) => (
-                              <span key={item.id}>{item.title} x{item.quantity}</span>
-                            ))}
-                            {order.items.length > 3 ? <span>+{order.items.length - 3}</span> : null}
-                          </div>
-                          <div className="gpb-guest-menu-order-actions">
-                            <button type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "cook" })} title="Повару">
-                              Повару
-                            </button>
-                            <button type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "admin" })} title="Админу">
-                              Админу
-                            </button>
-                            <button className="is-danger" type="button" onClick={() => void removeMenuOrder(order)} title="Удалить заказ">
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                        </article>
+                        <MenuOrderCompactCard
+                          key={order.id}
+                          order={order}
+                          onDelete={() => void removeMenuOrder(order)}
+                          onOpenAdmin={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "admin" })}
+                          onOpenCook={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "cook" })}
+                        />
                       ))}
                       </div>
                     </div>
@@ -8204,43 +8185,13 @@ export function BookingPanel() {
             </button>
             <div className="gpb-menu-orders-list">
             {recentMenuOrders.map((order) => (
-              <article className={`gpb-menu-order-card is-${order.status}`} key={order.id}>
-                <div className="gpb-menu-order-main">
-                  <div className="gpb-menu-order-preview">
-                    <MenuOrderPreviewImage menuItems={menuItems} order={order} />
-                  </div>
-                  <div>
-                    <strong>{order.guestName}</strong>
-                    <span>{formatReservationPhone(order.phone) || "телефон не указан"} · {order.roomNumbers.length ? `Номер ${order.roomNumbers.join(", ")}` : "номер не указан"} · {formatMenuOrderReadyTime(order)}</span>
-                  </div>
-                  <b>{formatPrice(order.total)}</b>
-                </div>
-                <div className="gpb-menu-order-meta">
-                  <span>{getMenuOrderServingModeLabel(order.servingMode)}</span>
-                  <span>{getMenuOrderStatusLabel(order.status)}</span>
-                  <span>{getMenuOrderPaymentStatusLabel(order.paymentStatus)}</span>
-                </div>
-                <div className="gpb-menu-order-items">
-                  {order.items.map((item) => (
-                    <span key={item.id}>{item.title} x{item.quantity}</span>
-                  ))}
-                </div>
-                {order.comment.trim() ? <p>{order.comment.trim()}</p> : null}
-                <div className="gpb-menu-order-actions">
-                  <button className="gpb-secondary" type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "cook" })}>
-                    <Copy size={14} />
-                    <span>Повару</span>
-                  </button>
-                  <button className="gpb-secondary" type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "admin" })}>
-                    <Copy size={14} />
-                    <span>Админу</span>
-                  </button>
-                  <button className="gpb-secondary is-danger" type="button" onClick={() => void removeMenuOrder(order)} title="Удалить заказ">
-                    <Trash2 size={14} />
-                    <span>Удалить</span>
-                  </button>
-                </div>
-              </article>
+              <MenuOrderCompactCard
+                key={order.id}
+                order={order}
+                onDelete={() => void removeMenuOrder(order)}
+                onOpenAdmin={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "admin" })}
+                onOpenCook={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "cook" })}
+              />
             ))}
             </div>
             </div>
@@ -8255,7 +8206,7 @@ export function BookingPanel() {
           order={menuOrderDialogOrder}
           text={menuOrderDialogTarget.audience === "cook" ? buildMenuOrderCookText(menuOrderDialogOrder) : buildMenuOrderAdminText(menuOrderDialogOrder)}
           onClose={() => setMenuOrderDialogTarget(null)}
-          onCopy={() => void copyMenuOrderText(menuOrderDialogOrder, menuOrderDialogTarget.audience)}
+          onCopy={(nextText) => void copyMenuOrderText(menuOrderDialogOrder, menuOrderDialogTarget.audience, nextText)}
         />
       ) : null}
 
@@ -8923,16 +8874,38 @@ function PaymentMethodRequiredOverlay({
   );
 }
 
-function MenuOrderPreviewImage({ menuItems, order }: { menuItems: MenuItem[]; order: MenuOrder }) {
-  const previewPath = order.items
-    .map((orderItem) => menuItems.find((menuItem) => menuItem.id === orderItem.menuItemId)?.photoPath || "")
-    .find(Boolean);
-
-  if (!previewPath) {
-    return <Utensils size={18} />;
-  }
-
-  return <MediaImage alt="Заказ меню" path={previewPath} />;
+function MenuOrderCompactCard({
+  order,
+  onDelete,
+  onOpenAdmin,
+  onOpenCook
+}: {
+  order: MenuOrder;
+  onDelete: () => void;
+  onOpenAdmin: () => void;
+  onOpenCook: () => void;
+}) {
+  return (
+    <article className="gpb-menu-order-card gpb-menu-order-text-card">
+      <header className="gpb-menu-order-text-head">
+        <strong>{order.guestName}</strong>
+        <button className="is-danger" type="button" onClick={onDelete} title="Удалить заказ">
+          <Trash2 size={14} />
+        </button>
+      </header>
+      <pre>{buildMenuOrderCardText(order)}</pre>
+      <div className="gpb-menu-order-actions">
+        <button type="button" onClick={onOpenCook}>
+          <Copy size={13} />
+          <span>Повару</span>
+        </button>
+        <button type="button" onClick={onOpenAdmin}>
+          <Copy size={13} />
+          <span>Админу</span>
+        </button>
+      </div>
+    </article>
+  );
 }
 
 function MenuOrderSendDialog({
@@ -8948,10 +8921,15 @@ function MenuOrderSendDialog({
   order: MenuOrder;
   text: string;
   onClose: () => void;
-  onCopy: () => void;
+  onCopy: (text: string) => void;
 }) {
   const title = audience === "cook" ? "Отправка повару" : "Отправка админу";
   const targetLabel = audience === "cook" ? "Повар" : "Админ";
+  const [draftText, setDraftText] = useState(text);
+
+  useEffect(() => {
+    setDraftText(text);
+  }, [text]);
 
   return (
     <div className="gpb-create-backdrop gpb-menu-order-dialog-backdrop">
@@ -8975,11 +8953,11 @@ function MenuOrderSendDialog({
             <span>{formatMenuOrderReadyTime(order)}</span>
             <span>{getMenuOrderServingModeLabel(order.servingMode)}</span>
           </div>
-          <textarea readOnly value={text} />
+          <textarea value={draftText} onChange={(event) => setDraftText(event.target.value)} />
         </div>
         <footer className="gpb-create-footer">
           <button className="gpb-secondary" type="button" onClick={onClose}>Закрыть</button>
-          <button className={`gpb-primary ${copyState === "copied" ? "is-done" : ""}`} type="button" onClick={onCopy}>
+          <button className={`gpb-primary ${copyState === "copied" ? "is-done" : ""}`} type="button" onClick={() => onCopy(draftText)}>
             <Copy size={16} />
             <span>{copyState === "copied" ? "Скопировано" : copyState === "error" ? "Не скопировано" : `Скопировать для ${audience === "cook" ? "повара" : "админа"}`}</span>
           </button>
@@ -24586,6 +24564,19 @@ function buildMenuOrderAdminText(order: MenuOrder) {
     "",
     ...order.items.map((item, index) => `${index + 1}. ${item.title} x${item.quantity} = ${formatPrice(item.total)}`),
     order.comment.trim() ? `\nКомментарий: ${order.comment.trim()}` : "",
+    `Итого: ${formatPrice(order.total)}`,
+    `Оплата: ${getMenuOrderPaymentStatusLabel(order.paymentStatus)}`
+  ].filter(Boolean).join("\n");
+}
+
+function buildMenuOrderCardText(order: MenuOrder) {
+  return [
+    "Заказ по меню",
+    order.guestName,
+    order.phone ? `Телефон: ${formatReservationPhone(order.phone)}` : "Телефон: не указан",
+    `Время: ${formatMenuOrderReadyTime(order)}`,
+    `Подача: ${getMenuOrderServingModeLabel(order.servingMode)}`,
+    ...order.items.map((item, index) => `${index + 1}. ${item.title} x${item.quantity} = ${formatPrice(item.total)}`),
     `Итого: ${formatPrice(order.total)}`,
     `Оплата: ${getMenuOrderPaymentStatusLabel(order.paymentStatus)}`
   ].filter(Boolean).join("\n");

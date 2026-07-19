@@ -53,7 +53,12 @@ const app = Fastify({
 
 await app.register(cors, {
   origin: (origin, callback) => {
-    if (!origin || origin === "https://web.whatsapp.com" || origin.startsWith("chrome-extension://")) {
+    if (
+      !origin ||
+      origin === "https://web.whatsapp.com" ||
+      origin === "https://bokingww.onrender.com" ||
+      origin.startsWith("chrome-extension://")
+    ) {
       callback(null, true);
       return;
     }

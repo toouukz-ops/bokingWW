@@ -9890,7 +9890,8 @@ body.gpb-reservation-split-resizing {
 
 .gpb-menu-orders-workspace {
   width: min(980px, calc(100vw - 28px));
-  max-height: min(700px, calc(100vh - 34px));
+  height: min(640px, calc(100vh - 34px));
+  max-height: min(640px, calc(100vh - 34px));
   overflow: hidden;
 }
 
@@ -9898,8 +9899,8 @@ body.gpb-reservation-split-resizing {
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr);
   gap: 8px;
+  height: calc(100% - 88px);
   min-height: 0;
-  max-height: calc(min(700px, 100vh - 34px) - 98px);
   overflow: hidden;
 }
 
@@ -9955,9 +9956,10 @@ body.gpb-reservation-split-resizing {
 }
 
 .gpb-menu-orders-workspace-editor {
-  display: grid;
-  grid-template-rows: auto auto minmax(220px, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 7px;
+  min-height: 0;
   min-width: 0;
   overflow: hidden;
 }
@@ -10007,9 +10009,10 @@ body.gpb-reservation-split-resizing {
 }
 
 .gpb-menu-orders-workspace-editor textarea {
+  flex: 1 1 auto;
   width: 100%;
-  min-height: 240px;
-  max-height: 100%;
+  min-height: 0;
+  height: auto;
   resize: vertical;
   border: 1px solid #cfd6dd;
   border-radius: 8px;
@@ -10025,6 +10028,7 @@ body.gpb-reservation-split-resizing {
 .gpb-menu-orders-workspace-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr) 40px;
+  flex: 0 0 auto;
   gap: 7px;
   min-width: 0;
 }
@@ -10034,8 +10038,10 @@ body.gpb-reservation-split-resizing {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  height: 38px;
   min-width: 0;
   min-height: 38px;
+  max-height: 38px;
   border-radius: 7px;
   font-size: 13px;
   font-weight: 900;

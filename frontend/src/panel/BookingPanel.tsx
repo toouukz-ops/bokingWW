@@ -1640,13 +1640,14 @@ export function BookingPanel() {
   }, [contactDatabasePhone, contactDatabaseRecord?.phone]);
 
   useEffect(() => {
-    if (!isCompleteContactPhone(contactInputPhoneForLookup)) return;
-    const fallbackName = getGuestNameFallbackFromPhone(contactInputPhoneForLookup);
+    const phoneForName = isCompleteContactPhone(contactInputPhoneForLookup) ? contactInputPhoneForLookup : contactDatabasePhone;
+    if (!isCompleteContactPhone(phoneForName)) return;
+    const fallbackName = getGuestNameFallbackFromPhone(phoneForName);
     if (!fallbackName) return;
-    if (!guestFirstName || isGuestFallbackName(guestFirstName)) {
+    if (shouldUsePhoneFallbackGuestName(guestFirstName, phoneForName)) {
       setGuestFirstName((currentName) => currentName === fallbackName ? currentName : fallbackName);
     }
-  }, [contactInputPhoneForLookup, guestFirstName]);
+  }, [contactDatabasePhone, contactInputPhoneForLookup, guestFirstName]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -5441,10 +5442,23 @@ export function BookingPanel() {
     }
 
     const fallbackName = getGuestNameFallbackFromPhone(buildPhoneWithPrefix(nextLocal, nextPrefix) || nextLocal);
-    if (fallbackName && (!guestFirstName || isGuestFallbackName(guestFirstName) || isManualSaleMode || isNewBookingChatMode)) {
+    if (
+      fallbackName &&
+      (!guestFirstName || isGuestFallbackName(guestFirstName) || isManualSaleMode || isNewBookingChatMode)
+    ) {
       setGuestFirstName(fallbackName);
     } else {
       setContactExtracted(false);
+    }
+  }
+
+  function handleGuestPhonePrefixChange(value: string) {
+    setGuestPhonePrefix(value);
+    setContactSavedInWhatsApp(false);
+    setContactLookupNotice(null);
+    const fallbackName = getGuestNameFallbackFromPhone(buildPhoneWithPrefix(guestPhone, value) || guestPhone);
+    if (fallbackName && (!guestFirstName || isGuestFallbackName(guestFirstName))) {
+      setGuestFirstName(fallbackName);
     }
   }
 
@@ -7377,7 +7391,7 @@ export function BookingPanel() {
                 aria-label="Префикс телефона"
                 value={guestPhonePrefix}
                 disabled={isContactRowLocked}
-                onChange={(event) => setGuestPhonePrefix(event.target.value)}
+                onChange={(event) => handleGuestPhonePrefixChange(event.target.value)}
               />
               <datalist id="gpb-phone-country-prefixes">
                 {PHONE_COUNTRY_OPTIONS.map((option) => (
@@ -18411,6 +18425,15 @@ function getGuestNameFallbackFromPhone(phone: string) {
   const digits = phone.replace(/\D/g, "");
   if (digits.length < 4) return "";
   return `Гость ${digits.slice(-4)}`;
+}
+
+function shouldUsePhoneFallbackGuestName(currentName: string, phone: string) {
+  const fallbackName = getGuestNameFallbackFromPhone(phone);
+  if (!fallbackName) return false;
+  const normalizedName = normalizeExtractedText(currentName);
+  if (!normalizedName) return true;
+  if (!isGuestFallbackName(normalizedName)) return false;
+  return normalizedName !== fallbackName;
 }
 
 function normalizeExtractedText(value: string) {

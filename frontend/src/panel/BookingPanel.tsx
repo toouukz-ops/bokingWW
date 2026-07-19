@@ -1141,6 +1141,9 @@ export function BookingPanel() {
   const shouldKeepAdminCommentListeningRef = useRef(false);
   const activeChatIdRef = useRef("");
   const activeChatRef = useRef<ActiveChat | null>(null);
+  const menuAdminPhoneRef = useRef("");
+  const menuCookPhoneRef = useRef("");
+  const menuOrderAutoSendIdsRef = useRef<Record<string, boolean>>({});
   const isRestoringChatDraftRef = useRef(false);
   const suppressActiveChatSyncRef = useRef(false);
   const clearedBookingPhoneRef = useRef("");
@@ -1680,6 +1683,7 @@ export function BookingPanel() {
             ? currentOrders.map((item) => item.id === order.id ? order : item)
             : [order, ...currentOrders]
         );
+        void autoSendMenuOrder(order);
       }
     });
 
@@ -1821,6 +1825,14 @@ export function BookingPanel() {
     activeChatIdRef.current = activeChat?.id ?? "";
     activeChatRef.current = activeChat;
   }, [activeChat?.id, activeChat?.phone, activeChat?.title]);
+
+  useEffect(() => {
+    menuAdminPhoneRef.current = menuAdminPhone;
+  }, [menuAdminPhone]);
+
+  useEffect(() => {
+    menuCookPhoneRef.current = menuCookPhone;
+  }, [menuCookPhone]);
 
   useEffect(() => {
     setAiReplyState("idle");
@@ -3974,6 +3986,48 @@ export function BookingPanel() {
     window.setTimeout(() => {
       setMenuOrderCopyState((current) => ({ ...current, [`${order.id}:${audience}`]: "idle" }));
     }, 1800);
+  }
+
+  async function sendMenuOrderToWhatsAppPhone(phone: string, contactName: string, text: string) {
+    const normalizedPhone = formatPhoneDigits(phone);
+    if (!normalizedPhone) return false;
+
+    const opened = await openWhatsAppChatByPhone(normalizedPhone, contactName);
+    if (!opened) return false;
+    await waitForDelay(350);
+    return sendTextToActiveWhatsAppChat(text);
+  }
+
+  async function autoSendMenuOrder(order: MenuOrder) {
+    if (order.status !== "new" || menuOrderAutoSendIdsRef.current[order.id]) return;
+
+    const cookPhone = menuCookPhoneRef.current.trim();
+    const adminPhone = menuAdminPhoneRef.current.trim();
+    if (!cookPhone && !adminPhone) return;
+
+    menuOrderAutoSendIdsRef.current[order.id] = true;
+    const cookSent = cookPhone
+      ? await sendMenuOrderToWhatsAppPhone(cookPhone, "Повар", buildMenuOrderCookText(order))
+      : false;
+    const adminSent = adminPhone
+      ? await sendMenuOrderToWhatsAppPhone(adminPhone, "Админ", buildMenuOrderAdminText(order))
+      : false;
+
+    if (cookSent || adminSent) {
+      const nextOrder: MenuOrder = {
+        ...order,
+        status: cookSent ? "sentToKitchen" : order.status,
+        updatedAt: new Date().toISOString()
+      };
+      setMenuOrders((currentOrders) => currentOrders.map((item) => item.id === order.id ? nextOrder : item));
+      try {
+        await saveMenuOrder(nextOrder);
+      } catch {
+        // Заказ уже сохранен; если отметка отправки не записалась, не блокируем работу панели.
+      }
+    } else {
+      delete menuOrderAutoSendIdsRef.current[order.id];
+    }
   }
 
   async function sendRoomPhotoFromCard(room: Room) {

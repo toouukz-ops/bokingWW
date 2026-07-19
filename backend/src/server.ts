@@ -340,7 +340,11 @@ function buildPublicMenuPage(reservationId: string) {
     label { display: grid; gap: 5px; font-size: 13px; font-weight: 800; color: #495667; }
     input, textarea, select { width: 100%; border: 1px solid #cfd8df; border-radius: 7px; min-height: 42px; padding: 9px 10px; font: inherit; background: white; }
     textarea { min-height: 74px; resize: vertical; }
+    .schedule-fields { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 10px; align-items: end; }
     .schedule-fields[hidden] { display: none; }
+    .schedule-fields label { font-size: 14px; }
+    .schedule-fields input { min-height: 56px; border: 2px solid #cfd8df; border-radius: 8px; padding: 12px 13px; font-size: 17px; font-weight: 800; }
+    .schedule-fields input:focus { border-color: #0f6b57; outline: 3px solid rgba(15,107,87,.14); }
     .toggle { display: grid; grid-template-columns: 1fr; gap: 8px; }
     .toggle button { border: 1px solid #cfd8df; background: white; border-radius: 7px; min-height: 42px; font-weight: 800; cursor: pointer; }
     .toggle button.active { border-color: #0f6b57; background: #e9f7f2; color: #0f6b57; }
@@ -348,7 +352,7 @@ function buildPublicMenuPage(reservationId: string) {
     .empty, .status { color: #637080; line-height: 1.4; }
     .status.success { color: #0f6b57; font-weight: 800; }
     .status.error { color: #b42318; font-weight: 800; }
-    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } .cart { position: static; } .page { padding: 10px; } }
+    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } .cart { position: static; } .page { padding: 10px; } .schedule-fields { grid-template-columns: minmax(0, 1fr) 126px; } }
   </style>
 </head>
 <body>

@@ -3937,7 +3937,6 @@ export function BookingPanel() {
     setMenuLinkSendState("sending");
     try {
       const activePhone = formatPhoneDigits(
-        await extractActiveChatPhoneFast(activeChat) ||
         activeChat?.phone ||
         buildPhoneWithPrefix(guestPhone, guestPhonePrefix) ||
         guestPhone
@@ -7439,6 +7438,9 @@ export function BookingPanel() {
                     <span>{menuLinkSendState === "sending" ? "..." : "Меню"}</span>
                   </button>
                 </div>
+                {menuLinkSendState === "error" ? (
+                  <div className="gpb-send-error">Не удалось отправить меню. Проверьте, что чат WhatsApp открыт, и попробуйте еще раз.</div>
+                ) : null}
                 {sendState === "error" ? (
                   <div className="gpb-send-error">Не удалось отправить. Проверьте, что чат WhatsApp открыт, и попробуйте еще раз.</div>
                 ) : null}

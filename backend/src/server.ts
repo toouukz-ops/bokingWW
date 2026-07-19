@@ -82,8 +82,10 @@ const menuThumbnailQuality = 72;
 
 app.get("/uploads/thumb/*", async (request, reply) => {
   const params = request.params as { "*": string };
-  const sourcePath = `/uploads/${params["*"] ?? ""}`;
-  const thumbnailPath = `/uploads/thumb/${params["*"] ?? ""}.webp`;
+  const requestedPath = params["*"] ?? "";
+  const sourceSuffix = requestedPath.endsWith(".webp") ? requestedPath.slice(0, -5) : requestedPath;
+  const sourcePath = `/uploads/${sourceSuffix}`;
+  const thumbnailPath = `/uploads/thumb/${sourceSuffix}.webp`;
 
   const storedThumbnail = await getStoredMedia(thumbnailPath);
   if (storedThumbnail) {

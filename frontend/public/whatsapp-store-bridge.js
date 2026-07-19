@@ -84,7 +84,12 @@
       if (phone) return phone;
 
       if (headerTitle) {
-        const byTitle = chats.find((chat) => readTitle(chat) === headerTitle);
+        const normalizedHeaderTitle = cleanText(headerTitle).toLowerCase();
+        const byTitle = chats.find((chat) => {
+          const title = readTitle(chat).toLowerCase();
+          return title === normalizedHeaderTitle ||
+            Boolean(title && normalizedHeaderTitle && (title.includes(normalizedHeaderTitle) || normalizedHeaderTitle.includes(title)));
+        });
         const titlePhone = readId(byTitle);
         if (titlePhone) return titlePhone;
       }

@@ -18338,8 +18338,50 @@ function extractPhoneFromSelectedChat() {
 }
 
 function getSelectedWhatsAppChatElement() {
-  return Array.from(document.querySelectorAll<HTMLElement>('[aria-selected="true"], [data-testid="cell-frame-container"][aria-selected="true"]'))
-    .find((element) => isVisibleElement(element) && !element.closest('[role="dialog"]')) ?? null;
+  const explicitSelected = Array.from(document.querySelectorAll<HTMLElement>(
+    [
+      '#side [aria-selected="true"]',
+      '#side [aria-current="true"]',
+      '#side [data-testid="cell-frame-container"][aria-selected="true"]'
+    ].join(", ")
+  )).find((element) => isVisibleElement(element) && !element.closest('[role="dialog"]'));
+  if (explicitSelected) return explicitSelected;
+
+  const activeElementRow = document.activeElement?.closest<HTMLElement>(
+    '#side [role="listitem"], #side [role="row"], #side [data-testid="cell-frame-container"], #side [tabindex]'
+  );
+  if (activeElementRow && isVisibleElement(activeElementRow) && extractPhoneFromText(activeElementRow.innerText || activeElementRow.textContent || "")) {
+    return activeElementRow;
+  }
+
+  const activeTitle = getActiveChatDisplayName();
+  if (!activeTitle) return null;
+
+  return getVisibleWhatsAppChatRows()
+    .find((row) => {
+      const candidates = getContactNameCandidates(row);
+      return candidates.some((candidate) => normalizeExtractedText(candidate) === activeTitle) ||
+        normalizeExtractedText(row.innerText || row.textContent || "").includes(activeTitle);
+    }) ?? null;
+}
+
+function getVisibleWhatsAppChatRows() {
+  const sidebar = document.querySelector<HTMLElement>("#side");
+  if (!sidebar) return [];
+
+  return Array.from(sidebar.querySelectorAll<HTMLElement>(
+    [
+      '[data-testid="cell-frame-container"]',
+      '[role="listitem"]',
+      '[role="row"]'
+    ].join(", ")
+  ))
+    .map((element) => element.closest<HTMLElement>('[role="listitem"], [role="row"], [data-testid="cell-frame-container"]') ?? element)
+    .filter((element, index, list) =>
+      list.indexOf(element) === index &&
+      isVisibleElement(element) &&
+      !element.closest('[role="dialog"]')
+    );
 }
 
 function getContactNameCandidates(root?: HTMLElement | null) {

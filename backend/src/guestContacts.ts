@@ -28,9 +28,11 @@ export async function getGuestContact(phone: string): Promise<GuestContact | nul
 
 export async function saveGuestContact(contact: GuestContact): Promise<GuestContact> {
   const now = new Date();
+  const normalizedPhone = normalizeGuestPhone(contact.phone);
   const normalizedContact = {
     ...contact,
-    phone: normalizeGuestPhone(contact.phone)
+    phone: normalizedPhone,
+    appeal: normalizeGuestAppeal(contact.appeal, normalizedPhone)
   };
 
   await guestContacts.updateOne(
@@ -55,9 +57,10 @@ export async function deleteGuestContact(phone: string): Promise<void> {
 }
 
 function mapGuestContactDocument(document: GuestContactDocument): GuestContact {
+  const phone = normalizeGuestPhone(document.phone);
   return {
-    phone: normalizeGuestPhone(document.phone),
-    appeal: document.appeal,
+    phone,
+    appeal: normalizeGuestAppeal(document.appeal, phone),
     inquiryDate: document.inquiryDate
   };
 }
@@ -70,4 +73,16 @@ function normalizeGuestPhone(value: string) {
   if (/^7\d{10}$/.test(digits)) return `+${digits}`;
   if (/^\d{10}$/.test(digits)) return `+7${digits}`;
   return `+${digits}`;
+}
+
+function normalizeGuestAppeal(value: string, phone: string) {
+  const fallbackName = getGuestNameFallbackFromPhone(phone);
+  const trimmedValue = value.trim();
+  if (/^Гость\s+\d{4}$/i.test(trimmedValue) && fallbackName) return fallbackName;
+  return trimmedValue || fallbackName || phone;
+}
+
+function getGuestNameFallbackFromPhone(phone: string) {
+  const digits = normalizeGuestPhone(phone).replace(/\D/g, "");
+  return digits.length >= 4 ? `Гость ${digits.slice(-4)}` : "";
 }

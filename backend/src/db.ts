@@ -113,14 +113,25 @@ async function migrateLegacyGuestContacts() {
 
 async function repairMalformedKazakhstanGuestContacts() {
   const contacts = db.collection("guestContacts");
-  const malformedContacts = await contacts.find({ phone: /^\+70\d{9}$/ }, { maxTimeMS: 5000 }).toArray();
+  const malformedContacts = await contacts.find(
+    {
+      $or: [
+        { phone: /^\+70\d{9}$/ },
+        { appeal: /^Гость\s+\d{4}$/i }
+      ]
+    },
+    { maxTimeMS: 5000 }
+  ).toArray();
 
   for (const contact of malformedContacts) {
     const phone = typeof contact.phone === "string" ? normalizeGuestPhone(contact.phone) : "";
-    if (!phone || phone === contact.phone) continue;
+    if (!phone) continue;
+    const appeal = normalizeGuestAppeal(typeof contact.appeal === "string" ? contact.appeal : "", phone);
+    const hasChanges = phone !== contact.phone || appeal !== contact.appeal;
+    if (!hasChanges) continue;
 
     const existingContact = await contacts.findOne({ phone }, { maxTimeMS: 3000 });
-    if (existingContact) {
+    if (existingContact && String(existingContact._id) !== String(contact._id)) {
       await contacts.deleteOne({ _id: contact._id }, { maxTimeMS: 3000 });
       continue;
     }
@@ -130,6 +141,7 @@ async function repairMalformedKazakhstanGuestContacts() {
       {
         $set: {
           phone,
+          appeal,
           updatedAt: new Date()
         }
       },
@@ -146,4 +158,16 @@ function normalizeGuestPhone(value: string) {
   if (/^7\d{10}$/.test(digits)) return `+${digits}`;
   if (/^\d{10}$/.test(digits)) return `+7${digits}`;
   return `+${digits}`;
+}
+
+function normalizeGuestAppeal(value: string, phone: string) {
+  const fallbackName = getGuestNameFallbackFromPhone(phone);
+  const trimmedValue = value.trim();
+  if (/^Гость\s+\d{4}$/i.test(trimmedValue) && fallbackName) return fallbackName;
+  return trimmedValue || fallbackName || phone;
+}
+
+function getGuestNameFallbackFromPhone(phone: string) {
+  const digits = normalizeGuestPhone(phone).replace(/\D/g, "");
+  return digits.length >= 4 ? `Гость ${digits.slice(-4)}` : "";
 }

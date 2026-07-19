@@ -1112,10 +1112,11 @@ function mergeGuestContacts(currentValue: unknown, incomingValue: unknown): Gues
 }
 
 function normalizeGuestContact(contact: GuestContact): GuestContact {
+  const phone = normalizeGuestPhone(contact.phone);
   return {
     ...contact,
-    phone: normalizeGuestPhone(contact.phone),
-    appeal: contact.appeal?.trim() || normalizeGuestPhone(contact.phone),
+    phone,
+    appeal: normalizeGuestAppeal(contact.appeal, phone),
     inquiryDate: Number.isNaN(Date.parse(contact.inquiryDate)) ? new Date().toISOString() : contact.inquiryDate
   };
 }
@@ -1132,6 +1133,18 @@ function normalizeGuestPhone(value: string) {
 
 function normalizeGuestPhoneForLookup(value: string) {
   return normalizeGuestPhone(value).replace(/\D/g, "");
+}
+
+function normalizeGuestAppeal(value: string, phone: string) {
+  const fallbackName = getGuestNameFallbackFromPhone(phone);
+  const trimmedValue = value?.trim() ?? "";
+  if (/^Гость\s+\d{4}$/i.test(trimmedValue) && fallbackName) return fallbackName;
+  return trimmedValue || fallbackName || phone;
+}
+
+function getGuestNameFallbackFromPhone(phone: string) {
+  const digits = normalizeGuestPhone(phone).replace(/\D/g, "");
+  return digits.length >= 4 ? `Гость ${digits.slice(-4)}` : "";
 }
 
 function mergeRecords(currentValue: unknown, incomingValue: unknown) {

@@ -1330,6 +1330,16 @@ export function BookingPanel() {
       .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt))),
     [menuOrders]
   );
+  const kitchenWorkspaceOrders = useMemo(
+    () => [...menuOrders]
+      .filter((order) => order.status !== "cancelled")
+      .sort((left, right) => {
+        if (left.status === "done" && right.status !== "done") return 1;
+        if (left.status !== "done" && right.status === "done") return -1;
+        return String(right.createdAt).localeCompare(String(left.createdAt));
+      }),
+    [menuOrders]
+  );
   const archivedMenuOrders = useMemo(
     () => [...menuOrders]
       .filter((order) => order.status === "done" || order.status === "cancelled")
@@ -1345,8 +1355,8 @@ export function BookingPanel() {
     [menuOrderDialogTarget, menuOrders]
   );
   const selectedMenuOrder = useMemo(
-    () => menuOrders.find((order) => order.id === selectedMenuOrderId) ?? activeMenuOrders[0] ?? null,
-    [activeMenuOrders, menuOrders, selectedMenuOrderId]
+    () => menuOrders.find((order) => order.id === selectedMenuOrderId) ?? kitchenWorkspaceOrders[0] ?? null,
+    [kitchenWorkspaceOrders, menuOrders, selectedMenuOrderId]
   );
   const activeMenuOrderCount = activeMenuOrders.length;
   const objectGalleryMediaItems = useMemo(
@@ -4077,17 +4087,18 @@ export function BookingPanel() {
   function openMenuOrdersOverlay(orderId?: string) {
     if (orderId) {
       setSelectedMenuOrderId(orderId);
-    } else if (!selectedMenuOrderId && activeMenuOrders[0]) {
-      setSelectedMenuOrderId(activeMenuOrders[0].id);
+    } else if (!selectedMenuOrderId && kitchenWorkspaceOrders[0]) {
+      setSelectedMenuOrderId(kitchenWorkspaceOrders[0].id);
     }
     setIsMenuOrdersOverlayOpen(true);
   }
 
   async function markMenuOrderDone(order: MenuOrder) {
-    const archivedAt = new Date().toISOString();
-    await updateMenuOrder(order, { status: "done", archivedAt });
-    const nextActiveOrder = activeMenuOrders.find((item) => item.id !== order.id);
-    setSelectedMenuOrderId(nextActiveOrder?.id ?? "");
+    if (order.status === "done") {
+      await updateMenuOrder(order, { status: "sentToKitchen", archivedAt: "" });
+      return;
+    }
+    await updateMenuOrder(order, { status: "done", archivedAt: new Date().toISOString() });
   }
 
   async function restoreMenuOrder(order: MenuOrder) {
@@ -8269,8 +8280,9 @@ export function BookingPanel() {
 
       {isMenuOrdersOverlayOpen ? (
         <MenuOrdersWorkspaceOverlay
-          activeOrders={activeMenuOrders}
+          activeCount={activeMenuOrderCount}
           copyState={selectedMenuOrder ? menuOrderCopyState[`${selectedMenuOrder.id}:cook`] ?? "idle" : "idle"}
+          orders={kitchenWorkspaceOrders}
           selectedOrder={selectedMenuOrder}
           selectedOrderId={selectedMenuOrderId}
           onClose={() => setIsMenuOrdersOverlayOpen(false)}
@@ -8953,8 +8965,9 @@ function PaymentMethodRequiredOverlay({
 }
 
 function MenuOrdersWorkspaceOverlay({
-  activeOrders,
+  activeCount,
   copyState,
+  orders,
   selectedOrder,
   selectedOrderId,
   onClose,
@@ -8963,8 +8976,9 @@ function MenuOrdersWorkspaceOverlay({
   onMarkDone,
   onSelect
 }: {
-  activeOrders: MenuOrder[];
+  activeCount: number;
   copyState: "idle" | "copied" | "error";
+  orders: MenuOrder[];
   selectedOrder: MenuOrder | null;
   selectedOrderId: string;
   onClose: () => void;
@@ -8985,7 +8999,7 @@ function MenuOrdersWorkspaceOverlay({
         <header className="gpb-create-header">
           <div>
             <strong>Заказы кухни</strong>
-            <span>{activeOrders.length ? `${activeOrders.length} активных` : "Активных заказов нет"}</span>
+            <span>{activeCount ? `${activeCount} активных` : "Активных заказов нет"}</span>
           </div>
           <button type="button" onClick={onClose} title="Закрыть">
             <X size={18} />
@@ -8993,17 +9007,20 @@ function MenuOrdersWorkspaceOverlay({
         </header>
         <div className="gpb-menu-orders-workspace-body">
           <aside className="gpb-menu-orders-workspace-list">
-            {activeOrders.length ? activeOrders.map((order) => (
-              <button
-                className={order.id === (selectedOrderId || selectedOrder?.id) ? "is-active" : ""}
+            {orders.length ? orders.map((order) => (
+              <article
+                className={`gpb-menu-orders-workspace-list-row ${order.id === (selectedOrderId || selectedOrder?.id) ? "is-active" : ""} ${order.status === "done" ? "is-done" : ""}`}
                 key={order.id}
-                type="button"
-                onClick={() => onSelect(order.id)}
               >
-                <strong>{order.guestName}</strong>
-                <span>{formatMenuOrderReadyTime(order)} · {formatPrice(order.total)}</span>
-                {order.kitchenSentAt ? <em>Повару: {formatElapsedSince(order.kitchenSentAt)}</em> : <em>{getMenuOrderStatusLabel(order.status)}</em>}
-              </button>
+                <button type="button" onClick={() => onSelect(order.id)}>
+                  <strong>{order.guestName}</strong>
+                  <span>{formatMenuOrderReadyTime(order)} · {formatPrice(order.total)}</span>
+                  {order.status === "done" ? <em>выдан</em> : order.kitchenSentAt ? <em>Повару: {formatElapsedSince(order.kitchenSentAt)}</em> : <em>{getMenuOrderStatusLabel(order.status)}</em>}
+                </button>
+                <button className="is-danger" type="button" onClick={() => onDelete(order)} title="Удалить заказ">
+                  <Trash2 size={13} />
+                </button>
+              </article>
             )) : (
               <p>Новых заказов пока нет.</p>
             )}
@@ -9026,16 +9043,13 @@ function MenuOrdersWorkspaceOverlay({
                 ) : null}
                 <textarea value={draftText} onChange={(event) => setDraftText(event.target.value)} />
                 <div className="gpb-menu-orders-workspace-actions">
-                  <button className={`gpb-primary ${copyState === "copied" ? "is-done" : ""}`} type="button" onClick={() => onCopyCook(selectedOrder, draftText)}>
+                  <button className={`gpb-secondary ${copyState === "copied" ? "is-done" : ""}`} type="button" onClick={() => onCopyCook(selectedOrder, draftText)}>
                     <Copy size={15} />
                     <span>{copyState === "copied" ? "Скопировано" : copyState === "error" ? "Ошибка" : "Копировать"}</span>
                   </button>
-                  <button className="gpb-primary" type="button" onClick={() => onMarkDone(selectedOrder)}>
+                  <button className={`gpb-secondary ${selectedOrder.status === "done" ? "is-done" : ""}`} type="button" onClick={() => onMarkDone(selectedOrder)}>
                     <Check size={15} />
                     <span>Выдан</span>
-                  </button>
-                  <button className="gpb-secondary is-danger" type="button" onClick={() => onDelete(selectedOrder)} title="Удалить заказ">
-                    <Trash2 size={15} />
                   </button>
                 </div>
               </>

@@ -9898,38 +9898,69 @@ body.gpb-reservation-split-resizing {
 .gpb-menu-orders-workspace-body {
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr);
-  gap: 8px;
+  gap: 14px;
   height: calc(100% - 88px);
   min-height: 0;
   overflow: hidden;
+  padding-top: 10px;
 }
 
 .gpb-menu-orders-workspace-list {
   display: grid;
   align-content: start;
-  gap: 6px;
+  gap: 8px;
   overflow: auto;
   border-right: 1px solid #d8dee5;
-  padding-right: 8px;
+  padding: 0 12px 0 0;
 }
 
-.gpb-menu-orders-workspace-list button {
+.gpb-menu-orders-workspace-list-row {
   display: grid;
-  gap: 2px;
-  width: 100%;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 6px;
+  align-items: stretch;
   border: 1px solid #d8dee5;
   border-radius: 7px;
   background: #ffffff;
+  padding: 5px;
+}
+
+.gpb-menu-orders-workspace-list-row.is-active {
+  border-color: #0f6b57;
+  background: #eef8f4;
+}
+
+.gpb-menu-orders-workspace-list-row.is-done {
+  opacity: 0.55;
+  background: #f7f9fb;
+}
+
+.gpb-menu-orders-workspace-list-row > button:first-child {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
   color: #25313d;
   cursor: pointer;
   font: inherit;
   text-align: left;
-  padding: 7px 8px;
+  padding: 5px 4px;
 }
 
-.gpb-menu-orders-workspace-list button.is-active {
-  border-color: #0f6b57;
-  background: #eef8f4;
+.gpb-menu-orders-workspace-list-row > button.is-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-width: 32px;
+  border: 1px solid #f3b4ad;
+  border-radius: 6px;
+  background: #fff8f7;
+  color: #b42318;
+  cursor: pointer;
+  padding: 0;
 }
 
 .gpb-menu-orders-workspace-list strong {
@@ -9958,10 +9989,11 @@ body.gpb-reservation-split-resizing {
 .gpb-menu-orders-workspace-editor {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 10px;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  padding: 0 10px 0 0;
 }
 
 .gpb-menu-orders-workspace-summary {
@@ -9973,7 +10005,7 @@ body.gpb-reservation-split-resizing {
   border-radius: 7px;
   background: #f8fbfd;
   min-height: 54px;
-  padding: 7px 9px;
+  padding: 10px 12px;
 }
 
 .gpb-menu-orders-workspace-summary strong {
@@ -10027,10 +10059,11 @@ body.gpb-reservation-split-resizing {
 
 .gpb-menu-orders-workspace-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr) 40px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr);
   flex: 0 0 auto;
-  gap: 7px;
+  gap: 10px;
   min-width: 0;
+  padding-top: 2px;
 }
 
 .gpb-menu-orders-workspace-actions button {
@@ -10050,12 +10083,10 @@ body.gpb-reservation-split-resizing {
   white-space: nowrap;
 }
 
-.gpb-menu-orders-workspace-actions button:last-child {
-  padding: 0;
-}
-
 .gpb-menu-orders-workspace-actions .is-done {
+  border-color: #0f6b57;
   background: #0f7a63;
+  color: #ffffff;
 }
 
 .gpb-menu-orders-workspace-empty {

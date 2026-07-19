@@ -9015,7 +9015,10 @@ function MenuOrdersWorkspaceOverlay({
                 <button type="button" onClick={() => onSelect(order.id)}>
                   <strong>{order.guestName}</strong>
                   <span>{formatMenuOrderReadyTime(order)} · {formatPrice(order.total)}</span>
-                  {order.status === "done" ? <em>выдан</em> : order.kitchenSentAt ? <em>Повару: {formatElapsedSince(order.kitchenSentAt)}</em> : <em>{getMenuOrderStatusLabel(order.status)}</em>}
+                  <em className={`gpb-menu-order-status-chip ${getMenuOrderStatusChipClass(order)}`}>
+                    {order.status === "done" ? "выдан" : order.kitchenSentAt ? "принят" : getMenuOrderStatusLabel(order.status)}
+                  </em>
+                  {order.status !== "done" && order.kitchenSentAt ? <small>Повару: {formatElapsedSince(order.kitchenSentAt)}</small> : null}
                 </button>
                 <button className="is-danger" type="button" onClick={() => onDelete(order)} title="Удалить заказ">
                   <Trash2 size={13} />
@@ -24853,6 +24856,12 @@ function getMenuOrderStatusLabel(status: MenuOrder["status"]) {
   if (status === "done") return "закрыт";
   if (status === "cancelled") return "отменен";
   return "новый";
+}
+
+function getMenuOrderStatusChipClass(order: MenuOrder) {
+  if (order.status === "done") return "is-done";
+  if (order.kitchenSentAt || order.status === "sentToKitchen" || order.status === "confirmed" || order.status === "cooking" || order.status === "ready") return "is-accepted";
+  return "is-new";
 }
 
 function formatAnalyticsMoney(price: number) {

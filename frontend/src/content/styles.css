@@ -9906,23 +9906,25 @@ body.gpb-reservation-split-resizing {
 }
 
 .gpb-menu-orders-workspace-list {
+  position: relative;
   display: grid;
   align-content: start;
   gap: 8px;
   overflow: auto;
   border-right: 1px solid #d8dee5;
-  padding: 0 12px 0 0;
+  padding: 0 14px 0 14px;
 }
 
 .gpb-menu-orders-workspace-list-row {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
   align-items: stretch;
   border: 1px solid #d8dee5;
   border-radius: 7px;
   background: #ffffff;
-  padding: 5px;
+  padding: 6px 38px 6px 6px;
 }
 
 .gpb-menu-orders-workspace-list-row.is-active {
@@ -9937,7 +9939,7 @@ body.gpb-reservation-split-resizing {
 
 .gpb-menu-orders-workspace-list-row > button:first-child {
   display: grid;
-  gap: 2px;
+  gap: 4px;
   width: 100%;
   min-width: 0;
   border: 0;
@@ -9946,15 +9948,19 @@ body.gpb-reservation-split-resizing {
   cursor: pointer;
   font: inherit;
   text-align: left;
-  padding: 5px 4px;
+  padding: 4px 3px;
 }
 
 .gpb-menu-orders-workspace-list-row > button.is-danger {
+  position: absolute;
+  top: 7px;
+  right: 7px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  min-width: 32px;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
   border: 1px solid #f3b4ad;
   border-radius: 6px;
   background: #fff8f7;
@@ -9974,6 +9980,7 @@ body.gpb-reservation-split-resizing {
 
 .gpb-menu-orders-workspace-list span,
 .gpb-menu-orders-workspace-list em,
+.gpb-menu-orders-workspace-list small,
 .gpb-menu-orders-workspace-list p {
   margin: 0;
   color: #64707d;
@@ -9982,7 +9989,33 @@ body.gpb-reservation-split-resizing {
   font-weight: 800;
 }
 
-.gpb-menu-orders-workspace-list em {
+.gpb-menu-orders-workspace-list small {
+  color: #7a8793;
+}
+
+.gpb-menu-orders-workspace-list .gpb-menu-order-status-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 950;
+  line-height: 1;
+  padding: 4px 7px;
+}
+
+.gpb-menu-order-status-chip.is-new {
+  background: #fff1f0;
+  color: #b42318;
+}
+
+.gpb-menu-order-status-chip.is-accepted {
+  background: #fff4e5;
+  color: #9a4f00;
+}
+
+.gpb-menu-order-status-chip.is-done {
+  background: #e8f7f1;
   color: #0f6b57;
 }
 

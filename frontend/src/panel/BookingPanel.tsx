@@ -2141,10 +2141,6 @@ export function BookingPanel() {
     let isCancelled = false;
     const restoreVersion = draftRestoreVersionRef.current + 1;
     draftRestoreVersionRef.current = restoreVersion;
-    const previousChat = activeChatBeforeRestoreRef.current;
-    if (previousChat && previousChat.id !== activeChat.id && !isRestoringChatDraftRef.current) {
-      void saveChatDraftForChat(previousChat);
-    }
     activeChatBeforeRestoreRef.current = activeChat;
     isRestoringChatDraftRef.current = true;
     const appliedBeforeRestore = applyStoredGuestContactForActiveChat(activeChat);
@@ -5451,7 +5447,7 @@ export function BookingPanel() {
 
   function getContactActionLabel() {
     const hasPhoneForSave = Boolean(getCompleteContactPhoneForSave());
-    if (!isManualPhoneEntryMode && (!contactExtracted || !hasPhoneForSave)) return "Извлечь";
+    if (!isManualPhoneEntryMode && !hasPhoneForSave) return "Извлечь";
     if (contactSaveState === "saving") return "Сохраняю...";
     if (contactSaveState === "saved") return "Сохранено";
     if (contactSaveState === "error") return "Ошибка";
@@ -5780,26 +5776,12 @@ export function BookingPanel() {
     });
     closeWhatsAppProfilePanels();
 
-    const phoneChat = createActiveChatFromProfile({ name: contactName || normalizedPhone, phone: normalizedPhone });
-    const chats = [activeChat, phoneChat].filter((chat, index, list): chat is ActiveChat =>
-      Boolean(chat) && list.findIndex((item) => item?.id === chat?.id) === index
-    );
-    if (phoneChat) {
-      setActiveChat(phoneChat);
-    }
-    if (chats.length) {
-      const draftPatch = {
-        chatStartedAt: chatStartedAt || new Date().toISOString(),
-        guestFirstName: contactName,
-        manualSaleOpen: false,
-        phone: normalizedPhone
-      };
-      void Promise.all(chats.map((chat) => saveContactIdentityDraftForChat(chat, draftPatch)));
-    }
     setBookingNewChatOpen(false);
     applyBookingContactFromPhone(normalizedPhone);
     setGuestFirstName(contactName);
-    void syncActiveReservationGuestName(contactName, normalizedPhone);
+    if (lastReservation?.id) {
+      void syncActiveReservationGuestName(contactName, normalizedPhone);
+    }
     setContactExtracted(true);
     setContactSavedInWhatsApp(Boolean(databaseSaved || whatsappSaved));
     setContactSaveState(databaseSaved ? "saved" : "error");

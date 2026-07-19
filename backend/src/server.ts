@@ -6,6 +6,7 @@ import { mkdir } from "node:fs/promises";
 import { stat } from "node:fs/promises";
 import {
   claimActiveDialogData,
+  deleteMenuOrderData,
   deleteReservationData,
   deleteChatDraftData,
   deleteRoomHoldData,
@@ -647,6 +648,13 @@ app.put("/api/menu-orders/:id", async (request) => {
   const savedOrder = await saveMenuOrderData(id, order);
   broadcastRealtime("menu-orders.changed", { action: "upsert", order: savedOrder });
   return savedOrder;
+});
+
+app.delete("/api/menu-orders/:id", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  await deleteMenuOrderData(id);
+  broadcastRealtime("menu-orders.changed", { action: "delete", id: decodeURIComponent(id) });
+  return reply.status(204).send();
 });
 
 app.get("/api/debug/logs", async () => {

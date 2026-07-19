@@ -48,6 +48,7 @@ import {
   claimActiveDialog,
   cropRoomMedia,
   deleteObjectGalleryMedia,
+  deleteMenuOrder,
   deleteGuestContact,
   deleteChatBookingDraft,
   deleteReservation,
@@ -1037,6 +1038,8 @@ export function BookingPanel() {
   const [menuLinkSendState, setMenuLinkSendState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [menuOrderCopyState, setMenuOrderCopyState] = useState<Record<string, "idle" | "copied" | "error">>({});
   const [menuOrderDialogTarget, setMenuOrderDialogTarget] = useState<{ orderId: string; audience: "admin" | "cook" } | null>(null);
+  const [isGuestMenuOrdersOpen, setIsGuestMenuOrdersOpen] = useState(false);
+  const [isRecentMenuOrdersOpen, setIsRecentMenuOrdersOpen] = useState(false);
   const [menuUploadItemId, setMenuUploadItemId] = useState("");
   const [menuUploadError, setMenuUploadError] = useState("");
   const [quickReplyButtons, setQuickReplyButtons] = useState<QuickReplyButton[]>([]);
@@ -1687,6 +1690,10 @@ export function BookingPanel() {
             ? currentOrders.map((item) => item.id === order.id ? order : item)
             : [order, ...currentOrders]
         );
+      }
+      if (payload.action === "delete" && typeof payload.id === "string") {
+        setMenuOrders((currentOrders) => currentOrders.filter((order) => order.id !== payload.id));
+        setMenuOrderDialogTarget((currentTarget) => currentTarget?.orderId === payload.id ? null : currentTarget);
       }
     });
 
@@ -4035,6 +4042,16 @@ export function BookingPanel() {
     window.setTimeout(() => {
       setMenuOrderCopyState((current) => ({ ...current, [`${order.id}:${audience}`]: "idle" }));
     }, 1800);
+  }
+
+  async function removeMenuOrder(order: MenuOrder) {
+    setMenuOrders((currentOrders) => currentOrders.filter((item) => item.id !== order.id));
+    setMenuOrderDialogTarget((currentTarget) => currentTarget?.orderId === order.id ? null : currentTarget);
+    try {
+      await deleteMenuOrder(order.id);
+    } catch {
+      setMenuOrders((currentOrders) => currentOrders.some((item) => item.id === order.id) ? currentOrders : [order, ...currentOrders]);
+    }
   }
 
   async function sendRoomPhotoFromCard(room: Room) {
@@ -7968,34 +7985,50 @@ export function BookingPanel() {
                 </div>
                 {currentChatMenuOrders.length ? (
                   <div className="gpb-addon-sales-block gpb-guest-menu-orders-block">
-                    <div className="gpb-addon-sales-head">
+                    <button className="gpb-guest-menu-orders-toggle" type="button" onClick={() => setIsGuestMenuOrdersOpen((current) => !current)}>
                       <strong>Заказы гостя</strong>
-                      <span>{currentChatMenuOrders.length} активн.</span>
-                    </div>
-                    <div className="gpb-guest-menu-orders-list">
+                      <span>{currentChatMenuOrders.length} · {formatPrice(currentChatMenuOrders.reduce((sum, order) => sum + order.total, 0))}</span>
+                      <b>{isGuestMenuOrdersOpen ? "Свернуть" : "Открыть"}</b>
+                    </button>
+                    {isGuestMenuOrdersOpen ? (
+                      <div className="gpb-guest-menu-orders-list">
                       {currentChatMenuOrders.map((order) => (
                         <article className={`gpb-guest-menu-order-row is-${order.status}`} key={order.id}>
-                          <div>
-                            <strong>{formatPrice(order.total)}</strong>
-                            <span>{formatMenuOrderReadyTime(order)} · {getMenuOrderStatusLabel(order.status)}</span>
+                          <div className="gpb-guest-menu-order-preview">
+                            <MenuOrderPreviewImage menuItems={menuItems} order={order} />
                           </div>
-                          <div className="gpb-guest-menu-order-items">
+                          <div className="gpb-guest-menu-order-info">
+                            <strong>{order.guestName}</strong>
+                            <span>{formatReservationPhone(order.phone) || "телефон не указан"} · {formatMenuOrderReadyTime(order)}</span>
+                          </div>
+                          <div className="gpb-guest-menu-order-items" title={order.items.map((item) => `${item.title} x${item.quantity}`).join(", ")}>
                             {order.items.slice(0, 3).map((item) => (
                               <span key={item.id}>{item.title} x{item.quantity}</span>
                             ))}
                             {order.items.length > 3 ? <span>+{order.items.length - 3}</span> : null}
                           </div>
+                          <strong className="gpb-guest-menu-order-total">{formatPrice(order.total)}</strong>
                           <div className="gpb-guest-menu-order-actions">
-                            <button type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "cook" })}>
+                            <button type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "cook" })} title="Повару">
                               Повару
                             </button>
-                            <button type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "admin" })}>
+                            <button type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "admin" })} title="Админу">
                               Админу
+                            </button>
+                            <button className="is-danger" type="button" onClick={() => void removeMenuOrder(order)} title="Удалить заказ">
+                              <Trash2 size={14} />
                             </button>
                           </div>
                         </article>
                       ))}
-                    </div>
+                      </div>
+                    ) : (
+                      <div className="gpb-guest-menu-orders-collapsed">
+                        {currentChatMenuOrders.slice(0, 2).map((order) => (
+                          <span key={order.id}>{formatMenuOrderReadyTime(order)} · {formatPrice(order.total)} · {formatReservationPhone(order.phone) || "без телефона"}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ) : null}
               </>
@@ -8169,23 +8202,29 @@ export function BookingPanel() {
 
       {recentMenuOrders.length ? (
         <section className="gpb-section gpb-menu-orders-section">
-          <div className="gpb-menu-orders-head">
+          <button className="gpb-menu-orders-head" type="button" onClick={() => setIsRecentMenuOrdersOpen((current) => !current)}>
             <div>
               <strong>Заказы меню</strong>
-              <span>Последние заявки с интерактивного меню</span>
+              <span>{recentMenuOrders.length} последних · {formatPrice(recentMenuOrders.reduce((sum, order) => sum + order.total, 0))}</span>
             </div>
-            <button className="gpb-secondary" type="button" onClick={() => void loadMenuOrders()}>
+            <b>{isRecentMenuOrdersOpen ? "Свернуть" : "Открыть"}</b>
+          </button>
+          {isRecentMenuOrdersOpen ? (
+            <>
+            <button className="gpb-secondary gpb-menu-orders-refresh" type="button" onClick={() => void loadMenuOrders()}>
               <RefreshCw size={14} />
               <span>Обновить</span>
             </button>
-          </div>
-          <div className="gpb-menu-orders-list">
+            <div className="gpb-menu-orders-list">
             {recentMenuOrders.map((order) => (
               <article className={`gpb-menu-order-card is-${order.status}`} key={order.id}>
                 <div className="gpb-menu-order-main">
+                  <div className="gpb-menu-order-preview">
+                    <MenuOrderPreviewImage menuItems={menuItems} order={order} />
+                  </div>
                   <div>
                     <strong>{order.guestName}</strong>
-                    <span>{order.roomNumbers.length ? `Номер ${order.roomNumbers.join(", ")}` : "номер не указан"} · {formatMenuOrderReadyTime(order)}</span>
+                    <span>{formatReservationPhone(order.phone) || "телефон не указан"} · {order.roomNumbers.length ? `Номер ${order.roomNumbers.join(", ")}` : "номер не указан"} · {formatMenuOrderReadyTime(order)}</span>
                   </div>
                   <b>{formatPrice(order.total)}</b>
                 </div>
@@ -8209,10 +8248,16 @@ export function BookingPanel() {
                     <Copy size={14} />
                     <span>Админу</span>
                   </button>
+                  <button className="gpb-secondary is-danger" type="button" onClick={() => void removeMenuOrder(order)} title="Удалить заказ">
+                    <Trash2 size={14} />
+                    <span>Удалить</span>
+                  </button>
                 </div>
               </article>
             ))}
-          </div>
+            </div>
+            </>
+          ) : null}
         </section>
       ) : null}
 
@@ -8889,6 +8934,18 @@ function PaymentMethodRequiredOverlay({
       </div>
     </div>
   );
+}
+
+function MenuOrderPreviewImage({ menuItems, order }: { menuItems: MenuItem[]; order: MenuOrder }) {
+  const previewPath = order.items
+    .map((orderItem) => menuItems.find((menuItem) => menuItem.id === orderItem.menuItemId)?.photoPath || "")
+    .find(Boolean);
+
+  if (!previewPath) {
+    return <Utensils size={18} />;
+  }
+
+  return <MediaImage alt="Заказ меню" path={previewPath} />;
 }
 
 function MenuOrderSendDialog({

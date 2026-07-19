@@ -84,6 +84,10 @@ export async function saveMenuOrderData(id: string, order: Record<string, unknow
   };
 }
 
+export async function deleteMenuOrderData(id: string) {
+  await menuOrders.deleteOne({ id });
+}
+
 export async function listExpenseCategories() {
   return expenseCategories.find().sort({ createdAt: 1 }).toArray();
 }

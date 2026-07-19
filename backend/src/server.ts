@@ -331,8 +331,6 @@ function buildPublicMenuPage(reservationId: string) {
     .cart-line { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 9px 0; border-bottom: 1px solid #eef1f3; }
     .cart-line small { color: #637080; }
     .form { display: grid; gap: 10px; margin-top: 12px; }
-    .guest-fields { display: grid; gap: 10px; }
-    .guest-fields[hidden] { display: none; }
     label { display: grid; gap: 5px; font-size: 13px; font-weight: 800; color: #495667; }
     input, textarea, select { width: 100%; border: 1px solid #cfd8df; border-radius: 7px; min-height: 42px; padding: 9px 10px; font: inherit; background: white; }
     textarea { min-height: 74px; resize: vertical; }
@@ -360,11 +358,6 @@ function buildPublicMenuPage(reservationId: string) {
         <div id="cart"></div>
         <div class="form">
           <label>Время готовности<input id="readyTime" type="time"></label>
-          <div class="guest-fields" id="guestFields" hidden>
-            <label>Имя<input id="guestName" placeholder="Ваше имя"></label>
-            <label>Телефон<input id="guestPhone" placeholder="+7 ..."></label>
-            <label>Номер / столик<input id="guestRoom" placeholder="Например: 109 или столик"></label>
-          </div>
           <label>Как подать заказ</label>
           <div class="toggle">
             <button type="button" class="active" id="dineIn">Подать на месте</button>
@@ -380,6 +373,9 @@ function buildPublicMenuPage(reservationId: string) {
   </div>
   <script>
     const reservationId = "${safeReservationId}";
+    const menuParams = new URLSearchParams(window.location.search);
+    const menuGuestName = (menuParams.get("name") || "").trim();
+    const menuGuestPhone = (menuParams.get("phone") || "").trim();
     const state = { items: [], reservation: null, cart: {}, servingMode: "dine-in" };
     const money = (value) => new Intl.NumberFormat("ru-RU").format(value || 0) + " тг";
     const today = () => new Date().toISOString().slice(0, 10);
@@ -393,7 +389,7 @@ function buildPublicMenuPage(reservationId: string) {
       const guest = document.getElementById("guest");
       const r = state.reservation || {};
       const tags = [
-        r.guestName || "",
+        r.guestName || menuGuestName || "",
         (r.roomNumbers || []).length ? "Номер " + r.roomNumbers.join(", ") : "",
         r.checkIn ? "Заезд " + r.checkIn : ""
       ].filter(Boolean);
@@ -449,10 +445,9 @@ function buildPublicMenuPage(reservationId: string) {
         return;
       }
       const r = state.reservation || {};
-      const guestName = r.guestName || document.getElementById("guestName").value.trim() || "Гость";
-      const phone = r.phone || document.getElementById("guestPhone").value.trim();
-      const guestRoom = document.getElementById("guestRoom").value.trim();
-      const roomNumbers = (r.roomNumbers || []).length ? r.roomNumbers : (guestRoom ? [guestRoom] : []);
+      const guestName = r.guestName || menuGuestName || "Гость";
+      const phone = r.phone || menuGuestPhone;
+      const roomNumbers = r.roomNumbers || [];
       const order = {
         source: reservationId ? "reservation-link" : "qr",
         reservationId,
@@ -491,7 +486,6 @@ function buildPublicMenuPage(reservationId: string) {
         const data = await response.json();
         state.items = data.menuItems || [];
         state.reservation = data.reservation || null;
-        document.getElementById("guestFields").hidden = Boolean(state.reservation);
         document.getElementById("intro").textContent = data.introText || document.getElementById("intro").textContent;
         renderGuest();
         renderMenu();

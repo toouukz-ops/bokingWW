@@ -3909,18 +3909,24 @@ export function BookingPanel() {
       )[0] ?? null;
   }
 
-  function buildReservationMenuLink(reservation?: Reservation | null) {
-    return reservation ? `${PUBLIC_MENU_BASE_URL}/menu/r/${encodeURIComponent(reservation.id)}` : `${PUBLIC_MENU_BASE_URL}/menu`;
+  function buildReservationMenuLink(reservation?: Reservation | null, guestIdentity?: { name: string; phone: string }) {
+    if (reservation) return `${PUBLIC_MENU_BASE_URL}/menu/r/${encodeURIComponent(reservation.id)}`;
+
+    const params = new URLSearchParams();
+    if (guestIdentity?.name) params.set("name", guestIdentity.name);
+    if (guestIdentity?.phone) params.set("phone", guestIdentity.phone);
+    const query = params.toString();
+    return `${PUBLIC_MENU_BASE_URL}/menu${query ? `?${query}` : ""}`;
   }
 
-  function buildReservationMenuInvitation(reservation?: Reservation | null) {
+  function buildReservationMenuInvitation(reservation?: Reservation | null, guestIdentity?: { name: string; phone: string }) {
     return [
       "Меню Green Pine Burabay",
       "",
       "Не тратьте время на поиск еды. Сделайте заказ заранее, и к вашему приезду в гостиницу еда будет готова.",
       "Можно выбрать время готовности и способ подачи: подать на месте или упаковать с собой.",
       "",
-      buildReservationMenuLink(reservation)
+      buildReservationMenuLink(reservation, guestIdentity)
     ].join("\n");
   }
 
@@ -3930,7 +3936,17 @@ export function BookingPanel() {
     suppressActiveChatSyncRef.current = true;
     setMenuLinkSendState("sending");
     try {
-      const sent = await sendTextToActiveWhatsAppChat(buildReservationMenuInvitation(reservation));
+      const activePhone = formatPhoneDigits(
+        await extractActiveChatPhoneFast(activeChat) ||
+        activeChat?.phone ||
+        buildPhoneWithPrefix(guestPhone, guestPhonePrefix) ||
+        guestPhone
+      );
+      const guestIdentity = reservation ? undefined : {
+        name: getGuestNameFallbackFromPhone(activePhone) || "Гость",
+        phone: activePhone
+      };
+      const sent = await sendTextToActiveWhatsAppChat(buildReservationMenuInvitation(reservation, guestIdentity));
       if (sent) await markCatalogStatus("price-sent");
       setMenuLinkSendState(sent ? "sent" : "error");
     } catch {

@@ -2507,6 +2507,7 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-workflow-step {
+  position: relative;
   border: 2px solid #d8dee5;
   border-radius: 10px;
   background: #ffffff;
@@ -2766,6 +2767,39 @@ body.gpb-booking-panel-open #app {
   cursor: not-allowed;
 }
 
+.gpb-contact-lookup-notice {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 28px;
+  margin-top: 8px;
+  border: 1px solid #cfd6dd;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #25313d;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.25;
+  padding: 6px 8px;
+}
+
+.gpb-contact-lookup-notice.is-success {
+  border-color: #b7d8cc;
+  background: #f2fbf7;
+  color: #0f6b57;
+}
+
+.gpb-contact-lookup-notice.is-warning {
+  border-color: #f6c27a;
+  background: #fff7ed;
+  color: #9a4a12;
+}
+
+.gpb-contact-lookup-notice.is-error {
+  border-color: #f2aaa3;
+  background: #fff1f0;
+  color: #b42318;
+}
+
 .gpb-active-dialog-status {
   display: inline-flex;
   align-items: center;
@@ -2800,6 +2834,73 @@ body.gpb-booking-panel-open #app {
 
 .gpb-active-dialog-status button:hover {
   background: rgba(255, 255, 255, 0.72);
+}
+
+.gpb-contact-database-status {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(360px, 50%);
+  min-height: 28px;
+  border: 1px solid #cfd6dd;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #25313d;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.15;
+  padding: 5px 8px;
+  text-align: right;
+  box-shadow: 0 1px 2px rgba(22, 32, 42, 0.06);
+  white-space: nowrap;
+}
+
+.gpb-contact-database-status strong {
+  overflow: hidden;
+  color: #667381;
+  font-size: 10px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gpb-contact-database-status strong::before {
+  content: "· ";
+  color: currentColor;
+}
+
+.gpb-contact-database-status.is-saved {
+  border-color: #b7d8cc;
+  background: #f2fbf7;
+  color: #0f6b57;
+}
+
+.gpb-contact-database-status.is-missing {
+  border-color: #f2aaa3;
+  background: #fff1f0;
+  color: #b42318;
+}
+
+.gpb-contact-database-status.is-warning {
+  border-color: #f6c27a;
+  background: #fff7ed;
+  color: #9a4a12;
+}
+
+.gpb-contact-database-status.is-pending {
+  border-color: #f6c27a;
+  background: #fff7ed;
+  color: #9a4a12;
+}
+
+.gpb-contact-database-status.is-checking,
+.gpb-contact-database-status.is-empty {
+  border-color: #cfd6dd;
+  background: #f8fafc;
+  color: #5d6874;
 }
 
 .gpb-field-with-button > input:first-child:last-of-type {

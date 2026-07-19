@@ -17,7 +17,7 @@ interface GuestContactDocument extends GuestContact {
 const guestContacts = db.collection<GuestContactDocument>("guestContacts");
 
 export async function listGuestContacts(): Promise<GuestContact[]> {
-  const documents = await guestContacts.find().sort({ inquiryDate: -1 }).toArray();
+  const documents = await guestContacts.find({}, { maxTimeMS: 5000 }).sort({ inquiryDate: -1 }).limit(5000).toArray();
   return documents.map(mapGuestContactDocument);
 }
 
@@ -39,14 +39,14 @@ export async function saveGuestContact(contact: GuestContact): Promise<GuestCont
         createdAt: now
       }
     },
-    { upsert: true }
+    { upsert: true, maxTimeMS: 5000 }
   );
 
   return normalizedContact;
 }
 
 export async function deleteGuestContact(phone: string): Promise<void> {
-  await guestContacts.deleteOne({ phone: normalizeGuestPhone(phone) });
+  await guestContacts.deleteOne({ phone: normalizeGuestPhone(phone) }, { maxTimeMS: 5000 });
 }
 
 function mapGuestContactDocument(document: GuestContactDocument): GuestContact {

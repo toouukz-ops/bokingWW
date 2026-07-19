@@ -5,6 +5,7 @@ const LOCAL_ROOMS_STORAGE_KEY = "gpb-booking-rooms";
 const LOCAL_RESERVATIONS_STORAGE_KEY = "gpb-booking-reservations";
 const LOCAL_PAYMENT_SETTINGS_STORAGE_KEY = "gpb-payment-settings";
 const LOCAL_CHAT_DRAFTS_STORAGE_KEY = "gpb-chat-booking-drafts";
+const LOCAL_GUEST_CONTACTS_STORAGE_KEY = "gpb-guest-contacts";
 const LOCAL_EXPENSE_CATEGORIES_STORAGE_KEY = "gpb-expense-categories";
 const LOCAL_EXPENSE_ENTRIES_STORAGE_KEY = "gpb-expense-entries";
 const LOCAL_BACKUP_KEYS = [
@@ -12,6 +13,7 @@ const LOCAL_BACKUP_KEYS = [
   LOCAL_RESERVATIONS_STORAGE_KEY,
   LOCAL_PAYMENT_SETTINGS_STORAGE_KEY,
   LOCAL_CHAT_DRAFTS_STORAGE_KEY,
+  LOCAL_GUEST_CONTACTS_STORAGE_KEY,
   LOCAL_EXPENSE_CATEGORIES_STORAGE_KEY,
   LOCAL_EXPENSE_ENTRIES_STORAGE_KEY
 ] as const;
@@ -141,29 +143,38 @@ export async function getAiReplySuggestions(payload: {
 }
 
 export async function getGuestContacts(): Promise<GuestContact[]> {
-  const response = await fetch(`${API_BASE_URL}/api/guest-contacts`);
-  if (!response.ok) {
-    throw new Error(`Guest contacts request failed: ${response.status}`);
+  const localContacts = await getLocalGuestContacts();
+  if (localContacts.length) {
+    void refreshGuestContactsFromServer(localContacts);
+    return localContacts;
   }
 
-  return response.json();
+  return refreshGuestContactsFromServer(localContacts);
 }
 
 export async function saveGuestContact(contact: GuestContact): Promise<GuestContact> {
+  const normalizedContact = normalizeGuestContact(contact);
+  await upsertLocalGuestContact(normalizedContact);
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
   const response = await fetch(`${API_BASE_URL}/api/guest-contacts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(contact)
-  });
+    signal: controller.signal,
+    body: JSON.stringify(normalizedContact)
+  }).finally(() => window.clearTimeout(timeoutId));
 
   if (!response.ok) {
     throw new Error(`Guest contact save failed: ${response.status}`);
   }
 
-  return response.json();
+  const savedContact = normalizeGuestContact(await response.json());
+  await upsertLocalGuestContact(savedContact);
+  return savedContact;
 }
 
 export async function deleteGuestContact(phone: string): Promise<void> {
+  await deleteLocalGuestContact(phone);
   const response = await fetch(`${API_BASE_URL}/api/guest-contacts/${encodeURIComponent(phone)}`, {
     method: "DELETE"
   });
@@ -223,6 +234,7 @@ export function exportLocalBackupData(options?: Partial<BackupExportOptions>): P
         chatDrafts: options?.chatDrafts === false ? {} : result[LOCAL_CHAT_DRAFTS_STORAGE_KEY] ?? {},
         expenseCategories: options?.expenses === false ? [] : result[LOCAL_EXPENSE_CATEGORIES_STORAGE_KEY] ?? [],
         expenseEntries: options?.expenses === false ? [] : result[LOCAL_EXPENSE_ENTRIES_STORAGE_KEY] ?? [],
+        guestContacts: options?.guestContacts === false ? [] : result[LOCAL_GUEST_CONTACTS_STORAGE_KEY] ?? [],
         paymentSettings: options?.paymentSettings === false ? null : result[LOCAL_PAYMENT_SETTINGS_STORAGE_KEY] ?? null,
         reservations: options?.reservations === false ? [] : result[LOCAL_RESERVATIONS_STORAGE_KEY] ?? [],
         roomsCache: options?.localRoomsCache === false ? [] : result[LOCAL_ROOMS_STORAGE_KEY] ?? []
@@ -237,6 +249,7 @@ export async function importLocalBackupData(data: Record<string, unknown>): Prom
     [LOCAL_CHAT_DRAFTS_STORAGE_KEY]: mergeRecords(current.chatDrafts, data.chatDrafts),
     [LOCAL_EXPENSE_CATEGORIES_STORAGE_KEY]: mergeById(current.expenseCategories, data.expenseCategories),
     [LOCAL_EXPENSE_ENTRIES_STORAGE_KEY]: mergeById(current.expenseEntries, data.expenseEntries),
+    [LOCAL_GUEST_CONTACTS_STORAGE_KEY]: mergeGuestContacts(current.guestContacts, data.guestContacts),
     [LOCAL_PAYMENT_SETTINGS_STORAGE_KEY]: mergeSettings(current.paymentSettings, data.paymentSettings),
     [LOCAL_RESERVATIONS_STORAGE_KEY]: mergeById(current.reservations, data.reservations),
     [LOCAL_ROOMS_STORAGE_KEY]: mergeById(current.roomsCache, data.roomsCache)
@@ -247,6 +260,7 @@ export async function importLocalBackupData(data: Record<string, unknown>): Prom
     chatDrafts: getMergeReport(current.chatDrafts, data.chatDrafts, "record"),
     expenseCategories: getMergeReport(current.expenseCategories, data.expenseCategories, "array"),
     expenseEntries: getMergeReport(current.expenseEntries, data.expenseEntries, "array"),
+    guestContacts: getMergeReport(current.guestContacts, data.guestContacts, "array"),
     reservations: getMergeReport(current.reservations, data.reservations, "array"),
     roomsCache: getMergeReport(current.roomsCache, data.roomsCache, "array")
   };
@@ -831,6 +845,42 @@ function saveLocalRooms(rooms: Room[]): Promise<void> {
   });
 }
 
+function getLocalGuestContacts(): Promise<GuestContact[]> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([LOCAL_GUEST_CONTACTS_STORAGE_KEY], (result) => {
+      const contacts = result[LOCAL_GUEST_CONTACTS_STORAGE_KEY];
+      resolve(Array.isArray(contacts) ? mergeGuestContacts([], contacts) : []);
+    });
+  });
+}
+
+function saveLocalGuestContacts(contacts: GuestContact[]): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [LOCAL_GUEST_CONTACTS_STORAGE_KEY]: mergeGuestContacts([], contacts) }, () => resolve());
+  });
+}
+
+async function upsertLocalGuestContact(contact: GuestContact): Promise<void> {
+  await saveLocalGuestContacts(mergeGuestContacts(await getLocalGuestContacts(), [contact]));
+}
+
+async function deleteLocalGuestContact(phone: string): Promise<void> {
+  const phoneKey = normalizeGuestPhoneForLookup(phone);
+  await saveLocalGuestContacts((await getLocalGuestContacts()).filter((contact) => normalizeGuestPhoneForLookup(contact.phone) !== phoneKey));
+}
+
+async function refreshGuestContactsFromServer(localContacts: GuestContact[]): Promise<GuestContact[]> {
+  const response = await fetch(`${API_BASE_URL}/api/guest-contacts`);
+  if (!response.ok) {
+    throw new Error(`Guest contacts request failed: ${response.status}`);
+  }
+
+  const serverContacts = (await response.json()) as GuestContact[];
+  const contacts = mergeGuestContacts(localContacts, serverContacts);
+  await saveLocalGuestContacts(contacts);
+  return contacts;
+}
+
 function getLocalReservations(): Promise<Reservation[]> {
   return new Promise((resolve) => {
     chrome.storage.local.get([LOCAL_RESERVATIONS_STORAGE_KEY], (result) => {
@@ -1028,6 +1078,52 @@ function mergeById(currentValue: unknown, incomingValue: unknown) {
     return id && !ids.has(id);
   });
   return current.concat(additions);
+}
+
+function mergeGuestContacts(currentValue: unknown, incomingValue: unknown): GuestContact[] {
+  const contactsByPhone = new Map<string, GuestContact>();
+  const addContact = (item: unknown) => {
+    if (!item || typeof item !== "object") return;
+    const contact = item as Partial<GuestContact>;
+    const normalizedContact = normalizeGuestContact({
+      phone: String(contact.phone ?? ""),
+      appeal: String(contact.appeal ?? ""),
+      inquiryDate: String(contact.inquiryDate ?? "")
+    });
+    const phoneKey = normalizeGuestPhoneForLookup(normalizedContact.phone);
+    if (!phoneKey || !normalizedContact.appeal || !normalizedContact.inquiryDate) return;
+    const current = contactsByPhone.get(phoneKey);
+    if (!current || normalizedContact.inquiryDate.localeCompare(current.inquiryDate) >= 0) {
+      contactsByPhone.set(phoneKey, normalizedContact);
+    }
+  };
+
+  if (Array.isArray(currentValue)) currentValue.forEach(addContact);
+  if (Array.isArray(incomingValue)) incomingValue.forEach(addContact);
+
+  return Array.from(contactsByPhone.values()).sort((left, right) => right.inquiryDate.localeCompare(left.inquiryDate));
+}
+
+function normalizeGuestContact(contact: GuestContact): GuestContact {
+  return {
+    ...contact,
+    phone: normalizeGuestPhone(contact.phone),
+    appeal: contact.appeal?.trim() || normalizeGuestPhone(contact.phone),
+    inquiryDate: Number.isNaN(Date.parse(contact.inquiryDate)) ? new Date().toISOString() : contact.inquiryDate
+  };
+}
+
+function normalizeGuestPhone(value: string) {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return value.trim();
+  if (/^8\d{10}$/.test(digits)) return `+7${digits.slice(1)}`;
+  if (/^7\d{10}$/.test(digits)) return `+${digits}`;
+  if (/^\d{10}$/.test(digits)) return `+7${digits}`;
+  return `+${digits}`;
+}
+
+function normalizeGuestPhoneForLookup(value: string) {
+  return normalizeGuestPhone(value).replace(/\D/g, "");
 }
 
 function mergeRecords(currentValue: unknown, incomingValue: unknown) {

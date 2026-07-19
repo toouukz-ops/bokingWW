@@ -33,6 +33,10 @@ export async function closeDatabase() {
   await mongoClient.close();
 }
 
+export async function pingDatabase() {
+  await db.command({ ping: 1 });
+}
+
 async function ensureCollection(name: string) {
   const exists = await db.listCollections({ name }, { nameOnly: true }).hasNext();
   if (!exists) {

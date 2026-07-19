@@ -107,6 +107,7 @@ const CUSTOM_AMENITY_OPTIONS_STORAGE_KEY = "gpb-custom-amenity-options";
 const CUSTOM_FOOD_OPTIONS_STORAGE_KEY = "gpb-custom-food-options";
 const ROOM_HOLDS_STORAGE_KEY = "gpb-room-holds";
 const LOCAL_RESERVATIONS_STORAGE_KEY = "gpb-booking-reservations";
+const LOCAL_GUEST_CONTACTS_STORAGE_KEY = "gpb-guest-contacts";
 const SYNC_CLIENT_ID_STORAGE_KEY = "gpb-sync-client-id";
 const OPERATOR_NAME_STORAGE_KEY = "gpb-operator-name";
 const CHAT_MESSAGE_KEYS_STORAGE_KEY = "gpb-chat-message-keys";
@@ -1128,6 +1129,8 @@ export function BookingPanel() {
   const [agreementRefreshState, setAgreementRefreshState] = useState<"idle" | "refreshing" | "refreshed" | "error">("idle");
   const [clearBookingState, setClearBookingState] = useState<"idle" | "clearing" | "cleared">("idle");
   const [contactSaveState, setContactSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [contactLookupNotice, setContactLookupNotice] = useState<{ tone: "info" | "success" | "warning" | "error"; text: string } | null>(null);
+  const [contactServerSyncByPhone, setContactServerSyncByPhone] = useState<Record<string, "pending" | "synced" | "error">>({});
   const [roomHolds, setRoomHolds] = useState<RoomHold[]>([]);
   const [activeDialogs, setActiveDialogs] = useState<ActiveDialog[]>([]);
   const [holdNowMs, setHoldNowMs] = useState(() => Date.now());
@@ -1485,6 +1488,38 @@ export function BookingPanel() {
   const effectiveBookingTotals = getEffectiveBookingTotals(bookingTotals, manualTotalAmount, discountPercent);
   const isManualSaleMode = manualSaleOpen;
   const isNewBookingChatMode = bookingNewChatOpen;
+  const contactInputPhoneForLookup = formatPhoneDigits(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+  const activeChatPhoneForLookup = activeChat
+    ? formatPhoneDigits(activeChat.phone || extractPhoneFromText([activeChat.title, activeChat.name].filter(Boolean).join(" ")))
+    : "";
+  const activeChatMatchesInputPhone = Boolean(
+    contactInputPhoneForLookup &&
+    activeChatPhoneForLookup &&
+    phonesMatchForContactLookup(contactInputPhoneForLookup, activeChatPhoneForLookup)
+  );
+  const isStandaloneBookingPhoneEntry = !isManualSaleMode &&
+    !isNewBookingChatMode &&
+    !contactExtracted &&
+    isCompleteContactPhone(contactInputPhoneForLookup) &&
+    (!activeChat || !activeChatMatchesInputPhone);
+  const isManualPhoneEntryMode = isManualSaleMode || isNewBookingChatMode || isStandaloneBookingPhoneEntry;
+  const storedContactForInputPhone = isManualPhoneEntryMode && !contactExtracted && isCompleteContactPhone(contactInputPhoneForLookup)
+    ? findStoredGuestContactByPhone(contactInputPhoneForLookup)
+    : null;
+  const activeContactLookupNotice = storedContactForInputPhone
+    ? {
+      tone: "warning" as const,
+      text: `Контакт уже есть в базе: ${storedContactForInputPhone.appeal || getGuestNameFallbackFromPhone(storedContactForInputPhone.phone)}. Откройте его вручную в WhatsApp.`
+    }
+    : contactLookupNotice;
+  const shouldTrustContactInputPhone = Boolean(
+    isCompleteContactPhone(contactInputPhoneForLookup) &&
+    (isManualPhoneEntryMode || contactExtracted || !activeChatPhoneForLookup || activeChatMatchesInputPhone)
+  );
+  const contactDatabasePhone = shouldTrustContactInputPhone ? contactInputPhoneForLookup : activeChatPhoneForLookup || contactInputPhoneForLookup;
+  const contactDatabaseRecord = contactDatabasePhone ? findStoredGuestContactByPhone(contactDatabasePhone) : null;
+  const contactDatabaseSyncState = contactDatabasePhone ? contactServerSyncByPhone[normalizePhoneSearch(contactDatabasePhone)] : undefined;
+  const contactDatabaseState = getContactDatabaseState(contactDatabasePhone, contactDatabaseRecord, contactDatabaseSyncState, contactSaveState, backendState);
   const bookingPaymentAmount = isManualSaleMode ? effectiveBookingTotals.total : effectiveBookingTotals.prepayment;
 
   useEffect(() => {
@@ -1607,8 +1642,16 @@ export function BookingPanel() {
     }).catch(() => undefined);
 
     const handleStorageChange = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
-      if (areaName !== "local" || !changes[ROOM_HOLDS_STORAGE_KEY]) return;
-      setRoomHolds(normalizeRoomHolds(changes[ROOM_HOLDS_STORAGE_KEY].newValue));
+      if (areaName !== "local") return;
+      if (changes[ROOM_HOLDS_STORAGE_KEY]) {
+        setRoomHolds(normalizeRoomHolds(changes[ROOM_HOLDS_STORAGE_KEY].newValue));
+      }
+      if (changes[LOCAL_GUEST_CONTACTS_STORAGE_KEY]) {
+        const contacts = changes[LOCAL_GUEST_CONTACTS_STORAGE_KEY].newValue;
+        if (Array.isArray(contacts)) {
+          void repairGuestContactPhoneIdentity(contacts).then(setGuestContacts).catch(() => setGuestContacts(contacts));
+        }
+      }
     };
     try {
       chrome.storage?.onChanged?.addListener(handleStorageChange);
@@ -1780,7 +1823,7 @@ export function BookingPanel() {
       setGuestPhone(phoneParts.local);
       setManualSaleOpen(true);
       window.localStorage.setItem(MANUAL_SALE_MODE_KEY, "true");
-      const saved = await saveActiveWhatsAppContact(pendingContact.name, pendingContact.phone, { allowSidebar: true });
+      const saved = await saveActiveWhatsAppContact(pendingContact.name, pendingContact.phone, { allowSidebar: false });
       if (chat) {
         await saveChatDraftForChat(chat, {
           agreementSent: false,
@@ -2565,7 +2608,7 @@ export function BookingPanel() {
   }
 
   function buildChatDraft(): ChatBookingDraft {
-    const phone = formatPhoneDigits(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+    const phone = resolvePanelGuestPhone();
     const draftGuestName = resolveGuestNameForPhone(guestFirstName, phone);
     const draftCheckInTime = hasHourlyBookingObject ? checkInTime : defaultCheckInTime;
     const draftCheckOutTime = hasHourlyBookingObject ? checkOutTime : DEFAULT_CHECK_OUT_TIME;
@@ -2928,6 +2971,95 @@ export function BookingPanel() {
     }) ?? null;
   }
 
+  function getContactDatabaseState(
+    phone: string,
+    contact: GuestContact | null,
+    syncState: "pending" | "synced" | "error" | undefined,
+    saveState: typeof contactSaveState,
+    currentBackendState: typeof backendState
+  ) {
+    if (!phone) {
+      return {
+        detail: "телефон не указан",
+        label: "Не сохранен",
+        tone: "empty" as const
+      };
+    }
+    if (saveState === "saving") {
+      return {
+        detail: formatReservationPhone(phone),
+        label: "Сохраняем",
+        tone: "checking" as const
+      };
+    }
+    if (syncState === "pending") {
+      return {
+        detail: contact?.appeal || formatReservationPhone(phone),
+        label: "Сохранен локально",
+        tone: "pending" as const
+      };
+    }
+    if (syncState === "error") {
+      return {
+        detail: contact?.appeal || formatReservationPhone(phone),
+        label: "Ошибка базы",
+        tone: "warning" as const
+      };
+    }
+    if (contact) {
+      return {
+        detail: contact.appeal || formatReservationPhone(contact.phone),
+        label: "Сохранен в базе",
+        tone: "saved" as const
+      };
+    }
+    if (currentBackendState === "offline") {
+      return {
+        detail: formatReservationPhone(phone),
+        label: "Сервер недоступен",
+        tone: "warning" as const
+      };
+    }
+    return {
+      detail: formatReservationPhone(phone),
+      label: "Не сохранен",
+      tone: "missing" as const
+    };
+  }
+
+  async function findLatestStoredGuestContactByPhone(phone: string) {
+    const localContact = findStoredGuestContactByPhone(phone);
+    if (localContact) return localContact;
+
+    try {
+      const latestContacts = await repairGuestContactPhoneIdentity(await getGuestContacts());
+      setGuestContacts(latestContacts);
+      const normalizedPhone = normalizePhoneSearch(phone);
+      return latestContacts.find((contact) => {
+        const contactPhone = normalizePhoneSearch(contact.phone);
+        return Boolean(contactPhone && phonesMatchForContactLookup(normalizedPhone, contactPhone));
+      }) ?? null;
+    } catch (error) {
+      debugContactFlow("database-contact-lookup-error", { message: error instanceof Error ? error.message : String(error), phone });
+      return null;
+    }
+  }
+
+  function applyManualPhoneExistingContact(contact: GuestContact) {
+    const phoneParts = splitPhoneForInput(contact.phone);
+    setGuestPhonePrefix(phoneParts.prefix);
+    setGuestPhone(formatLocalPhoneInput(phoneParts.local));
+    setGuestFirstName(contact.appeal || getGuestNameFallbackFromPhone(contact.phone));
+    setContactExtracted(true);
+    setContactSavedInWhatsApp(false);
+    setContactSaveState("error");
+    setContactLookupNotice({
+      tone: "warning",
+      text: `Контакт уже есть в базе: ${contact.appeal || getGuestNameFallbackFromPhone(contact.phone)}. Откройте его вручную в WhatsApp.`
+    });
+    window.setTimeout(() => setContactSaveState("idle"), 2400);
+  }
+
   function resolveReservationGuestName(name: string, phone: string) {
     const resolvedName = resolveGuestNameForPhone(name, phone);
     if (resolvedName && !isGuestFallbackName(resolvedName)) return resolvedName;
@@ -3032,7 +3164,10 @@ export function BookingPanel() {
     }
     draft = restoredDraft;
     const shouldKeepCurrentContact = !draft.phone && !draft.guestFirstName && contactExtracted && Boolean(guestPhone.trim() || guestFirstName.trim());
-    const phoneParts = splitPhoneForInput(shouldKeepCurrentContact ? buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone : draft.phone);
+    const restoredPhone = shouldKeepCurrentContact
+      ? resolvePanelGuestPhone()
+      : formatPhoneDigits(draft.phone || activeChat?.phone || "");
+    const phoneParts = splitPhoneForInput(restoredPhone);
     const restoredHasActiveReservation = isBookingPanelActiveReservation(draft.lastReservation);
     const restoredSelectedBookingRoomIds = restoredHasActiveReservation
       ? draft.lastReservation?.roomIds ?? []
@@ -3054,7 +3189,7 @@ export function BookingPanel() {
     setGuestAdults(clampNumber(Math.round(draft.adults ?? draft.lastReservation?.adults ?? 0), 0, 99));
     setGuestTeenagers(clampNumber(Math.round(draft.teenagers ?? draft.lastReservation?.teenagers ?? 0), 0, 99));
     setGuestChildren(clampNumber(Math.round(draft.children ?? draft.lastReservation?.children ?? 0), 0, 99));
-    if (!shouldKeepCurrentContact) setGuestFirstName(resolveGuestNameForPhone(draft.guestFirstName, draft.phone));
+    if (!shouldKeepCurrentContact) setGuestFirstName(resolveGuestNameForPhone(draft.guestFirstName, restoredPhone));
     setGuestPhonePrefix(phoneParts.prefix);
     setGuestPhone(formatLocalPhoneInput(phoneParts.local));
     const draftExtraInventory = getDraftExtraInventoryCounts(draft);
@@ -4161,7 +4296,7 @@ export function BookingPanel() {
 
   async function markCatalogStatus(catalogStatus: NonNullable<ChatBookingDraft["catalogStatus"]>, patch: Partial<ChatBookingDraft> = {}) {
     const nextCatalogStatusAt = new Date().toISOString();
-    const phone = buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone;
+    const phone = resolvePanelGuestPhone();
     const chat = activeChat ?? createActiveChatFromProfile({ name: guestFirstName || phone, phone });
     const currentCheckInTime = hasHourlyBookingObject ? checkInTime : defaultCheckInTime;
     const currentCheckOutTime = hasHourlyBookingObject ? checkOutTime : DEFAULT_CHECK_OUT_TIME;
@@ -5190,11 +5325,16 @@ export function BookingPanel() {
       const normalizedPhone = buildPhoneWithPrefix(phoneParts.local, phoneParts.prefix) || formatPhoneDigits(phone);
       const contactName = fallbackName || guestFirstName;
       const sourceChatPhone = formatPhoneDigits(sourceChat?.phone || "");
-      const sourceChatBelongsToExtractedPhone = Boolean(sourceChatPhone && phonesMatchForContactLookup(sourceChatPhone, normalizedPhone));
-      const chat = createActiveChatFromProfile({
-        name: sourceChatBelongsToExtractedPhone ? sourceChat?.title || contactName || normalizedPhone : contactName || normalizedPhone,
-        phone: normalizedPhone
-      }) ?? sourceChat;
+      const chat = sourceChat
+        ? {
+          ...sourceChat,
+          phone: normalizedPhone,
+          title: sourceChat.title || contactName || normalizedPhone
+        }
+        : createActiveChatFromProfile({
+          name: contactName || normalizedPhone,
+          phone: normalizedPhone
+        });
 
       setGuestPhonePrefix(phoneParts.prefix);
       setGuestPhone(formatLocalPhoneInput(phoneParts.local));
@@ -5206,22 +5346,18 @@ export function BookingPanel() {
       setAgreementSent(false);
       if (chat) {
         setActiveChat(chat);
-        const extractedDraftPatch = {
-          agreementSent: false,
-          guestFirstName: contactName,
-          lastReservation: null,
-          manualSaleOpen: false,
-          phone: normalizedPhone
-        };
+      const extractedDraftPatch = {
+        agreementSent: false,
+        chatStartedAt: chatStartedAt || new Date().toISOString(),
+        guestFirstName: contactName,
+        lastReservation: null,
+        manualSaleOpen: false,
+        phone: normalizedPhone
+      };
         await saveChatDraftForChat(chat, extractedDraftPatch);
-        const canSaveSourceChatAlias = Boolean(
-          sourceChat &&
-          sourceChat.id !== chat.id &&
-          sourceChatPhone &&
-          phonesMatchForContactLookup(sourceChatPhone, normalizedPhone)
-        );
+        const canSaveSourceChatAlias = Boolean(sourceChat && chat && sourceChat.id !== chat.id);
         if (canSaveSourceChatAlias) {
-          await saveChatDraftForChat(sourceChat, extractedDraftPatch);
+          await saveChatDraftForChat({ ...sourceChat, phone: normalizedPhone }, extractedDraftPatch);
         }
       }
       return {
@@ -5255,6 +5391,7 @@ export function BookingPanel() {
 
   function handleGuestPhoneInputChange(value: string) {
     setContactSavedInWhatsApp(false);
+    setContactLookupNotice(null);
     let nextPrefix = guestPhonePrefix;
     let nextLocal = value;
 
@@ -5269,9 +5406,9 @@ export function BookingPanel() {
       setGuestPhone(nextLocal);
     }
 
-    if (isManualSaleMode || isNewBookingChatMode) {
-      const fallbackName = getGuestNameFallbackFromPhone(buildPhoneWithPrefix(nextLocal, nextPrefix) || nextLocal);
-      if (fallbackName) setGuestFirstName(fallbackName);
+    const fallbackName = getGuestNameFallbackFromPhone(buildPhoneWithPrefix(nextLocal, nextPrefix) || nextLocal);
+    if (fallbackName && (!guestFirstName || isGuestFallbackName(guestFirstName) || isManualSaleMode || isNewBookingChatMode)) {
+      setGuestFirstName(fallbackName);
     } else {
       setContactExtracted(false);
     }
@@ -5292,11 +5429,13 @@ export function BookingPanel() {
       phone: phoneForSave || buildPhoneWithPrefix(guestPhone, guestPhonePrefix),
       appeal: guestFirstName
     });
-    if (!isManualSaleMode && !isNewBookingChatMode && (!contactExtracted || !hasPhoneForSave)) {
-      const extracted = await extractContactFromChat();
-      if (extracted) {
-        await saveActiveContactInWhatsApp(extracted);
-      }
+    if (!isManualPhoneEntryMode && !hasPhoneForSave) {
+      setContactSaveState("error");
+      setContactLookupNotice({
+        tone: "error",
+        text: "Телефон чата не определен. Введите номер вручную и нажмите Сохранить."
+      });
+      window.setTimeout(() => setContactSaveState("idle"), 2400);
       return;
     }
 
@@ -5312,7 +5451,7 @@ export function BookingPanel() {
 
   function getContactActionLabel() {
     const hasPhoneForSave = Boolean(getCompleteContactPhoneForSave());
-    if (!isManualSaleMode && !isNewBookingChatMode && (!contactExtracted || !hasPhoneForSave)) return "Извлечь";
+    if (!isManualPhoneEntryMode && (!contactExtracted || !hasPhoneForSave)) return "Извлечь";
     if (contactSaveState === "saving") return "Сохраняю...";
     if (contactSaveState === "saved") return "Сохранено";
     if (contactSaveState === "error") return "Ошибка";
@@ -5320,15 +5459,25 @@ export function BookingPanel() {
     return "Сохранить";
   }
 
+  function resolvePanelGuestPhone() {
+    const inputPhone = formatPhoneDigits(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+    const activeChatPhone = activeChat
+      ? formatPhoneDigits(activeChat.phone || extractPhoneFromText([activeChat.title, activeChat.name].filter(Boolean).join(" ")))
+      : "";
+    if (isCompleteContactPhone(inputPhone)) return inputPhone;
+    return formatPhoneDigits(activeChatPhone || "");
+  }
+
   function getCompleteContactPhoneForSave() {
-    const normalizedPhone = formatPhoneDigits(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+    const normalizedPhone = resolvePanelGuestPhone();
     return isCompleteContactPhone(normalizedPhone) ? normalizedPhone : "";
   }
 
   async function saveActiveContactInWhatsApp(contactOverride?: ContactExtractionResult) {
     setContactSaveState("saving");
     suppressActiveChatSyncRef.current = true;
-    const phoneForSave = contactOverride?.phone ?? buildPhoneWithPrefix(guestPhone, guestPhonePrefix);
+    const shouldUseManualPhoneEntryMode = !contactOverride && isManualPhoneEntryMode;
+    const phoneForSave = contactOverride?.phone ?? resolvePanelGuestPhone();
     const normalizedPhone = contactOverride?.phone
       ? formatPhoneDigits(contactOverride.phone)
       : getCompleteContactPhoneForSave();
@@ -5343,10 +5492,10 @@ export function BookingPanel() {
     });
     if (!normalizedPhone) {
       if (!isManualSaleMode && !isNewBookingChatMode) {
-        suppressActiveChatSyncRef.current = false;
-        setContactSaveState("idle");
-        await extractContactFromChat();
-        return;
+        setContactLookupNotice({
+          tone: "error",
+          text: "Телефон чата не определен. Введите номер вручную и нажмите Сохранить."
+        });
       }
       guestPhoneInputRef.current?.focus();
       guestPhoneInputRef.current?.select();
@@ -5366,7 +5515,9 @@ export function BookingPanel() {
       const databaseSaved = await saveContactToDatabase(contactName, normalizedPhone);
       debugContactFlow("save-contact-database-result", { contactName, normalizedPhone, databaseSaved });
 
-      if (isManualSaleMode) {
+      if (shouldUseManualPhoneEntryMode) {
+        await saveManualPhoneEntryContact(contactName, normalizedPhone, databaseSaved, { keepManualSale: isManualSaleMode });
+      } else if (isManualSaleMode) {
         await saveManualSaleContact(contactName, normalizedPhone);
       } else {
         await saveBookingContact(contactName, normalizedPhone, databaseSaved, contactSavedInWhatsApp);
@@ -5474,22 +5625,43 @@ export function BookingPanel() {
   }
 
   async function saveContactToDatabase(contactName: string, normalizedPhone: string) {
-    try {
-      debugContactFlow("database-save-start", { contactName, normalizedPhone });
-      const savedContact = await saveGuestContact({
-        phone: normalizedPhone,
-        appeal: contactName || getGuestNameFallbackFromPhone(normalizedPhone),
-        inquiryDate: new Date().toISOString()
+    const phoneKey = normalizePhoneSearch(normalizedPhone);
+    if (!phoneKey) return false;
+
+    const optimisticContact = {
+      phone: normalizedPhone,
+      appeal: contactName || getGuestNameFallbackFromPhone(normalizedPhone),
+      inquiryDate: new Date().toISOString()
+    };
+
+    debugContactFlow("database-save-queued", { contactName, normalizedPhone });
+    setGuestContacts((currentContacts) =>
+      currentContacts.filter((contact) => normalizePhoneSearch(contact.phone) !== phoneKey).concat(optimisticContact)
+    );
+    setContactServerSyncByPhone((current) => ({ ...current, [phoneKey]: "pending" }));
+
+    void saveGuestContact(optimisticContact)
+      .then((savedContact) => {
+        setGuestContacts((currentContacts) =>
+          currentContacts.filter((contact) => normalizePhoneSearch(contact.phone) !== normalizePhoneSearch(savedContact.phone)).concat(savedContact)
+        );
+        setContactServerSyncByPhone((current) => ({ ...current, [phoneKey]: "synced" }));
+        setContactLookupNotice((currentNotice) => currentNotice?.tone === "error" ? null : currentNotice);
+        debugContactFlow("database-save-success", savedContact as unknown as Record<string, unknown>);
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setContactServerSyncByPhone((current) => ({ ...current, [phoneKey]: "error" }));
+        debugContactFlow("database-save-error", { message, normalizedPhone });
+        setContactLookupNotice({
+          tone: "error",
+          text: /abort/i.test(message)
+            ? "Контакт сохранен локально. Сервер не ответил, можно продолжать работу."
+            : `Контакт сохранен локально, но сервер не принял запись: ${message}`
+        });
       });
-      setGuestContacts((currentContacts) =>
-        currentContacts.filter((contact) => normalizePhoneSearch(contact.phone) !== normalizePhoneSearch(savedContact.phone)).concat(savedContact)
-      );
-      debugContactFlow("database-save-success", savedContact as unknown as Record<string, unknown>);
-      return true;
-    } catch (error) {
-      debugContactFlow("database-save-error", { message: error instanceof Error ? error.message : String(error) });
-      return false;
-    }
+
+    return true;
   }
 
   async function saveManualSaleContact(contactName: string, normalizedPhone: string) {
@@ -5503,6 +5675,7 @@ export function BookingPanel() {
       setActiveChat(chat);
       await saveChatDraftForChat(chat, {
         agreementSent: false,
+        chatStartedAt: chatStartedAt || new Date().toISOString(),
         guestFirstName: contactName,
         lastReservation: null,
         manualSaleOpen: true,
@@ -5520,6 +5693,60 @@ export function BookingPanel() {
     setContactExtracted(true);
     setContactSavedInWhatsApp(saved);
     setContactSaveState(saved ? "saved" : "error");
+  }
+
+  async function saveManualPhoneEntryContact(
+    contactName: string,
+    normalizedPhone: string,
+    databaseSaved: boolean,
+    options: { keepManualSale: boolean }
+  ) {
+    debugContactFlow("manual-phone-entry-save-start", {
+      contactName,
+      normalizedPhone,
+      databaseSaved,
+      keepManualSale: options.keepManualSale
+    });
+    const phoneParts = splitPhoneForInput(normalizedPhone);
+    const chat = createActiveChatFromProfile({ name: contactName || normalizedPhone, phone: normalizedPhone });
+    setGuestPhonePrefix(phoneParts.prefix);
+    setGuestPhone(formatLocalPhoneInput(phoneParts.local));
+    setGuestFirstName(contactName);
+    setContactExtracted(true);
+    setContactSavedInWhatsApp(false);
+
+    if (!databaseSaved) {
+      setContactLookupNotice({ tone: "error", text: "Не удалось сохранить контакт в базе." });
+      setContactSaveState("error");
+      return;
+    }
+
+    if (chat) {
+      setActiveChat(chat);
+      void saveChatDraftForChat(chat, {
+        agreementSent: false,
+        chatStartedAt: chatStartedAt || new Date().toISOString(),
+        guestFirstName: contactName,
+        lastReservation: null,
+        manualSaleOpen: options.keepManualSale,
+        phone: normalizedPhone
+      });
+    }
+
+    if (!options.keepManualSale) {
+      setManualSaleOpen(false);
+      setBookingNewChatOpen(false);
+      window.localStorage.removeItem(MANUAL_SALE_MODE_KEY);
+    }
+
+    const opened = openWhatsAppChatDirectlyByPhone(normalizedPhone);
+    setContactLookupNotice({
+      tone: opened ? "success" : "warning",
+      text: opened
+        ? `${contactName} сохранен в базе. Чат открывается по номеру.`
+        : `${contactName} сохранен в базе, но номер не удалось открыть автоматически.`
+    });
+    setContactSaveState("saved");
   }
 
   async function saveBookingContact(contactName: string, normalizedPhone: string, databaseSaved: boolean, shouldOverwrite: boolean) {
@@ -5543,16 +5770,14 @@ export function BookingPanel() {
       contactName,
       alreadyNamedInChat
     });
-    const whatsappSaved = databaseSaved
-      ? alreadyNamedInChat
-        ? true
-        : isNewBookingChatMode && !activeChat
-          ? await saveNewBookingChatContact(contactName, normalizedPhone)
-          : shouldOverwrite && isNewBookingChatMode
-            ? await ensureExistingWhatsAppContactOrOverwrite(contactName, normalizedPhone)
-            : await saveActiveWhatsAppContact(contactName, normalizedPhone, { allowSidebar: true })
-      : false;
-    debugContactFlow("booking-contact-whatsapp-result", { contactName, normalizedPhone, whatsappSaved });
+    const whatsappSaved = Boolean(databaseSaved && alreadyNamedInChat);
+    debugContactFlow("booking-contact-whatsapp-skip", {
+      contactName,
+      normalizedPhone,
+      databaseSaved,
+      alreadyNamedInChat,
+      reason: "database contact is authoritative; whatsapp profile add flow is non-blocking"
+    });
     closeWhatsAppProfilePanels();
 
     const phoneChat = createActiveChatFromProfile({ name: contactName || normalizedPhone, phone: normalizedPhone });
@@ -5564,19 +5789,20 @@ export function BookingPanel() {
     }
     if (chats.length) {
       const draftPatch = {
+        chatStartedAt: chatStartedAt || new Date().toISOString(),
         guestFirstName: contactName,
         manualSaleOpen: false,
         phone: normalizedPhone
       };
-      await Promise.all(chats.map((chat) => saveContactIdentityDraftForChat(chat, draftPatch)));
+      void Promise.all(chats.map((chat) => saveContactIdentityDraftForChat(chat, draftPatch)));
     }
     setBookingNewChatOpen(false);
     applyBookingContactFromPhone(normalizedPhone);
     setGuestFirstName(contactName);
-    await syncActiveReservationGuestName(contactName, normalizedPhone);
+    void syncActiveReservationGuestName(contactName, normalizedPhone);
     setContactExtracted(true);
-    setContactSavedInWhatsApp(Boolean(whatsappSaved));
-    setContactSaveState(databaseSaved && whatsappSaved ? "saved" : "error");
+    setContactSavedInWhatsApp(Boolean(databaseSaved || whatsappSaved));
+    setContactSaveState(databaseSaved ? "saved" : "error");
   }
 
   async function syncActiveReservationGuestName(contactName: string, normalizedPhone: string) {
@@ -5618,13 +5844,14 @@ export function BookingPanel() {
     );
   }
 
-  async function saveContactIdentityDraftForChat(chat: ActiveChat, patch: Pick<ChatBookingDraft, "guestFirstName" | "manualSaleOpen" | "phone">) {
+  async function saveContactIdentityDraftForChat(chat: ActiveChat, patch: Pick<ChatBookingDraft, "guestFirstName" | "manualSaleOpen" | "phone"> & Partial<Pick<ChatBookingDraft, "chatStartedAt">>) {
     if (isRestoringChatDraftRef.current) return;
     const existingDraft = getCachedChatBookingDraft(chat.id) ?? await getChatBookingDraft(chat.id);
     const baseDraft = existingDraft ?? buildChatDraft();
     const nextDraft = reconcileDraftReservationDates({
       ...baseDraft,
       ...patch,
+      chatStartedAt: baseDraft.chatStartedAt || patch.chatStartedAt || new Date().toISOString(),
       guestFirstName: resolveGuestNameForPhone(patch.guestFirstName, patch.phone),
       phone: formatPhoneDigits(patch.phone) || patch.phone,
       updatedAt: new Date().toISOString()
@@ -5648,7 +5875,7 @@ export function BookingPanel() {
   }
 
   function buildReservationDraft(status: Reservation["status"]): Reservation {
-    const reservationPhone = formatPhoneDigits(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+    const reservationPhone = resolvePanelGuestPhone();
     const reservationGuestName = resolveReservationGuestName(guestFirstName, reservationPhone);
     const isManualSale = isManualSaleMode;
     const reservationCheckInTime = hasHourlyBookingObject ? checkInTime : defaultCheckInTime;
@@ -7174,6 +7401,11 @@ export function BookingPanel() {
                 </button>
               ) : null}
             </div>
+            {isManualPhoneEntryMode && activeContactLookupNotice ? (
+              <div className={`gpb-contact-lookup-notice is-${activeContactLookupNotice.tone}`}>
+                {activeContactLookupNotice.text}
+              </div>
+            ) : null}
             {activeChat ? (
               <div className={`gpb-active-dialog-status ${isCurrentChatOwnedByOther ? "is-foreign" : "is-own"}`}>
                 <Users size={14} />
@@ -7189,6 +7421,13 @@ export function BookingPanel() {
                 ) : null}
               </div>
             ) : null}
+            <div
+              className={`gpb-contact-database-status is-${contactDatabaseState.tone}`}
+              title={`${contactDatabaseState.label}: ${contactDatabaseState.detail}`}
+            >
+              <span>{contactDatabaseState.label}</span>
+              <strong>{contactDatabaseState.detail}</strong>
+            </div>
           </div>
         </div>
       </section>
@@ -17962,7 +18201,7 @@ function detectActiveWhatsAppChat(): ActiveChat | null {
   const selectedTitle = getSelectedChatDisplayName();
   const headerTitle = getActiveChatDisplayName();
   const title = selectedTitle || headerTitle;
-  const rawPhone = extractPhoneFromSelectedChat() || (!selectedTitle ? extractPhoneFromActiveChat() : "");
+  const rawPhone = extractPhoneFromSelectedChat() || extractPhoneFromText(title) || (!selectedTitle ? extractPhoneFromActiveChat() : "");
   const phone = isSuspiciousPhoneForGuestFallbackTitle(title, rawPhone) ? "" : rawPhone;
   if (!title && !phone) {
     return null;
@@ -18011,7 +18250,7 @@ async function detectActiveWhatsAppChatAsync(): Promise<ActiveChat | null> {
   const headerTitle = getActiveChatDisplayName();
   const title = selectedTitle || headerTitle;
   const selectedPhone = extractPhoneFromSelectedChat();
-  const rawPhone = selectedPhone || (!selectedTitle ? await extractPhoneFromWhatsAppStore() || extractPhoneFromActiveChat() : "");
+  const rawPhone = selectedPhone || extractPhoneFromText(title) || (!selectedTitle ? await extractPhoneFromWhatsAppStore() || extractPhoneFromActiveChat() : "");
   const phone = isSuspiciousPhoneForGuestFallbackTitle(title, rawPhone) ? "" : rawPhone;
   if (!title && !phone) {
     return null;
@@ -18040,10 +18279,16 @@ function extractPhoneFromSelectedChat() {
   const selectedChat = getSelectedWhatsAppChatElement();
   if (!selectedChat) return "";
   const text = [
+    selectedChat.innerText ?? "",
+    selectedChat.getAttribute("title") ?? "",
+    selectedChat.getAttribute("aria-label") ?? "",
     ...Array.from(selectedChat.querySelectorAll<HTMLElement>("[data-id*='@c.us'], [data-id*='@s.whatsapp.net'], a[href^='tel:']")).map((element) =>
       [
         element.getAttribute("data-id"),
-        element.getAttribute("href")
+        element.getAttribute("href"),
+        element.getAttribute("title"),
+        element.getAttribute("aria-label"),
+        element.textContent
       ].filter(Boolean).join(" ")
     )
   ].join(" ");
@@ -19286,14 +19531,14 @@ async function saveActiveWhatsAppContactFromProfile(contactName = "", contactPho
       if (editedExistingContact) return true;
     }
 
-    let addButton = findProfilePersonAddButton(profilePanel) ?? findProfilePersonAddButton(document.body);
+    let addButton = findProfileAddContactButton(profilePanel) ?? findProfilePersonAddButton(profilePanel) ?? findProfilePersonAddButton(document.body);
     debugContactFlow("profile-save-add-button", { found: Boolean(addButton), text: getDebugText(addButton), rect: getDebugRect(addButton) });
     if (!addButton) {
       const detailsClicked = clickProfileContactDetails();
       const detailsPanel = detailsClicked
         ? await waitForElement(() => findVisibleContactDetailsPanel() ?? findVisibleProfilePanel(), 2600)
         : findVisibleProfilePanel();
-      addButton = detailsPanel ? findProfilePersonAddButton(detailsPanel) ?? findProfilePersonAddButton(document.body) : null;
+      addButton = detailsPanel ? findProfileAddContactButton(detailsPanel) ?? findProfilePersonAddButton(detailsPanel) ?? findProfilePersonAddButton(document.body) : null;
       const savedAfterDetails = detailsPanel ? profilePanelHasPhone(detailsPanel, contactPhone) : false;
       const namedAfterDetails = detailsPanel ? profilePanelMatchesContactName(detailsPanel, contactName) : false;
       debugContactFlow("profile-save-details-check", {
@@ -19366,6 +19611,22 @@ async function openProfileContactFormFromAddButton(addButton: HTMLElement) {
       clickWhatsAppRow(menuCreateContactButton);
       const formFromMenu = await waitForElement(findEditableContactFormPanel, 1800);
       if (formFromMenu) return formFromMenu;
+    }
+
+    const profilePrimaryAddButton = await waitForElement(() => {
+      const detailsPanel = findVisibleContactDetailsPanel() ?? findVisibleProfilePanel();
+      return findProfilePrimaryAddContactButton(detailsPanel ?? document.body, addButton);
+    }, 2600);
+    debugContactFlow("profile-save-primary-add-button", {
+      clickPoint: point.label,
+      found: Boolean(profilePrimaryAddButton),
+      text: getDebugText(profilePrimaryAddButton),
+      rect: getDebugRect(profilePrimaryAddButton)
+    });
+    if (profilePrimaryAddButton) {
+      clickWhatsAppElement(profilePrimaryAddButton);
+      const formFromPrimaryAdd = await waitForElement(findEditableContactFormPanel, 2400);
+      if (formFromPrimaryAdd) return formFromPrimaryAdd;
     }
   }
 
@@ -19870,6 +20131,14 @@ function isCurrentWhatsAppPhone(phone: string) {
   return currentDigits === digits;
 }
 
+function openWhatsAppChatDirectlyByPhone(phone: string) {
+  const digits = normalizePhoneSearch(phone);
+  if (!digits) return false;
+  if (isCurrentWhatsAppPhone(phone)) return true;
+  window.location.assign(`https://web.whatsapp.com/send?phone=${digits}`);
+  return true;
+}
+
 async function searchAndOpenWhatsAppChat(query: string, phoneDigits: string, contactName: string) {
   const searchField = await waitForElement(findWhatsAppSidebarSearchField, 2500);
   debugContactFlow("open-chat-search-field", { query, found: Boolean(searchField), text: getDebugText(searchField) });
@@ -20127,6 +20396,52 @@ function findProfileAddContactButton(root: HTMLElement) {
   return clickableText.length <= 80 ? clickable : matched;
 }
 
+function findProfilePrimaryAddContactButton(root: HTMLElement, previousButton?: HTMLElement | null) {
+  const rootRect = root === document.body
+    ? { left: 0, right: window.innerWidth, top: 0, bottom: window.innerHeight, width: window.innerWidth, height: window.innerHeight }
+    : root.getBoundingClientRect();
+  const candidates = Array.from(root.querySelectorAll<HTMLElement>("[role='button'], button, [tabindex], span, div"))
+    .filter((element) => {
+      if (!isVisibleElement(element) || isGpbElement(element)) return false;
+      const rect = element.getBoundingClientRect();
+      const actionText = normalizeExtractedText(getElementActionText(element));
+      const rawText = normalizeExtractedText([
+        element.getAttribute("data-icon"),
+        element.getAttribute("aria-label"),
+        element.getAttribute("title"),
+        element.textContent,
+        actionText
+      ].filter(Boolean).join(" "));
+      if (/добавить\s+в\s+список|add\s+to\s+list|избран|favorite|поделиться|share|поиск|search|медиа|media|примечан|note/i.test(`${actionText} ${rawText}`)) return false;
+      const hasAddText = /^(добавить|add)$/i.test(actionText) ||
+        (/(^|\s)(добавить|add)(\s|$)/i.test(actionText) && /person-add|add-user|contact-add|ic-person-add/i.test(rawText) && actionText.length <= 80);
+      if (!hasAddText) return false;
+      if (previousButton && elementsHaveSimilarRect(element, previousButton)) return false;
+      return rect.left >= rootRect.left &&
+        rect.right <= rootRect.right + 24 &&
+        rect.top >= Math.max(rootRect.top + 120, 120) &&
+        rect.top <= window.innerHeight * 0.78 &&
+        rect.width >= 44 &&
+        rect.width <= 240 &&
+        rect.height >= 28 &&
+        rect.height <= 140;
+    })
+    .map((element) => element.closest<HTMLElement>("[role='button'], button, [tabindex]") ?? element)
+    .filter((element, index, list) => list.indexOf(element) === index)
+    .sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top);
+
+  return candidates[0] ?? null;
+}
+
+function elementsHaveSimilarRect(left: HTMLElement, right: HTMLElement) {
+  const leftRect = left.getBoundingClientRect();
+  const rightRect = right.getBoundingClientRect();
+  return Math.abs(leftRect.left - rightRect.left) < 8 &&
+    Math.abs(leftRect.top - rightRect.top) < 8 &&
+    Math.abs(leftRect.width - rightRect.width) < 16 &&
+    Math.abs(leftRect.height - rightRect.height) < 16;
+}
+
 function findProfileCreateContactMenuButton() {
   const profilePanel = findVisibleProfilePanel();
   const profileRect = profilePanel?.getBoundingClientRect();
@@ -20160,7 +20475,7 @@ function profilePanelHasPhone(profilePanel: HTMLElement, phone: string) {
   if (!expected) return false;
   const visibleText = getDebugText(profilePanel);
   const normalizedText = normalizeExtractedText(visibleText).toLowerCase();
-  if (/нет\s+в\s+списке\s+контактов|not\s+in\s+(?:your\s+)?contacts|not\s+in\s+contact\s+list/i.test(normalizedText)) {
+  if (/нет\s+в\s+списке\s+контактов|not\s+in\s+(?:your\s+)?contacts|not\s+in\s+contact\s+list|добавить\s+в\s+список|add\s+to\s+list/i.test(normalizedText)) {
     return false;
   }
   const actual = normalizePhoneSearch(extractPhoneFromText(visibleText) || visibleText);

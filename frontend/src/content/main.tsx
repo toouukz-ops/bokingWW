@@ -5,6 +5,7 @@ import type { ChatBookingDraft, Reservation } from "../shared/types";
 const ROOT_ID = "gpb-booking-extension-root";
 const LOCAL_CHAT_DRAFTS_STORAGE_KEY = "gpb-chat-booking-drafts";
 const LOCAL_RESERVATIONS_STORAGE_KEY = "gpb-booking-reservations";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://bokingww.onrender.com";
 
 type ChatStatusTone = "info" | "pending" | "success" | "extended" | "muted" | "danger";
 type ChatStatusItem = {
@@ -116,54 +117,107 @@ async function refreshChatStatusIndex() {
   scheduleApplyChatStatuses();
 }
 
-function buildChatStatusIndex(): Promise<ChatStatusIndex> {
+async function buildChatStatusIndex(): Promise<ChatStatusIndex> {
+  try {
+    const localSources = canUseChromeStorage()
+      ? await getLocalChatStatusSources()
+      : { drafts: {}, reservations: [] };
+    const [serverDrafts, serverReservations] = await Promise.all([
+      fetchServerChatDrafts(),
+      fetchServerReservations()
+    ]);
+    const drafts = { ...localSources.drafts, ...serverDrafts };
+    const reservations = mergeReservationsById(localSources.reservations, serverReservations);
+    return createChatStatusIndexFromSources(drafts, reservations);
+  } catch {
+    return createEmptyChatStatusIndex();
+  }
+}
+
+function getLocalChatStatusSources(): Promise<{ drafts: Record<string, ChatBookingDraft>; reservations: Reservation[] }> {
   return new Promise((resolve) => {
     try {
-      if (!canUseChromeStorage()) {
-        resolve(createEmptyChatStatusIndex());
-        return;
-      }
       chrome.storage.local.get([LOCAL_CHAT_DRAFTS_STORAGE_KEY, LOCAL_RESERVATIONS_STORAGE_KEY], (result) => {
         if (chrome.runtime.lastError) {
-          resolve(createEmptyChatStatusIndex());
+          resolve({ drafts: {}, reservations: [] });
           return;
         }
-
-        const drafts = normalizeChatDrafts(result[LOCAL_CHAT_DRAFTS_STORAGE_KEY]);
-        const reservations = normalizeReservations(result[LOCAL_RESERVATIONS_STORAGE_KEY]);
-        const index = createEmptyChatStatusIndex();
-
-        Object.entries(drafts).forEach(([chatId, draft]) => {
-          const status = getDraftStatusItem(draft);
-          if (!status) return;
-          setLatestStatus(index.byChatId, chatId, status);
-          const phone = normalizePhone(draft.phone);
-          const title = extractDraftTitleFromChatId(chatId);
-          const draftTitle = draft.lastReservation?.guestFirstName || draft.guestFirstName || "";
-          setLatestStatus(index.byPhone, phone, status);
-          setLatestTitleStatus(index, title, status);
-          setLatestTitleStatus(index, draftTitle, status);
-          addStatusIndexItem(index, { phone, status, title });
-          addStatusIndexItem(index, { phone, status, title: draftTitle });
+        resolve({
+          drafts: normalizeChatDrafts(result[LOCAL_CHAT_DRAFTS_STORAGE_KEY]),
+          reservations: normalizeReservations(result[LOCAL_RESERVATIONS_STORAGE_KEY])
         });
-
-        reservations.forEach((reservation) => {
-          if (reservation.isAddOnSale) return;
-          const status = getReservationStatusItem(reservation);
-          const phone = normalizePhone(reservation.phone);
-          setForcedStatus(index.byPhone, phone, status);
-          if (reservation.phone) setForcedStatus(index.byChatId, createChatId(`phone:${reservation.phone}`), status);
-          if (reservation.guestFirstName) setForcedStatus(index.byChatId, createChatId(`title:${reservation.guestFirstName}`), status);
-          setLatestTitleStatus(index, reservation.guestFirstName, status);
-          addStatusIndexItem(index, { phone, status, title: reservation.guestFirstName });
-        });
-
-        resolve(index);
       });
     } catch {
-      resolve(createEmptyChatStatusIndex());
+      resolve({ drafts: {}, reservations: [] });
     }
   });
+}
+
+async function fetchServerChatDrafts() {
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/chat-drafts`, 1200);
+    if (!response.ok) return {};
+    const payload = await response.json() as { drafts?: Record<string, ChatBookingDraft> };
+    return normalizeChatDrafts(payload.drafts);
+  } catch {
+    return {};
+  }
+}
+
+async function fetchServerReservations() {
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/reservations`, 1200);
+    if (!response.ok) return [];
+    return normalizeReservations(await response.json());
+  } catch {
+    return [];
+  }
+}
+
+function fetchWithTimeout(url: string, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { signal: controller.signal }).finally(() => window.clearTimeout(timeoutId));
+}
+
+function mergeReservationsById(localReservations: Reservation[], serverReservations: Reservation[]) {
+  const byId = new Map<string, Reservation>();
+  [...localReservations, ...serverReservations].forEach((reservation) => {
+    if (!reservation?.id) return;
+    byId.set(reservation.id, reservation);
+  });
+  return Array.from(byId.values());
+}
+
+function createChatStatusIndexFromSources(drafts: Record<string, ChatBookingDraft>, reservations: Reservation[]) {
+  const index = createEmptyChatStatusIndex();
+
+  Object.entries(drafts).forEach(([chatId, draft]) => {
+    const status = getDraftStatusItem(draft);
+    if (!status) return;
+    setLatestStatus(index.byChatId, chatId, status);
+    const phone = normalizePhone(draft.phone);
+    const title = extractDraftTitleFromChatId(chatId);
+    const draftTitle = draft.lastReservation?.guestFirstName || draft.guestFirstName || "";
+    setLatestStatus(index.byPhone, phone, status);
+    setLatestTitleStatus(index, title, status);
+    setLatestTitleStatus(index, draftTitle, status);
+    addStatusIndexItem(index, { phone, status, title });
+    addStatusIndexItem(index, { phone, status, title: draftTitle });
+  });
+
+  reservations.forEach((reservation) => {
+    if (reservation.isAddOnSale) return;
+    const status = getReservationStatusItem(reservation);
+    const phone = normalizePhone(reservation.phone);
+    setForcedStatus(index.byPhone, phone, status);
+    if (reservation.phone) setForcedStatus(index.byChatId, createChatId(`phone:${reservation.phone}`), status);
+    if (reservation.guestFirstName) setForcedStatus(index.byChatId, createChatId(`title:${reservation.guestFirstName}`), status);
+    setLatestTitleStatus(index, reservation.guestFirstName, status);
+    addStatusIndexItem(index, { phone, status, title: reservation.guestFirstName });
+  });
+
+  return index;
 }
 
 function applyChatStatusesToWhatsAppList() {
@@ -322,7 +376,18 @@ function getStatusForChatRow(row: HTMLElement) {
     if (byExactTitle) return byExactTitle;
   }
 
-  return getStatusByVisibleText(rowText);
+  return getStatusByVisibleText(rowText) ?? inferStatusFromVisibleChatRowText(rowText);
+}
+
+function inferStatusFromVisibleChatRowText(rowText: string): ChatStatusItem | null {
+  if (!rowText) return null;
+  if (/(^|\s)номер\s+\d{3}\s*[\/|]/i.test(rowText)) {
+    return { label: "Номер отправлен", tone: "info", updatedAt: "" };
+  }
+  if (/бронирование\s+на\s+согласован/i.test(rowText)) {
+    return { label: "На согласовании", tone: "pending", updatedAt: "" };
+  }
+  return null;
 }
 
 function getStatusByPhoneTail(phone: string) {

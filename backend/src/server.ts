@@ -40,7 +40,7 @@ import {
 import { exportServerBackup, importServerBackup } from "./backup.js";
 import { createStubDraft, bookingDraftRequestSchema } from "./booking.js";
 import { config } from "./config.js";
-import { closeDatabase, connectDatabase } from "./db.js";
+import { closeDatabase, connectDatabase, pingDatabase } from "./db.js";
 import { deleteGuestContact, guestContactSchema, listGuestContacts, saveGuestContact } from "./guestContacts.js";
 import { cropPhotoFile, deleteMediaFile, ensureWhatsappVideoFile, getLocalUploadPath, saveRoomMediaFile, uploadsRoot } from "./media.js";
 import { getMediaContentType, getStoredMedia, openStoredMediaStream, saveStoredMediaBuffer } from "./mediaStore.js";
@@ -791,11 +791,65 @@ function buildPublicMenuPage(reservationId: string) {
 </html>`;
 }
 
-app.get("/api/health", async () => {
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+}
+
+app.get("/api/health", async (_request, reply) => {
+  try {
+    await withTimeout(pingDatabase(), 1500, "Mongo ping timeout");
+  } catch (error) {
+    return reply.status(503).send({
+      ok: false,
+      service: "gpb-whatsapp-booking-backend",
+      mongo: "error",
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
   return {
     ok: true,
+    mongo: "ok",
     service: "gpb-whatsapp-booking-backend"
   };
+});
+
+app.get("/api/health/full", async (_request, reply) => {
+  const startedAt = Date.now();
+  const report: Record<string, unknown> = {
+    backend: "ok",
+    service: "gpb-whatsapp-booking-backend"
+  };
+
+  try {
+    await withTimeout(pingDatabase(), 1500, "Mongo ping timeout");
+    report.mongo = "ok";
+  } catch (error) {
+    report.mongo = "error";
+    report.mongoError = error instanceof Error ? error.message : String(error);
+    report.responseMs = Date.now() - startedAt;
+    return reply.status(503).send(report);
+  }
+
+  try {
+    await withTimeout(listGuestContacts(), 5000, "guestContacts timeout");
+    report.guestContacts = "ok";
+  } catch (error) {
+    report.guestContacts = "error";
+    report.guestContactsError = error instanceof Error ? error.message : String(error);
+    report.responseMs = Date.now() - startedAt;
+    return reply.status(503).send(report);
+  }
+
+  report.responseMs = Date.now() - startedAt;
+  return report;
 });
 
 app.get("/menu/r/:reservationId", async (request, reply) => {
@@ -1576,8 +1630,15 @@ app.post("/api/backup/server/import", async (request, reply) => {
   return importServerBackup(body);
 });
 
-app.get("/api/guest-contacts", async () => {
-  return listGuestContacts();
+app.get("/api/guest-contacts", async (_request, reply) => {
+  try {
+    return await withTimeout(listGuestContacts(), 6000, "Guest contacts list timeout");
+  } catch (error) {
+    return reply.status(503).send({
+      error: "Guest contacts unavailable",
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
 });
 
 app.post("/api/guest-contacts", async (request, reply) => {
@@ -1590,13 +1651,27 @@ app.post("/api/guest-contacts", async (request, reply) => {
     });
   }
 
-  return saveGuestContact(result.data);
+  try {
+    return await withTimeout(saveGuestContact(result.data), 6000, "Guest contact save timeout");
+  } catch (error) {
+    return reply.status(503).send({
+      error: "Guest contact save unavailable",
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
 });
 
 app.delete("/api/guest-contacts/:phone", async (request, reply) => {
   const { phone } = request.params as { phone: string };
-  await deleteGuestContact(decodeURIComponent(phone));
-  return reply.status(204).send();
+  try {
+    await withTimeout(deleteGuestContact(decodeURIComponent(phone)), 6000, "Guest contact delete timeout");
+    return reply.status(204).send();
+  } catch (error) {
+    return reply.status(503).send({
+      error: "Guest contact delete unavailable",
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
 });
 
 app.get("/api/reservations", async () => {

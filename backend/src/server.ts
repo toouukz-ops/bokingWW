@@ -340,11 +340,18 @@ function buildPublicMenuPage(reservationId: string) {
     label { display: grid; gap: 5px; font-size: 13px; font-weight: 800; color: #495667; }
     input, textarea, select { width: 100%; border: 1px solid #cfd8df; border-radius: 7px; min-height: 42px; padding: 9px 10px; font: inherit; background: white; }
     textarea { min-height: 74px; resize: vertical; }
-    .schedule-fields { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 10px; align-items: end; }
+    .schedule-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
     .schedule-fields[hidden] { display: none; }
-    .schedule-fields label { font-size: 14px; }
-    .schedule-fields input { min-height: 56px; border: 2px solid #cfd8df; border-radius: 8px; padding: 12px 13px; font-size: 17px; font-weight: 800; }
-    .schedule-fields input:focus { border-color: #0f6b57; outline: 3px solid rgba(15,107,87,.14); }
+    .schedule-card { min-width: 0; border: 2px solid #d6e1e7; border-radius: 8px; background: linear-gradient(180deg, #ffffff 0%, #f4fbf8 100%); padding: 10px; box-shadow: 0 8px 18px rgba(15, 107, 87, .08); cursor: pointer; }
+    .schedule-card:focus-within { border-color: #0f6b57; box-shadow: 0 0 0 4px rgba(15, 107, 87, .14), 0 10px 22px rgba(15, 107, 87, .12); }
+    .schedule-label { display: flex; align-items: center; gap: 7px; color: #17212b; font-size: 15px; font-weight: 900; line-height: 1; }
+    .schedule-icon { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: white; box-shadow: 0 6px 14px rgba(15, 107, 87, .18); flex: 0 0 auto; }
+    .schedule-icon svg { width: 17px; height: 17px; stroke-width: 2.4; }
+    .schedule-date-icon { background: #0f84ff; }
+    .schedule-time-icon { background: #f59f00; }
+    .schedule-card input { min-height: 44px; border: 0; border-radius: 0; padding: 7px 0 0; background: transparent; color: #17212b; font-size: 18px; font-weight: 900; letter-spacing: 0; }
+    .schedule-card input:focus { outline: 0; }
+    .schedule-card input::-webkit-calendar-picker-indicator { opacity: 1; cursor: pointer; transform: scale(1.15); }
     .toggle { display: grid; grid-template-columns: 1fr; gap: 8px; }
     .toggle button { border: 1px solid #cfd8df; background: white; border-radius: 7px; min-height: 42px; font-weight: 800; cursor: pointer; }
     .toggle button.active { border-color: #0f6b57; background: #e9f7f2; color: #0f6b57; }
@@ -352,7 +359,7 @@ function buildPublicMenuPage(reservationId: string) {
     .empty, .status { color: #637080; line-height: 1.4; }
     .status.success { color: #0f6b57; font-weight: 800; }
     .status.error { color: #b42318; font-weight: 800; }
-    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } .cart { position: static; } .page { padding: 10px; } .schedule-fields { grid-template-columns: minmax(0, 1fr) 126px; } }
+    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } .cart { position: static; } .page { padding: 10px; } .schedule-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; } .schedule-card { padding: 9px; } .schedule-label { font-size: 14px; } .schedule-card input { font-size: 16px; } }
   </style>
 </head>
 <body>
@@ -375,8 +382,24 @@ function buildPublicMenuPage(reservationId: string) {
             <button type="button" id="arrival">Подготовить к приезду</button>
           </div>
           <div class="schedule-fields" id="scheduleFields" hidden>
-            <label>Дата готовности<input id="readyDate" type="date"></label>
-            <label>Время готовности<input id="readyTime" type="time"></label>
+            <label class="schedule-card">
+              <span class="schedule-label">
+                <span class="schedule-icon schedule-date-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 2v4M16 2v4M4 10h16M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/></svg>
+                </span>
+                <span>Дата</span>
+              </span>
+              <input id="readyDate" type="date">
+            </label>
+            <label class="schedule-card">
+              <span class="schedule-label">
+                <span class="schedule-icon schedule-time-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+                </span>
+                <span>Время</span>
+              </span>
+              <input id="readyTime" type="time">
+            </label>
           </div>
           <label>Комментарий<textarea id="comment" placeholder="Например: без лука, приборы положить"></textarea></label>
         </div>
@@ -394,6 +417,11 @@ function buildPublicMenuPage(reservationId: string) {
     const state = { items: [], reservation: null, cart: {}, servingMode: "ready" };
     const money = (value) => new Intl.NumberFormat("ru-RU").format(value || 0) + " тг";
     const today = () => new Date().toISOString().slice(0, 10);
+    function nextReadyTime() {
+      const date = new Date();
+      date.setMinutes(Math.ceil((date.getMinutes() + 20) / 30) * 30, 0, 0);
+      return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
+    }
     function mediaUrl(path) { return path ? path : ""; }
     function setStatus(text, tone) {
       const node = document.getElementById("status");
@@ -446,7 +474,14 @@ function buildPublicMenuPage(reservationId: string) {
       ["ready", "takeaway", "arrival"].forEach((id) => {
         document.getElementById(id).classList.toggle("active", id === mode);
       });
-      document.getElementById("scheduleFields").hidden = mode !== "arrival";
+      const scheduleFields = document.getElementById("scheduleFields");
+      scheduleFields.hidden = mode !== "arrival";
+      if (mode === "arrival") {
+        const readyDate = document.getElementById("readyDate");
+        const readyTime = document.getElementById("readyTime");
+        if (!readyDate.value) readyDate.value = today();
+        if (!readyTime.value) readyTime.value = nextReadyTime();
+      }
     }
     window.changeQty = function(id, delta) {
       const item = state.items.find((entry) => entry.id === id);

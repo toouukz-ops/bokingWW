@@ -733,7 +733,7 @@ export async function deleteMenuOrder(orderId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/api/menu-orders/${encodeURIComponent(orderId)}`, {
     method: "DELETE"
   });
-  if (!response.ok && response.status !== 404) throw new Error(`Menu order delete failed: ${response.status}`);
+  if (!response.ok) throw new Error(`Menu order delete failed: ${response.status}`);
 }
 
 export async function getExpenseCategories(): Promise<ExpenseCategory[]> {

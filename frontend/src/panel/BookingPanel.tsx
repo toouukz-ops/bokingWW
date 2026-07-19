@@ -4114,6 +4114,7 @@ export function BookingPanel() {
     try {
       await deleteMenuOrder(order.id);
     } catch {
+      setBookingDateWarning("Заказ не удален на сервере. Перезапустите backend на Render: текущий сервер не поддерживает удаление заказов меню.");
       setMenuOrders((currentOrders) => currentOrders.some((item) => item.id === order.id) ? currentOrders : [order, ...currentOrders]);
     }
   }

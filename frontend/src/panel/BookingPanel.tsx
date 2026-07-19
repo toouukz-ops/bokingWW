@@ -3988,13 +3988,55 @@ export function BookingPanel() {
     }, 1800);
   }
 
+  function phoneDigitsMatchTarget(candidate: string, targetPhone: string) {
+    const candidateDigits = normalizePhoneSearch(candidate);
+    const targetDigits = normalizePhoneSearch(targetPhone);
+    const targetTail = targetDigits.slice(-10);
+    return Boolean(candidateDigits && targetTail && candidateDigits.endsWith(targetTail));
+  }
+
+  async function isMenuAutoSendTargetVerified(phone: string, contactName: string) {
+    const activeChatPhone = (await extractActiveChatPhoneFast({
+      id: "",
+      title: getActiveChatDisplayName(),
+      phone: ""
+    })).phone;
+    const headerText = normalizeExtractedText(document.querySelector<HTMLElement>("#main header")?.innerText ?? "");
+    const selectedText = normalizeExtractedText(getSelectedWhatsAppChatElement()?.innerText ?? "");
+    const candidates = [
+      activeChatPhone,
+      extractPhoneFromActiveChat(),
+      extractPhoneFromSelectedChat(),
+      headerText,
+      selectedText
+    ];
+    const verified = candidates.some((candidate) => phoneDigitsMatchTarget(candidate, phone));
+    debugContactFlow("menu-auto-send-target-check", {
+      contactName,
+      targetPhone: formatPhoneDigits(phone),
+      activeChatPhone,
+      activeName: getActiveChatDisplayName(),
+      verified
+    });
+    return verified;
+  }
+
   async function sendMenuOrderToWhatsAppPhone(phone: string, contactName: string, text: string) {
     const normalizedPhone = formatPhoneDigits(phone);
     if (!normalizedPhone) return false;
 
-    const opened = await openWhatsAppChatByPhone(normalizedPhone, contactName);
+    const opened = await openWhatsAppChatByPhone(normalizedPhone, "");
     if (!opened) return false;
     await waitForDelay(350);
+    const verified = await isMenuAutoSendTargetVerified(normalizedPhone, contactName);
+    if (!verified) {
+      debugContactFlow("menu-auto-send-target-mismatch", {
+        contactName,
+        targetPhone: normalizedPhone,
+        activeName: getActiveChatDisplayName()
+      });
+      return false;
+    }
     return sendTextToActiveWhatsAppChat(text);
   }
 

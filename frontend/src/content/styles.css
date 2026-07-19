@@ -3172,20 +3172,21 @@ body.gpb-booking-panel-open #app {
 
 .gpb-guest-menu-orders-list {
   display: grid;
-  gap: 5px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .gpb-guest-menu-order-row {
   display: grid;
-  grid-template-columns: 40px minmax(132px, 0.95fr) minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 6px;
-  min-height: 42px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+  gap: 5px;
+  min-height: 0;
   border: 1px solid #d8e5f2;
   border-left: 4px solid #0f7a63;
   border-radius: 7px;
   background: #ffffff;
-  padding: 4px 5px;
+  padding: 5px;
 }
 
 .gpb-guest-menu-order-preview,
@@ -3194,8 +3195,8 @@ body.gpb-booking-panel-open #app {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  width: 36px;
-  height: 32px;
+  width: 32px;
+  height: 30px;
   border-radius: 6px;
   background: #e8f7f1;
   color: #0f6b57;
@@ -3237,6 +3238,7 @@ body.gpb-booking-panel-open #app {
 .gpb-guest-menu-order-items {
   display: flex;
   gap: 4px;
+  grid-column: 1 / -1;
   overflow: hidden;
   min-width: 0;
 }
@@ -3257,12 +3259,15 @@ body.gpb-booking-panel-open #app {
 .gpb-guest-menu-order-actions {
   display: flex;
   align-items: center;
+  grid-column: 1 / -1;
   gap: 4px;
   white-space: nowrap;
 }
 
 .gpb-guest-menu-order-actions button {
+  flex: 1 1 0;
   height: 26px;
+  min-width: 0;
   border: 1px solid #b9d5cb;
   border-radius: 6px;
   background: #ffffff;
@@ -3275,6 +3280,7 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-guest-menu-order-actions button.is-danger {
+  flex: 0 0 26px;
   width: 26px;
   border-color: #f3b4ad;
   background: #fff8f7;
@@ -9706,17 +9712,18 @@ body.gpb-reservation-split-resizing {
 
 .gpb-menu-orders-list {
   display: grid;
-  gap: 5px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .gpb-menu-order-card {
   display: grid;
-  gap: 5px;
+  gap: 4px;
   border: 1px solid #d8dee5;
   border-left: 4px solid #0f6b57;
   border-radius: 7px;
   background: #ffffff;
-  padding: 6px;
+  padding: 5px;
 }
 
 .gpb-menu-order-main,
@@ -9724,15 +9731,15 @@ body.gpb-reservation-split-resizing {
 .gpb-menu-order-actions {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   flex-wrap: wrap;
 }
 
 .gpb-menu-order-main {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) auto;
+  grid-template-columns: 34px minmax(0, 1fr);
   justify-content: initial;
-  gap: 6px;
+  gap: 5px;
 }
 
 .gpb-menu-order-main > div {
@@ -9750,8 +9757,9 @@ body.gpb-reservation-split-resizing {
 
 .gpb-menu-order-main strong,
 .gpb-menu-order-main b {
+  grid-column: 2;
   color: #16202a;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
 }
 
@@ -9774,17 +9782,31 @@ body.gpb-reservation-split-resizing {
 .gpb-menu-order-items {
   display: flex;
   gap: 4px;
-  flex-wrap: wrap;
+  overflow: hidden;
+  flex-wrap: nowrap;
 }
 
 .gpb-menu-order-items span {
+  overflow: hidden;
+  max-width: 100%;
   border: 1px solid #d8dee5;
   border-radius: 999px;
   background: #f7f9fb;
   color: #25313d;
   font-size: 9px;
   font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 3px 6px;
+}
+
+.gpb-menu-order-actions button {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.gpb-menu-order-actions button.is-danger {
+  flex: 0 0 auto;
 }
 
 .gpb-menu-order-card p {

@@ -1324,52 +1324,6 @@ export function BookingPanel() {
     () => [...menuOrders].sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt))).slice(0, 8),
     [menuOrders]
   );
-  const currentChatMenuOrders = useMemo(
-    () => {
-      const reservationIds = new Set([lastReservation?.id, currentReservationDraft?.id].filter(Boolean));
-      const phoneDigits = [
-        activeChat?.phone,
-        buildPhoneWithPrefix(guestPhone, guestPhonePrefix),
-        guestPhone,
-        lastReservation?.phone,
-        currentReservationDraft?.phone
-      ]
-        .map((phone) => normalizePhoneSearch(phone ?? ""))
-        .filter(Boolean);
-      const phoneTails = new Set(phoneDigits.map((phone) => phone.slice(-10)).filter(Boolean));
-      const guestNames = [
-        guestFirstName,
-        activeChat?.title,
-        lastReservation?.guestFirstName,
-        currentReservationDraft?.guestFirstName
-      ]
-        .map((name) => normalizeContactLookupText(name ?? ""))
-        .filter(Boolean);
-      return [...menuOrders]
-        .filter((order) => {
-          if (order.reservationId && reservationIds.has(order.reservationId)) return true;
-          const orderPhoneTail = normalizePhoneSearch(order.phone).slice(-10);
-          if (orderPhoneTail && phoneTails.has(orderPhoneTail)) return true;
-          const orderGuestName = normalizeContactLookupText(order.guestName);
-          if (orderGuestName && guestNames.includes(orderGuestName)) return true;
-          return false;
-        })
-        .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
-        .slice(0, 5);
-    },
-    [
-      activeChat?.phone,
-      activeChat?.title,
-      currentReservationDraft?.guestFirstName,
-      currentReservationDraft?.id,
-      currentReservationDraft?.phone,
-      guestFirstName,
-      guestPhone,
-      guestPhonePrefix,
-      lastReservation,
-      menuOrders
-    ]
-  );
   const menuOrderDialogOrder = useMemo(
     () => menuOrderDialogTarget ? menuOrders.find((order) => order.id === menuOrderDialogTarget.orderId) ?? null : null,
     [menuOrderDialogTarget, menuOrders]
@@ -3345,6 +3299,52 @@ export function BookingPanel() {
   const isBookingConfirmed = isBookingPanelActiveReservation(lastReservation);
   const cancelableReservation = isBookingConfirmed ? lastReservation : phoneMatchedActiveReservation;
   const isBookingLocked = isBookingConfirmed || isCurrentChatOwnedByOther;
+  const currentChatMenuOrders = useMemo(
+    () => {
+      const reservationIds = new Set([lastReservation?.id, currentReservationDraft?.id].filter(Boolean));
+      const phoneDigits = [
+        activeChat?.phone,
+        buildPhoneWithPrefix(guestPhone, guestPhonePrefix),
+        guestPhone,
+        lastReservation?.phone,
+        currentReservationDraft?.phone
+      ]
+        .map((phone) => normalizePhoneSearch(phone ?? ""))
+        .filter(Boolean);
+      const phoneTails = new Set(phoneDigits.map((phone) => phone.slice(-10)).filter(Boolean));
+      const guestNames = [
+        guestFirstName,
+        activeChat?.title,
+        lastReservation?.guestFirstName,
+        currentReservationDraft?.guestFirstName
+      ]
+        .map((name) => normalizeContactLookupText(name ?? ""))
+        .filter(Boolean);
+      return [...menuOrders]
+        .filter((order) => {
+          if (order.reservationId && reservationIds.has(order.reservationId)) return true;
+          const orderPhoneTail = normalizePhoneSearch(order.phone).slice(-10);
+          if (orderPhoneTail && phoneTails.has(orderPhoneTail)) return true;
+          const orderGuestName = normalizeContactLookupText(order.guestName);
+          if (orderGuestName && guestNames.includes(orderGuestName)) return true;
+          return false;
+        })
+        .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
+        .slice(0, 5);
+    },
+    [
+      activeChat?.phone,
+      activeChat?.title,
+      currentReservationDraft?.guestFirstName,
+      currentReservationDraft?.id,
+      currentReservationDraft?.phone,
+      guestFirstName,
+      guestPhone,
+      guestPhonePrefix,
+      lastReservation,
+      menuOrders
+    ]
+  );
   const contactMatchesActiveChatName = Boolean(
     activeChat?.title &&
     guestFirstName.trim() &&

@@ -288,6 +288,8 @@ function normalizeMenuOrderPayload(payload: Record<string, unknown>) {
     total,
     status: validStatuses.has(statusText) ? statusText : "new",
     paymentStatus,
+    kitchenSentAt: toSafeString(payload.kitchenSentAt),
+    archivedAt: toSafeString(payload.archivedAt),
     createdAt: toSafeString(payload.createdAt) || now,
     updatedAt: now
   };

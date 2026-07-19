@@ -296,6 +296,8 @@ export interface MenuOrder {
   total: number;
   status: MenuOrderStatus;
   paymentStatus: MenuOrderPaymentStatus;
+  kitchenSentAt?: string;
+  archivedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

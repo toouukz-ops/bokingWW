@@ -6,6 +6,7 @@ import {
   Bot,
   CalendarDays,
   Car,
+  ChefHat,
   ClipboardPaste,
   CloudSun,
   Code2,
@@ -1038,6 +1039,8 @@ export function BookingPanel() {
   const [menuLinkSendState, setMenuLinkSendState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [menuOrderCopyState, setMenuOrderCopyState] = useState<Record<string, "idle" | "copied" | "error">>({});
   const [menuOrderDialogTarget, setMenuOrderDialogTarget] = useState<{ orderId: string; audience: "admin" | "cook" } | null>(null);
+  const [isMenuOrdersOverlayOpen, setIsMenuOrdersOverlayOpen] = useState(false);
+  const [selectedMenuOrderId, setSelectedMenuOrderId] = useState("");
   const [menuUploadItemId, setMenuUploadItemId] = useState("");
   const [menuUploadError, setMenuUploadError] = useState("");
   const [quickReplyButtons, setQuickReplyButtons] = useState<QuickReplyButton[]>([]);
@@ -1321,14 +1324,31 @@ export function BookingPanel() {
     () => menuItems.filter((item) => item.title.trim()),
     [menuItems]
   );
-  const recentMenuOrders = useMemo(
-    () => [...menuOrders].sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt))).slice(0, 8),
+  const activeMenuOrders = useMemo(
+    () => [...menuOrders]
+      .filter((order) => order.status !== "done" && order.status !== "cancelled")
+      .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt))),
     [menuOrders]
+  );
+  const archivedMenuOrders = useMemo(
+    () => [...menuOrders]
+      .filter((order) => order.status === "done" || order.status === "cancelled")
+      .sort((left, right) => String(right.archivedAt || right.updatedAt || right.createdAt).localeCompare(String(left.archivedAt || left.updatedAt || left.createdAt))),
+    [menuOrders]
+  );
+  const recentMenuOrders = useMemo(
+    () => activeMenuOrders.slice(0, 8),
+    [activeMenuOrders]
   );
   const menuOrderDialogOrder = useMemo(
     () => menuOrderDialogTarget ? menuOrders.find((order) => order.id === menuOrderDialogTarget.orderId) ?? null : null,
     [menuOrderDialogTarget, menuOrders]
   );
+  const selectedMenuOrder = useMemo(
+    () => menuOrders.find((order) => order.id === selectedMenuOrderId) ?? activeMenuOrders[0] ?? null,
+    [activeMenuOrders, menuOrders, selectedMenuOrderId]
+  );
+  const activeMenuOrderCount = activeMenuOrders.length;
   const objectGalleryMediaItems = useMemo(
     () => [
       ...objectGalleryPhotoPaths.map((path, index) => ({
@@ -4028,8 +4048,9 @@ export function BookingPanel() {
     const text = overrideText ?? (audience === "cook" ? buildMenuOrderCookText(order) : buildMenuOrderAdminText(order));
     const copied = await copyTextToClipboard(text);
     setMenuOrderCopyState((current) => ({ ...current, [`${order.id}:${audience}`]: copied ? "copied" : "error" }));
-    if (copied && audience === "cook" && order.status === "new") {
-      const nextOrder: MenuOrder = { ...order, status: "sentToKitchen", updatedAt: new Date().toISOString() };
+    if (copied && audience === "cook" && order.status !== "done" && order.status !== "cancelled") {
+      const sentAt = new Date().toISOString();
+      const nextOrder: MenuOrder = { ...order, status: "sentToKitchen", kitchenSentAt: order.kitchenSentAt || sentAt, updatedAt: sentAt };
       setMenuOrders((currentOrders) => currentOrders.map((item) => item.id === order.id ? nextOrder : item));
       try {
         await saveMenuOrder(nextOrder);
@@ -4042,9 +4063,43 @@ export function BookingPanel() {
     }, 1800);
   }
 
+  async function updateMenuOrder(order: MenuOrder, patch: Partial<MenuOrder>) {
+    const nextOrder: MenuOrder = { ...order, ...patch, updatedAt: new Date().toISOString() };
+    setMenuOrders((currentOrders) => currentOrders.map((item) => item.id === order.id ? nextOrder : item));
+    try {
+      const savedOrder = await saveMenuOrder(nextOrder);
+      setMenuOrders((currentOrders) => currentOrders.map((item) => item.id === order.id ? savedOrder : item));
+    } catch {
+      setMenuOrders((currentOrders) => currentOrders.map((item) => item.id === order.id ? order : item));
+    }
+  }
+
+  function openMenuOrdersOverlay(orderId?: string) {
+    if (orderId) {
+      setSelectedMenuOrderId(orderId);
+    } else if (!selectedMenuOrderId && activeMenuOrders[0]) {
+      setSelectedMenuOrderId(activeMenuOrders[0].id);
+    }
+    setIsMenuOrdersOverlayOpen(true);
+  }
+
+  async function markMenuOrderDone(order: MenuOrder) {
+    const archivedAt = new Date().toISOString();
+    await updateMenuOrder(order, { status: "done", archivedAt });
+    const nextActiveOrder = activeMenuOrders.find((item) => item.id !== order.id);
+    setSelectedMenuOrderId(nextActiveOrder?.id ?? "");
+  }
+
+  async function restoreMenuOrder(order: MenuOrder) {
+    await updateMenuOrder(order, { status: "new", archivedAt: "", kitchenSentAt: "" });
+    setSelectedMenuOrderId(order.id);
+    setIsMenuOrdersOverlayOpen(true);
+  }
+
   async function removeMenuOrder(order: MenuOrder) {
     setMenuOrders((currentOrders) => currentOrders.filter((item) => item.id !== order.id));
     setMenuOrderDialogTarget((currentTarget) => currentTarget?.orderId === order.id ? null : currentTarget);
+    setSelectedMenuOrderId((currentId) => currentId === order.id ? "" : currentId);
     try {
       await deleteMenuOrder(order.id);
     } catch {
@@ -6929,6 +6984,10 @@ export function BookingPanel() {
       <header className="gpb-panel-header">
         <HeaderWeatherStrip weatherState={todayWeatherState} />
         <div className="gpb-header-actions">
+          <button className={`gpb-header-menu-orders-button ${activeMenuOrderCount ? "has-orders" : ""}`} type="button" onClick={() => openMenuOrdersOverlay()} title="Заказы кухни">
+            <ChefHat size={18} />
+            {activeMenuOrderCount ? <span>{activeMenuOrderCount}</span> : null}
+          </button>
           <button type="button" onClick={openExternalPricePdfOptions} title="Внешний источник">
             <Share2 size={18} />
           </button>
@@ -7994,8 +8053,7 @@ export function BookingPanel() {
                           key={order.id}
                           order={order}
                           onDelete={() => void removeMenuOrder(order)}
-                          onOpenAdmin={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "admin" })}
-                          onOpenCook={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "cook" })}
+                          onOpen={() => openMenuOrdersOverlay(order.id)}
                         />
                       ))}
                       </div>
@@ -8189,8 +8247,7 @@ export function BookingPanel() {
                 key={order.id}
                 order={order}
                 onDelete={() => void removeMenuOrder(order)}
-                onOpenAdmin={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "admin" })}
-                onOpenCook={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "cook" })}
+                onOpen={() => openMenuOrdersOverlay(order.id)}
               />
             ))}
             </div>
@@ -8207,6 +8264,20 @@ export function BookingPanel() {
           text={menuOrderDialogTarget.audience === "cook" ? buildMenuOrderCookText(menuOrderDialogOrder) : buildMenuOrderAdminText(menuOrderDialogOrder)}
           onClose={() => setMenuOrderDialogTarget(null)}
           onCopy={(nextText) => void copyMenuOrderText(menuOrderDialogOrder, menuOrderDialogTarget.audience, nextText)}
+        />
+      ) : null}
+
+      {isMenuOrdersOverlayOpen ? (
+        <MenuOrdersWorkspaceOverlay
+          activeOrders={activeMenuOrders}
+          copyState={selectedMenuOrder ? menuOrderCopyState[`${selectedMenuOrder.id}:cook`] ?? "idle" : "idle"}
+          selectedOrder={selectedMenuOrder}
+          selectedOrderId={selectedMenuOrderId}
+          onClose={() => setIsMenuOrdersOverlayOpen(false)}
+          onCopyCook={(order, text) => void copyMenuOrderText(order, "cook", text)}
+          onDelete={(order) => void removeMenuOrder(order)}
+          onMarkDone={(order) => void markMenuOrderDone(order)}
+          onSelect={setSelectedMenuOrderId}
         />
       ) : null}
 
@@ -8500,6 +8571,7 @@ export function BookingPanel() {
           menuCookPhone={menuCookPhone}
           menuIntroText={menuIntroText}
           menuItems={menuItems}
+          menuOrderArchive={archivedMenuOrders}
           menuUploadItemId={menuUploadItemId}
           menuUploadError={menuUploadError}
           includedCardPages={includedCardPages}
@@ -8554,6 +8626,12 @@ export function BookingPanel() {
           onMenuItemDelete={handleMenuItemDelete}
           onMenuItemPhotoDownload={(item) => void downloadMenuItemPhoto(item)}
           onMenuItemPhotoUpload={handleMenuItemPhotoUpload}
+          onMenuOrderDelete={(order) => void removeMenuOrder(order)}
+          onMenuOrderEdit={(order) => {
+            setIsSettingsOpen(false);
+            openMenuOrdersOverlay(order.id);
+          }}
+          onMenuOrderRestore={(order) => void restoreMenuOrder(order)}
           onMenuPhotosDownload={() => void downloadAllMenuPhotos()}
           onMenuItemsBulkPriceChange={handleMenuItemsBulkPriceChange}
           onMenuSettingsSave={handleMenuSettingsSave}
@@ -8874,16 +8952,114 @@ function PaymentMethodRequiredOverlay({
   );
 }
 
+function MenuOrdersWorkspaceOverlay({
+  activeOrders,
+  copyState,
+  selectedOrder,
+  selectedOrderId,
+  onClose,
+  onCopyCook,
+  onDelete,
+  onMarkDone,
+  onSelect
+}: {
+  activeOrders: MenuOrder[];
+  copyState: "idle" | "copied" | "error";
+  selectedOrder: MenuOrder | null;
+  selectedOrderId: string;
+  onClose: () => void;
+  onCopyCook: (order: MenuOrder, text: string) => void;
+  onDelete: (order: MenuOrder) => void;
+  onMarkDone: (order: MenuOrder) => void;
+  onSelect: (orderId: string) => void;
+}) {
+  const [draftText, setDraftText] = useState(selectedOrder ? buildMenuOrderCookText(selectedOrder) : "");
+
+  useEffect(() => {
+    setDraftText(selectedOrder ? buildMenuOrderCookText(selectedOrder) : "");
+  }, [selectedOrder?.id]);
+
+  return (
+    <div className="gpb-create-backdrop gpb-menu-orders-workspace-backdrop">
+      <div className="gpb-create-modal gpb-menu-orders-workspace" role="dialog" aria-modal="true" aria-label="Заказы кухни">
+        <header className="gpb-create-header">
+          <div>
+            <strong>Заказы кухни</strong>
+            <span>{activeOrders.length ? `${activeOrders.length} активных` : "Активных заказов нет"}</span>
+          </div>
+          <button type="button" onClick={onClose} title="Закрыть">
+            <X size={18} />
+          </button>
+        </header>
+        <div className="gpb-menu-orders-workspace-body">
+          <aside className="gpb-menu-orders-workspace-list">
+            {activeOrders.length ? activeOrders.map((order) => (
+              <button
+                className={order.id === (selectedOrderId || selectedOrder?.id) ? "is-active" : ""}
+                key={order.id}
+                type="button"
+                onClick={() => onSelect(order.id)}
+              >
+                <strong>{order.guestName}</strong>
+                <span>{formatMenuOrderReadyTime(order)} · {formatPrice(order.total)}</span>
+                {order.kitchenSentAt ? <em>Повару: {formatElapsedSince(order.kitchenSentAt)}</em> : <em>{getMenuOrderStatusLabel(order.status)}</em>}
+              </button>
+            )) : (
+              <p>Новых заказов пока нет.</p>
+            )}
+          </aside>
+          <section className="gpb-menu-orders-workspace-editor">
+            {selectedOrder ? (
+              <>
+                <div className="gpb-menu-orders-workspace-summary">
+                  <strong>{selectedOrder.guestName}</strong>
+                  <span>{formatReservationPhone(selectedOrder.phone) || "телефон не указан"}</span>
+                  <span>{formatMenuOrderReadyTime(selectedOrder)}</span>
+                  <span>{getMenuOrderServingModeLabel(selectedOrder.servingMode)}</span>
+                  <b>{formatPrice(selectedOrder.total)}</b>
+                </div>
+                {selectedOrder.kitchenSentAt ? (
+                  <div className="gpb-menu-orders-workspace-timer">
+                    <Timer size={15} />
+                    <span>С момента копирования повару: {formatElapsedSince(selectedOrder.kitchenSentAt)}</span>
+                  </div>
+                ) : null}
+                <textarea value={draftText} onChange={(event) => setDraftText(event.target.value)} />
+                <div className="gpb-menu-orders-workspace-actions">
+                  <button className={`gpb-primary ${copyState === "copied" ? "is-done" : ""}`} type="button" onClick={() => onCopyCook(selectedOrder, draftText)}>
+                    <Copy size={15} />
+                    <span>{copyState === "copied" ? "Скопировано" : copyState === "error" ? "Не скопировано" : "Скопировать повару"}</span>
+                  </button>
+                  <button className="gpb-primary" type="button" onClick={() => onMarkDone(selectedOrder)}>
+                    <Check size={15} />
+                    <span>Заказ выдан</span>
+                  </button>
+                  <button className="gpb-secondary is-danger" type="button" onClick={() => onDelete(selectedOrder)} title="Удалить заказ">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="gpb-menu-orders-workspace-empty">
+                <ChefHat size={32} />
+                <span>Когда гость оформит заказ, он появится здесь.</span>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MenuOrderCompactCard({
   order,
   onDelete,
-  onOpenAdmin,
-  onOpenCook
+  onOpen
 }: {
   order: MenuOrder;
   onDelete: () => void;
-  onOpenAdmin: () => void;
-  onOpenCook: () => void;
+  onOpen: () => void;
 }) {
   return (
     <article className="gpb-menu-order-card gpb-menu-order-text-card">
@@ -8895,13 +9071,9 @@ function MenuOrderCompactCard({
       </header>
       <pre>{buildMenuOrderCardText(order)}</pre>
       <div className="gpb-menu-order-actions">
-        <button type="button" onClick={onOpenCook}>
-          <Copy size={13} />
-          <span>Повару</span>
-        </button>
-        <button type="button" onClick={onOpenAdmin}>
-          <Copy size={13} />
-          <span>Админу</span>
+        <button type="button" onClick={onOpen}>
+          <ChefHat size={13} />
+          <span>Открыть заказ</span>
         </button>
       </div>
     </article>
@@ -12147,6 +12319,7 @@ function SettingsModal({
   menuCookPhone,
   menuIntroText,
   menuItems,
+  menuOrderArchive,
   menuUploadItemId,
   menuUploadError,
   includedCardPages,
@@ -12201,6 +12374,9 @@ function SettingsModal({
   onMenuItemDelete,
   onMenuItemPhotoDownload,
   onMenuItemPhotoUpload,
+  onMenuOrderDelete,
+  onMenuOrderEdit,
+  onMenuOrderRestore,
   onMenuPhotosDownload,
   onMenuItemsBulkPriceChange,
   onMenuSettingsSave,
@@ -12239,6 +12415,7 @@ function SettingsModal({
   menuCookPhone: string;
   menuIntroText: string;
   menuItems: MenuItem[];
+  menuOrderArchive: MenuOrder[];
   menuUploadItemId: string;
   menuUploadError: string;
   includedCardPages: IncludedCardPage[];
@@ -12293,6 +12470,9 @@ function SettingsModal({
   onMenuItemDelete: (itemId: string) => void;
   onMenuItemPhotoDownload: (item: MenuItem) => void;
   onMenuItemPhotoUpload: (itemId: string, fileList: FileList | null) => void;
+  onMenuOrderDelete: (order: MenuOrder) => void;
+  onMenuOrderEdit: (order: MenuOrder) => void;
+  onMenuOrderRestore: (order: MenuOrder) => void;
   onMenuPhotosDownload: () => void;
   onMenuItemsBulkPriceChange: (percent: number) => void;
   onMenuSettingsSave: (patch: Pick<PaymentSettings, "menuAdminPhone" | "menuCookPhone" | "menuIntroText">) => void;
@@ -12386,7 +12566,7 @@ function SettingsModal({
     rooms: true
   });
   const [activeSettingsSection, setActiveSettingsSection] = useState<
-    "payment" | "company" | "links" | "gallery" | "menu" | "dialogs" | "chatbot" | "quickReplies" | "package" | "inventory" | "weather" | "backup" | "service" | "users"
+    "payment" | "company" | "links" | "gallery" | "menu" | "menuArchive" | "dialogs" | "chatbot" | "quickReplies" | "package" | "inventory" | "weather" | "backup" | "service" | "users"
   >("payment");
   const [customFieldRequest, setCustomFieldRequest] = useState<{
     existingValues: Record<string, string>;
@@ -12403,6 +12583,7 @@ function SettingsModal({
     { id: "links", label: "Ссылки", icon: Send },
     { id: "gallery", label: "Галерея", icon: Image },
     { id: "menu", label: "Меню", icon: Utensils },
+    { id: "menuArchive", label: "Архив заказов", icon: ChefHat },
     { id: "dialogs", label: "Диалоги", icon: Copy },
     { id: "quickReplies", label: "Быстрые ответы", icon: ClipboardPaste },
     { id: "chatbot", label: "Чат-бот", icon: Bot },
@@ -13247,6 +13428,42 @@ function SettingsModal({
                 </button>
                 <button className="gpb-primary" type="button" onClick={onMenuItemsSave}>Сохранить</button>
               </div>
+            </section>
+
+            <section className={`gpb-settings-panel ${activeSettingsSection === "menuArchive" ? "" : "is-hidden"}`}>
+              <div className="gpb-editor-title">
+                <ChefHat size={20} />
+                <h2>Архив заказов</h2>
+              </div>
+              <p className="gpb-settings-note">Выданные и отмененные заказы меню. Заказ можно восстановить, открыть для правки текста или удалить.</p>
+              {menuOrderArchive.length ? (
+                <div className="gpb-menu-order-archive-list">
+                  {menuOrderArchive.map((order) => (
+                    <article className="gpb-menu-order-archive-row" key={order.id}>
+                      <div>
+                        <strong>{order.guestName}</strong>
+                        <span>{formatReservationPhone(order.phone) || "телефон не указан"} · {formatMenuOrderReadyTime(order)} · {formatPrice(order.total)}</span>
+                        <small>{order.items.map((item) => `${item.title} x${item.quantity}`).join(", ")}</small>
+                      </div>
+                      <div>
+                        <button className="gpb-secondary" type="button" onClick={() => onMenuOrderEdit(order)}>
+                          <Pencil size={14} />
+                          <span>Открыть</span>
+                        </button>
+                        <button className="gpb-secondary" type="button" onClick={() => onMenuOrderRestore(order)}>
+                          <RefreshCw size={14} />
+                          <span>Восстановить</span>
+                        </button>
+                        <button className="gpb-secondary is-danger" type="button" onClick={() => onMenuOrderDelete(order)} title="Удалить заказ">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="gpb-settings-note">Архив заказов пока пустой.</p>
+              )}
             </section>
           </div>
 
@@ -24585,6 +24802,21 @@ function buildMenuOrderCardText(order: MenuOrder) {
 function formatMenuOrderReadyTime(order: MenuOrder) {
   if (order.servingMode !== "arrival") return "по готовности";
   return [order.readyDate ? formatShortDayMonth(order.readyDate) : "", order.readyTime].filter(Boolean).join(" ");
+}
+
+function formatElapsedSince(value: string) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "только что";
+  const diffMs = Math.max(0, Date.now() - timestamp);
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return "меньше минуты";
+  if (minutes < 60) return `${minutes} мин`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours < 24) return restMinutes ? `${hours} ч ${restMinutes} мин` : `${hours} ч`;
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours ? `${days} д ${restHours} ч` : `${days} д`;
 }
 
 function getMenuOrderServingModeLabel(mode: MenuOrder["servingMode"]) {

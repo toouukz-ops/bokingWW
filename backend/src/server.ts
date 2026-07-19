@@ -1,9 +1,10 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
-import Fastify from "fastify";
+import Fastify, { type FastifyReply } from "fastify";
 import { createReadStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { stat } from "node:fs/promises";
+import sharp from "sharp";
 import {
   claimActiveDialogData,
   deleteMenuOrderData,
@@ -41,7 +42,7 @@ import { config } from "./config.js";
 import { closeDatabase, connectDatabase } from "./db.js";
 import { deleteGuestContact, guestContactSchema, listGuestContacts, saveGuestContact } from "./guestContacts.js";
 import { cropPhotoFile, deleteMediaFile, ensureWhatsappVideoFile, getLocalUploadPath, saveRoomMediaFile, uploadsRoot } from "./media.js";
-import { getMediaContentType, getStoredMedia, openStoredMediaStream } from "./mediaStore.js";
+import { getMediaContentType, getStoredMedia, openStoredMediaStream, saveStoredMediaBuffer } from "./mediaStore.js";
 import { createOpenAiClient } from "./openai.js";
 import { addRoomMedia, deleteRoom, getRoom, listRooms, removeRoomMedia, replaceRoomMedia, roomSchema, saveRoom } from "./rooms.js";
 
@@ -75,14 +76,50 @@ await app.register(multipart, {
 });
 await mkdir(uploadsRoot, { recursive: true });
 
+const mediaCacheControl = "public, max-age=31536000, immutable";
+const menuThumbnailWidth = 640;
+const menuThumbnailQuality = 72;
+
+app.get("/uploads/thumb/*", async (request, reply) => {
+  const params = request.params as { "*": string };
+  const sourcePath = `/uploads/${params["*"] ?? ""}`;
+  const thumbnailPath = `/uploads/thumb/${params["*"] ?? ""}.webp`;
+
+  const storedThumbnail = await getStoredMedia(thumbnailPath);
+  if (storedThumbnail) {
+    reply.header("Cache-Control", mediaCacheControl);
+    reply.type("image/webp");
+    if (typeof storedThumbnail.length === "number") {
+      reply.header("content-length", String(storedThumbnail.length));
+    }
+    return reply.send(openStoredMediaStream(storedThumbnail._id));
+  }
+
+  try {
+    const thumbnail = await createMenuThumbnail(sourcePath);
+    await saveStoredMediaBuffer(thumbnailPath, thumbnail);
+    reply.header("Cache-Control", mediaCacheControl);
+    reply.header("content-length", String(thumbnail.length));
+    reply.type("image/webp");
+    return reply.send(thumbnail);
+  } catch {
+    return sendUploadMedia(sourcePath, reply);
+  }
+});
+
 app.get("/uploads/*", async (request, reply) => {
   const params = request.params as { "*": string };
   const publicPath = `/uploads/${params["*"] ?? ""}`;
+  return sendUploadMedia(publicPath, reply);
+});
+
+async function sendUploadMedia(publicPath: string, reply: FastifyReply) {
   const localPath = getLocalUploadPath(publicPath);
 
   if (localPath) {
     try {
       const localStat = await stat(localPath);
+      reply.header("Cache-Control", mediaCacheControl);
       reply.type(getMediaContentType(publicPath));
       reply.header("content-length", String(localStat.size));
       return reply.send(createReadStream(localPath));
@@ -96,12 +133,48 @@ app.get("/uploads/*", async (request, reply) => {
     return reply.status(404).send({ error: "Media not found" });
   }
 
+  reply.header("Cache-Control", mediaCacheControl);
   reply.type(String(storedMedia.contentType || getMediaContentType(publicPath)));
   if (typeof storedMedia.length === "number") {
     reply.header("content-length", String(storedMedia.length));
   }
   return reply.send(openStoredMediaStream(storedMedia._id));
-});
+}
+
+async function createMenuThumbnail(publicPath: string) {
+  const localPath = getLocalUploadPath(publicPath);
+  let image: sharp.Sharp;
+
+  if (localPath) {
+    try {
+      await stat(localPath);
+      image = sharp(localPath);
+    } catch {
+      image = sharp(await readStoredMediaBuffer(publicPath));
+    }
+  } else {
+    image = sharp(await readStoredMediaBuffer(publicPath));
+  }
+
+  return image
+    .rotate()
+    .resize({ width: menuThumbnailWidth, withoutEnlargement: true })
+    .webp({ quality: menuThumbnailQuality })
+    .toBuffer();
+}
+
+async function readStoredMediaBuffer(publicPath: string) {
+  const storedMedia = await getStoredMedia(publicPath);
+  if (!storedMedia) {
+    throw new Error("Media not found");
+  }
+
+  const chunks: Buffer[] = [];
+  for await (const chunk of openStoredMediaStream(storedMedia._id)) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
 
 const frontendDebugLogs: Array<{
   body: Record<string, unknown>;
@@ -425,7 +498,10 @@ function buildPublicMenuPage(reservationId: string) {
       date.setMinutes(Math.ceil((date.getMinutes() + 20) / 30) * 30, 0, 0);
       return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
     }
-    function mediaUrl(path) { return path ? path : ""; }
+    function mediaUrl(path) {
+      if (!path) return "";
+      return path.startsWith("/uploads/") ? "/uploads/thumb/" + path.replace(/^\\/uploads\\//, "") + ".webp" : path;
+    }
     function setStatus(text, tone) {
       const node = document.getElementById("status");
       node.textContent = text || "";
@@ -450,7 +526,7 @@ function buildPublicMenuPage(reservationId: string) {
       menu.innerHTML = state.items.map((item) => {
         const count = state.cart[item.id]?.quantity || 0;
         return '<article class="card">' +
-          (item.photoPath ? '<img class="photo" src="' + mediaUrl(item.photoPath) + '" alt="">' : '<div class="photo"></div>') +
+          (item.photoPath ? '<img class="photo" src="' + mediaUrl(item.photoPath) + '" alt="" loading="lazy" decoding="async">' : '<div class="photo"></div>') +
           '<div class="body">' +
           '<div class="title"><span>' + item.title + '</span><span class="price">' + money(item.price) + '</span></div>' +
           '<p class="meta">' + [item.composition, item.cookingTime ? "Время: " + item.cookingTime : ""].filter(Boolean).join("<br>") + '</p>' +

@@ -762,7 +762,10 @@ function buildPublicMenuPage(reservationId: string) {
     async function boot() {
       try {
         const menuApiUrl = reservationId ? "/api/public/menu/" + encodeURIComponent(reservationId) : "/api/public/menu";
-        const response = await fetch(menuApiUrl);
+        let response = await fetch(menuApiUrl);
+        if (!response.ok && reservationId) {
+          response = await fetch("/api/public/menu");
+        }
         if (!response.ok) throw new Error("menu failed");
         const data = await response.json();
         state.items = data.menuItems || [];
@@ -821,13 +824,21 @@ app.get("/api/public/menu/:reservationId", async (request, reply) => {
   const { reservationId } = request.params as { reservationId: string };
   const reservations = await listReservations();
   const reservation = reservations.find((item) => item.id === reservationId);
-  if (!reservation) return reply.status(404).send({ error: "Reservation not found" });
 
   const settings = await getPaymentSettingsData();
+  const menuItems = getPublicMenuItems(settings);
+
+  if (!reservation) {
+    return {
+      introText: getPublicMenuIntroText(settings),
+      menuItems,
+      reservation: null
+    };
+  }
+
   const rooms = await listRooms();
   const roomIds = Array.isArray(reservation.roomIds) ? reservation.roomIds.map((roomId) => String(roomId)) : [];
   const reservationRooms = rooms.filter((room) => roomIds.includes(room.id));
-  const menuItems = getPublicMenuItems(settings);
 
   return {
     introText: getPublicMenuIntroText(settings),

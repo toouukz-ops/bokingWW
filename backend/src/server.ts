@@ -457,6 +457,22 @@ function buildPublicMenuPage(reservationId: string) {
     .empty, .status { color: #637080; line-height: 1.4; }
     .status.success { color: #0f6b57; font-weight: 800; }
     .status.error { color: #b42318; font-weight: 800; }
+    .order-summary { display: none; margin-top: 12px; border: 1px solid #cfe4dd; background: #f2fbf7; border-radius: 8px; padding: 12px; }
+    .order-summary.is-visible { display: block; }
+    .order-summary h3 { margin: 0 0 8px; font-size: 18px; }
+    .order-summary pre { margin: 0; white-space: pre-wrap; font: 700 14px/1.45 Inter, Arial, sans-serif; color: #17212b; }
+    .summary-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+    .summary-actions .wide { grid-column: 1 / -1; }
+    .summary-actions button { border: 1px solid #cfd8df; background: white; border-radius: 7px; min-height: 38px; font-weight: 800; color: #17212b; cursor: pointer; }
+    .confirm-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 18px; background: rgba(23,33,43,.54); }
+    .confirm-backdrop[hidden] { display: none; }
+    .confirm-modal { width: min(460px, 100%); border-radius: 10px; background: white; border: 1px solid #d9e1e6; box-shadow: 0 18px 60px rgba(23,33,43,.28); padding: 16px; }
+    .confirm-modal h2 { margin: 0 0 8px; font-size: 22px; }
+    .confirm-modal pre { margin: 0; white-space: pre-wrap; font: 800 15px/1.45 Inter, Arial, sans-serif; color: #17212b; }
+    .confirm-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+    .confirm-actions button { border-radius: 7px; min-height: 42px; font-weight: 900; cursor: pointer; }
+    .confirm-actions .cancel { border: 1px solid #cfd8df; background: white; color: #17212b; }
+    .confirm-actions .confirm { border: 0; background: #0f6b57; color: white; }
     @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } .cart { position: static; } .page { padding: 10px; } .schedule-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; } .schedule-card { padding: 9px; } .schedule-label { font-size: 14px; } .schedule-card input { font-size: 16px; } }
   </style>
 </head>
@@ -504,8 +520,27 @@ function buildPublicMenuPage(reservationId: string) {
         <div class="total"><span>Итого</span><span id="total">0 тг</span></div>
         <button class="submit" style="width:100%;margin-top:12px" id="submit">Оформить заказ</button>
         <p class="status" id="status"></p>
+        <section class="order-summary" id="orderSummary">
+          <h3>Ваш заказ</h3>
+          <pre id="orderSummaryText"></pre>
+          <div class="summary-actions">
+            <button type="button" id="copyOrder">Скопировать</button>
+            <button type="button" id="saveOrder">Сохранить</button>
+            <button class="wide" type="button" id="downloadOrder">Скачать TXT</button>
+          </div>
+        </section>
       </aside>
     </main>
+  </div>
+  <div class="confirm-backdrop" id="confirmBackdrop" hidden>
+    <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h2 id="confirmTitle">Проверьте заказ</h2>
+      <pre id="confirmText"></pre>
+      <div class="confirm-actions">
+        <button class="cancel" type="button" id="confirmCancel">Изменить</button>
+        <button class="confirm" type="button" id="confirmSubmit">Все верно</button>
+      </div>
+    </div>
   </div>
   <script>
     const reservationId = "${safeReservationId}";
@@ -572,6 +607,83 @@ function buildPublicMenuPage(reservationId: string) {
     function getOrderTotal() {
       return Object.values(state.cart).reduce((sum, line) => sum + line.price * line.quantity, 0);
     }
+    function servingModeLabel(mode) {
+      if (mode === "takeaway") return "упаковать с собой";
+      if (mode === "arrival") return "подготовить к приезду";
+      return "подать по готовности";
+    }
+    function buildOrderSummaryText(order) {
+      const itemLines = order.items.map((line, index) => (index + 1) + ". " + line.title + " x" + line.quantity + " = " + money(line.price * line.quantity));
+      return [
+        "Заказ по меню",
+        "Гость: " + (order.guestName || "Гость"),
+        order.phone ? "Телефон: " + order.phone : "",
+        "Время: " + [order.readyDate, order.readyTime].filter(Boolean).join(" "),
+        "Подача: " + servingModeLabel(order.servingMode),
+        ...itemLines,
+        "Итого: " + money(order.total),
+        "Оплата: не оплачено",
+        order.comment ? "Комментарий: " + order.comment : ""
+      ].filter(Boolean).join("\\n");
+    }
+    function showOrderConfirmation(order) {
+      return new Promise((resolve) => {
+        const backdrop = document.getElementById("confirmBackdrop");
+        const text = document.getElementById("confirmText");
+        const cancel = document.getElementById("confirmCancel");
+        const submit = document.getElementById("confirmSubmit");
+        text.textContent = buildOrderSummaryText(order) + "\\n\\nВсе верно?";
+        backdrop.hidden = false;
+        function close(result) {
+          backdrop.hidden = true;
+          cancel.onclick = null;
+          submit.onclick = null;
+          resolve(result);
+        }
+        cancel.onclick = () => close(false);
+        submit.onclick = () => close(true);
+      });
+    }
+    function showOrderSummary(order) {
+      const summary = document.getElementById("orderSummary");
+      const text = document.getElementById("orderSummaryText");
+      text.textContent = buildOrderSummaryText(order);
+      summary.classList.add("is-visible");
+    }
+    async function copyOrderSummary() {
+      const text = document.getElementById("orderSummaryText").textContent || "";
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus("Заказ скопирован.", "success");
+      } catch {
+        setStatus("Не удалось скопировать автоматически. Выделите текст заказа вручную.", "error");
+      }
+    }
+    async function saveOrderSummary() {
+      const text = document.getElementById("orderSummaryText").textContent || "";
+      if (!text) return;
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: "Заказ Green Pine Burabay", text });
+          setStatus("Заказ сохранен.", "success");
+          return;
+        } catch {
+          return;
+        }
+      }
+      downloadOrderSummary();
+    }
+    function downloadOrderSummary() {
+      const text = document.getElementById("orderSummaryText").textContent || "";
+      if (!text) return;
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "green-pine-menu-order.txt";
+      link.click();
+      URL.revokeObjectURL(link.href);
+    }
     function setServingMode(mode) {
       state.servingMode = mode;
       ["ready", "takeaway", "arrival"].forEach((id) => {
@@ -613,10 +725,6 @@ function buildPublicMenuPage(reservationId: string) {
       const phone = r.phone || menuGuestPhone;
       const roomNumbers = r.roomNumbers || [];
       const total = getOrderTotal();
-      const confirmationText = state.servingMode === "arrival"
-        ? "Вы делаете заказ на " + readyDate + " " + readyTime + " на сумму " + money(total) + ".\\nВсе верно?"
-        : "Вы делаете заказ на сумму " + money(total) + ".\\nВсе верно?";
-      if (!window.confirm(confirmationText)) return;
       const order = {
         source: reservationId ? "reservation-link" : "qr",
         reservationId,
@@ -625,13 +733,14 @@ function buildPublicMenuPage(reservationId: string) {
         roomNumbers,
         checkIn: r.checkIn || "",
         readyDate: state.servingMode === "arrival" ? readyDate : today(),
-        readyTime,
+        readyTime: state.servingMode === "arrival" ? readyTime : "",
         servingMode: state.servingMode,
         comment: document.getElementById("comment").value || "",
         items: lines.map((line) => ({ ...line, id: "item-" + line.menuItemId, total: line.price * line.quantity })),
         status: "new",
         paymentStatus: "unpaid"
       };
+      if (!(await showOrderConfirmation(order))) return;
       setStatus("Отправляем заказ...", "");
       document.getElementById("submit").disabled = true;
       try {
@@ -641,7 +750,10 @@ function buildPublicMenuPage(reservationId: string) {
           body: JSON.stringify(order)
         });
         if (!response.ok) throw new Error("request failed");
-        setStatus("Заказ принят. Администратор и кухня увидят его в системе.", "success");
+        const savedOrder = await response.json();
+        const acceptedOrder = { ...order, ...savedOrder };
+        showOrderSummary(acceptedOrder);
+        setStatus("Заказ принят.", "success");
       } catch {
         setStatus("Не удалось отправить заказ. Попробуйте еще раз.", "error");
         document.getElementById("submit").disabled = false;
@@ -667,6 +779,9 @@ function buildPublicMenuPage(reservationId: string) {
     document.getElementById("takeaway").onclick = () => setServingMode("takeaway");
     document.getElementById("arrival").onclick = () => setServingMode("arrival");
     document.getElementById("submit").onclick = submitOrder;
+    document.getElementById("copyOrder").onclick = () => void copyOrderSummary();
+    document.getElementById("saveOrder").onclick = () => void saveOrderSummary();
+    document.getElementById("downloadOrder").onclick = downloadOrderSummary;
     boot();
   </script>
 </body>

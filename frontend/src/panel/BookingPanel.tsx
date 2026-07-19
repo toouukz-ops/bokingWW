@@ -1036,6 +1036,7 @@ export function BookingPanel() {
   const [menuOrders, setMenuOrders] = useState<MenuOrder[]>([]);
   const [menuLinkSendState, setMenuLinkSendState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [menuOrderCopyState, setMenuOrderCopyState] = useState<Record<string, "idle" | "copied" | "error">>({});
+  const [menuOrderDialogTarget, setMenuOrderDialogTarget] = useState<{ orderId: string; audience: "admin" | "cook" } | null>(null);
   const [menuUploadItemId, setMenuUploadItemId] = useState("");
   const [menuUploadError, setMenuUploadError] = useState("");
   const [quickReplyButtons, setQuickReplyButtons] = useState<QuickReplyButton[]>([]);
@@ -1322,6 +1323,56 @@ export function BookingPanel() {
   const recentMenuOrders = useMemo(
     () => [...menuOrders].sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt))).slice(0, 8),
     [menuOrders]
+  );
+  const currentChatMenuOrders = useMemo(
+    () => {
+      const reservationIds = new Set([lastReservation?.id, currentReservationDraft?.id].filter(Boolean));
+      const phoneDigits = [
+        activeChat?.phone,
+        buildPhoneWithPrefix(guestPhone, guestPhonePrefix),
+        guestPhone,
+        lastReservation?.phone,
+        currentReservationDraft?.phone
+      ]
+        .map((phone) => normalizePhoneSearch(phone ?? ""))
+        .filter(Boolean);
+      const phoneTails = new Set(phoneDigits.map((phone) => phone.slice(-10)).filter(Boolean));
+      const guestNames = [
+        guestFirstName,
+        activeChat?.title,
+        lastReservation?.guestFirstName,
+        currentReservationDraft?.guestFirstName
+      ]
+        .map((name) => normalizeContactLookupText(name ?? ""))
+        .filter(Boolean);
+      return [...menuOrders]
+        .filter((order) => {
+          if (order.reservationId && reservationIds.has(order.reservationId)) return true;
+          const orderPhoneTail = normalizePhoneSearch(order.phone).slice(-10);
+          if (orderPhoneTail && phoneTails.has(orderPhoneTail)) return true;
+          const orderGuestName = normalizeContactLookupText(order.guestName);
+          if (orderGuestName && guestNames.includes(orderGuestName)) return true;
+          return false;
+        })
+        .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
+        .slice(0, 5);
+    },
+    [
+      activeChat?.phone,
+      activeChat?.title,
+      currentReservationDraft?.guestFirstName,
+      currentReservationDraft?.id,
+      currentReservationDraft?.phone,
+      guestFirstName,
+      guestPhone,
+      guestPhonePrefix,
+      lastReservation,
+      menuOrders
+    ]
+  );
+  const menuOrderDialogOrder = useMemo(
+    () => menuOrderDialogTarget ? menuOrders.find((order) => order.id === menuOrderDialogTarget.orderId) ?? null : null,
+    [menuOrderDialogTarget, menuOrders]
   );
   const objectGalleryMediaItems = useMemo(
     () => [
@@ -7915,6 +7966,38 @@ export function BookingPanel() {
                     </div>
                   ) : null}
                 </div>
+                {currentChatMenuOrders.length ? (
+                  <div className="gpb-addon-sales-block gpb-guest-menu-orders-block">
+                    <div className="gpb-addon-sales-head">
+                      <strong>Заказы гостя</strong>
+                      <span>{currentChatMenuOrders.length} активн.</span>
+                    </div>
+                    <div className="gpb-guest-menu-orders-list">
+                      {currentChatMenuOrders.map((order) => (
+                        <article className={`gpb-guest-menu-order-row is-${order.status}`} key={order.id}>
+                          <div>
+                            <strong>{formatPrice(order.total)}</strong>
+                            <span>{formatMenuOrderReadyTime(order)} · {getMenuOrderStatusLabel(order.status)}</span>
+                          </div>
+                          <div className="gpb-guest-menu-order-items">
+                            {order.items.slice(0, 3).map((item) => (
+                              <span key={item.id}>{item.title} x{item.quantity}</span>
+                            ))}
+                            {order.items.length > 3 ? <span>+{order.items.length - 3}</span> : null}
+                          </div>
+                          <div className="gpb-guest-menu-order-actions">
+                            <button type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "cook" })}>
+                              Повару
+                            </button>
+                            <button type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "admin" })}>
+                              Админу
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </>
             ) : null}
             <div className="gpb-booking-action-grid">
@@ -8118,19 +8201,30 @@ export function BookingPanel() {
                 </div>
                 {order.comment.trim() ? <p>{order.comment.trim()}</p> : null}
                 <div className="gpb-menu-order-actions">
-                  <button className="gpb-secondary" type="button" onClick={() => void copyMenuOrderText(order, "cook")}>
+                  <button className="gpb-secondary" type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "cook" })}>
                     <Copy size={14} />
-                    <span>{menuOrderCopyState[`${order.id}:cook`] === "copied" ? "Скопировано" : "Повару"}</span>
+                    <span>Повару</span>
                   </button>
-                  <button className="gpb-secondary" type="button" onClick={() => void copyMenuOrderText(order, "admin")}>
+                  <button className="gpb-secondary" type="button" onClick={() => setMenuOrderDialogTarget({ orderId: order.id, audience: "admin" })}>
                     <Copy size={14} />
-                    <span>{menuOrderCopyState[`${order.id}:admin`] === "copied" ? "Скопировано" : "Админу"}</span>
+                    <span>Админу</span>
                   </button>
                 </div>
               </article>
             ))}
           </div>
         </section>
+      ) : null}
+
+      {menuOrderDialogTarget && menuOrderDialogOrder ? (
+        <MenuOrderSendDialog
+          audience={menuOrderDialogTarget.audience}
+          copyState={menuOrderCopyState[`${menuOrderDialogOrder.id}:${menuOrderDialogTarget.audience}`] ?? "idle"}
+          order={menuOrderDialogOrder}
+          text={menuOrderDialogTarget.audience === "cook" ? buildMenuOrderCookText(menuOrderDialogOrder) : buildMenuOrderAdminText(menuOrderDialogOrder)}
+          onClose={() => setMenuOrderDialogTarget(null)}
+          onCopy={() => void copyMenuOrderText(menuOrderDialogOrder, menuOrderDialogTarget.audience)}
+        />
       ) : null}
 
       {isQuickPhraseFormOpen ? (
@@ -8792,6 +8886,60 @@ function PaymentMethodRequiredOverlay({
             </button>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function MenuOrderSendDialog({
+  audience,
+  copyState,
+  order,
+  text,
+  onClose,
+  onCopy
+}: {
+  audience: "admin" | "cook";
+  copyState: "idle" | "copied" | "error";
+  order: MenuOrder;
+  text: string;
+  onClose: () => void;
+  onCopy: () => void;
+}) {
+  const title = audience === "cook" ? "Отправка повару" : "Отправка админу";
+  const targetLabel = audience === "cook" ? "Повар" : "Админ";
+
+  return (
+    <div className="gpb-create-backdrop gpb-menu-order-dialog-backdrop">
+      <div className="gpb-create-modal gpb-menu-order-dialog" role="dialog" aria-modal="true" aria-label={title}>
+        <header className="gpb-create-header">
+          <div>
+            <strong>{title}</strong>
+            <span>{order.guestName} · {formatPrice(order.total)} · {getMenuOrderStatusLabel(order.status)}</span>
+          </div>
+          <button type="button" onClick={onClose} title="Закрыть">
+            <X size={18} />
+          </button>
+        </header>
+        <div className="gpb-menu-order-dialog-body">
+          <div className="gpb-menu-order-dialog-alert">
+            <strong>{targetLabel}: выберите чат вручную</strong>
+            <span>Система копирует текст, но не переключает WhatsApp сама, чтобы заказ не ушел чужому клиенту.</span>
+          </div>
+          <div className="gpb-menu-order-dialog-summary">
+            <span>{order.roomNumbers.length ? `Номер ${order.roomNumbers.join(", ")}` : "Номер не указан"}</span>
+            <span>{formatMenuOrderReadyTime(order)}</span>
+            <span>{getMenuOrderServingModeLabel(order.servingMode)}</span>
+          </div>
+          <textarea readOnly value={text} />
+        </div>
+        <footer className="gpb-create-footer">
+          <button className="gpb-secondary" type="button" onClick={onClose}>Закрыть</button>
+          <button className={`gpb-primary ${copyState === "copied" ? "is-done" : ""}`} type="button" onClick={onCopy}>
+            <Copy size={16} />
+            <span>{copyState === "copied" ? "Скопировано" : copyState === "error" ? "Не скопировано" : `Скопировать для ${audience === "cook" ? "повара" : "админа"}`}</span>
+          </button>
+        </footer>
       </div>
     </div>
   );

@@ -3165,6 +3165,89 @@ body.gpb-booking-panel-open #app {
   white-space: nowrap;
 }
 
+.gpb-guest-menu-orders-block {
+  border-color: #cfe2ff;
+  background: #f7fbff;
+}
+
+.gpb-guest-menu-orders-list {
+  display: grid;
+  gap: 6px;
+}
+
+.gpb-guest-menu-order-row {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid #d8e5f2;
+  border-left: 4px solid #0f7a63;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 6px 7px;
+}
+
+.gpb-guest-menu-order-row > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.gpb-guest-menu-order-row strong {
+  color: #16202a;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.gpb-guest-menu-order-row span {
+  color: #64707d;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.gpb-guest-menu-order-items {
+  display: flex;
+  gap: 5px;
+  overflow: hidden;
+}
+
+.gpb-guest-menu-order-items span {
+  overflow: hidden;
+  max-width: 150px;
+  border: 1px solid #d8dee5;
+  border-radius: 999px;
+  background: #f7f9fb;
+  color: #25313d;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 7px;
+}
+
+.gpb-guest-menu-order-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.gpb-guest-menu-order-actions button {
+  height: 28px;
+  border: 1px solid #b9d5cb;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #0f6b57;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 0 8px;
+}
+
+.gpb-guest-menu-order-actions button:hover {
+  border-color: #0f6b57;
+  background: #e8f7f1;
+}
+
 .gpb-addon-sales-grid input[readonly] {
   background: #eef8f4;
   color: #0f6b57;
@@ -9634,6 +9717,84 @@ body.gpb-reservation-split-resizing {
 
 .gpb-menu-order-card p {
   margin: 0;
+}
+
+.gpb-menu-order-dialog-backdrop {
+  z-index: 2147483646;
+}
+
+.gpb-menu-order-dialog {
+  width: min(620px, calc(100vw - 28px));
+  max-height: min(720px, calc(100vh - 34px));
+}
+
+.gpb-menu-order-dialog-body {
+  display: grid;
+  gap: 10px;
+}
+
+.gpb-menu-order-dialog-alert {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #f1c27d;
+  border-radius: 8px;
+  background: #fff8ed;
+  padding: 10px;
+}
+
+.gpb-menu-order-dialog-alert strong {
+  color: #8a4b00;
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.gpb-menu-order-dialog-alert span {
+  color: #6d5a3f;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.gpb-menu-order-dialog-summary {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.gpb-menu-order-dialog-summary span {
+  border-radius: 999px;
+  background: #e9f7f2;
+  color: #0f6b57;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 5px 9px;
+}
+
+.gpb-menu-order-dialog textarea {
+  width: 100%;
+  min-height: 250px;
+  max-height: 360px;
+  resize: vertical;
+  border: 1px solid #cfd6dd;
+  border-radius: 8px;
+  background: #f7f9fb;
+  color: #16202a;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+  padding: 10px;
+}
+
+.gpb-menu-order-dialog .gpb-create-footer .gpb-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.gpb-menu-order-dialog .gpb-create-footer .gpb-primary.is-done {
+  background: #0f7a63;
 }
 
 .gpb-client-media-preview {

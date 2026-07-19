@@ -2995,18 +2995,18 @@ export function BookingPanel() {
         tone: "pending" as const
       };
     }
-    if (syncState === "error") {
-      return {
-        detail: contact?.appeal || formatReservationPhone(phone),
-        label: "Ошибка базы",
-        tone: "warning" as const
-      };
-    }
     if (contact) {
       return {
         detail: contact.appeal || formatReservationPhone(contact.phone),
         label: "Сохранен в базе",
         tone: "saved" as const
+      };
+    }
+    if (syncState === "error") {
+      return {
+        detail: formatReservationPhone(phone),
+        label: "Ошибка базы",
+        tone: "warning" as const
       };
     }
     if (currentBackendState === "offline") {
@@ -3048,7 +3048,8 @@ export function BookingPanel() {
     setGuestFirstName(contact.appeal || getGuestNameFallbackFromPhone(contact.phone));
     setContactExtracted(true);
     setContactSavedInWhatsApp(false);
-    setContactSaveState("error");
+    setContactSaveState("saved");
+    setContactServerSyncByPhone((current) => ({ ...current, [normalizePhoneSearch(contact.phone)]: "synced" }));
     setContactLookupNotice({
       tone: "warning",
       text: `Контакт уже есть в базе: ${contact.appeal || getGuestNameFallbackFromPhone(contact.phone)}. Откройте его вручную в WhatsApp.`

@@ -3890,7 +3890,23 @@ export function BookingPanel() {
   }
 
   function getReservationForMenuLink() {
-    return lastReservation ?? currentReservationDraft;
+    const directReservation = lastReservation ?? currentReservationDraft;
+    if (directReservation) return directReservation;
+
+    const currentPhone = normalizePhoneSearch(
+      activeChat?.phone || buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone
+    );
+    const currentTitle = normalizeContactLookupText(guestFirstName || activeChat?.title || "");
+    return reservations
+      .filter((reservation) => !reservation.isAddOnSale && reservation.status !== "cancelled" && !reservation.noShowAt)
+      .filter((reservation) => {
+        const reservationPhone = normalizePhoneSearch(reservation.phone);
+        if (currentPhone && reservationPhone && currentPhone === reservationPhone) return true;
+        return Boolean(currentTitle && normalizeContactLookupText(reservation.guestFirstName) === currentTitle);
+      })
+      .sort((left, right) =>
+        String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || ""))
+      )[0] ?? null;
   }
 
   function buildReservationMenuLink(reservation: Reservation) {

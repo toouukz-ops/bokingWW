@@ -3054,6 +3054,10 @@ export function BookingPanel() {
   }
 
   async function saveCachedChatBookingDraft(chatId: string, draft: ChatBookingDraft) {
+    const cachedDraft = getCachedChatBookingDraft(chatId);
+    if (cachedDraft && getChatDraftContentFingerprint(cachedDraft) === getChatDraftContentFingerprint(draft)) {
+      return;
+    }
     updateDraftCache(chatId, draft);
     if (isRealtimeDraftForActiveChat(chatId, draft)) {
       lastAppliedDraftUpdatedAtRef.current = maxIsoDate(lastAppliedDraftUpdatedAtRef.current, draft.updatedAt);
@@ -4269,15 +4273,20 @@ export function BookingPanel() {
         `Предложение на согласование на ${formatKazakhDate(checkIn)}. В PDF выбранные объекты, фото, цены и условия.`
       );
       if (sent) {
-        setLastReservation(currentReservationDraft);
-        setAgreementSent(true);
-        setAgreementEverSent(true);
         await holdRoomsForAgreement(currentReservationDraft);
         await ensureGuestContactForReservation(currentReservationDraft);
-        await saveAgreementDraftForReservation(currentReservationDraft, { includeActiveChat: true });
+        const pendingReservation = { ...currentReservationDraft, status: "pending" as const };
+        const saved = await updateReservation(pendingReservation);
+        if (!saved) throw new Error("AGREEMENT_RESERVATION_SAVE_FAILED");
+        setAgreementSent(true);
+        setAgreementEverSent(true);
+        await saveAgreementDraftForReservation(pendingReservation, { includeActiveChat: true });
       }
       setSendState(sent ? "sent" : "error");
     } catch {
+      await clearRoomHoldsForReservation(currentReservationDraft, true).catch(() => undefined);
+      setLastReservation(null);
+      setAgreementSent(false);
       setSendState("error");
     } finally {
       window.setTimeout(() => {
@@ -4796,7 +4805,7 @@ export function BookingPanel() {
 
   async function holdRoomsForAgreement(reservation: Reservation) {
     const reservationItems = getReservationItems(reservation).filter((item) => reservation.roomIds.includes(item.roomId));
-    if (!reservationItems.length) return;
+    if (!reservationItems.length) throw new Error("AGREEMENT_ROOM_HOLD_EMPTY");
 
     const expiresAt = new Date(Date.now() + agreementHoldDurationMs).toISOString();
     const activeHolds = filterActiveRoomHolds(roomHolds);
@@ -4819,10 +4828,17 @@ export function BookingPanel() {
 
     setRoomHolds(nextHolds);
     await saveStoredRoomHolds(nextHolds);
-    await Promise.allSettled([
-      ...removedHoldIds.map((holdId) => deleteRoomHold(holdId, syncClientIdRef.current)),
-      ...nextAgreementHolds.map((hold) => saveRoomHold(hold))
-    ]);
+    try {
+      // A pending application is only valid when every selected room is
+      // protected on the server. Never hide a failed hold behind allSettled.
+      await Promise.all(nextAgreementHolds.map((hold) => saveRoomHold(hold)));
+      await Promise.allSettled(removedHoldIds.map((holdId) => deleteRoomHold(holdId, syncClientIdRef.current)));
+    } catch (error) {
+      setRoomHolds(activeHolds);
+      await saveStoredRoomHolds(activeHolds);
+      await Promise.allSettled(nextAgreementHolds.map((hold) => deleteRoomHold(hold.id, syncClientIdRef.current)));
+      throw error;
+    }
   }
 
   async function toggleRoomHold(room: Room) {
@@ -7203,13 +7219,10 @@ export function BookingPanel() {
     setPrepaymentAmountTarget(null);
     try {
       const existingReservation = findExistingReservationForDraft(reservation);
-      let targetReservation = existingReservation
-        ? mergeReservationPaymentState(reservation, existingReservation)
-        : reservation;
       if (!existingReservation) {
-        const created = await updateReservation({ ...targetReservation, status: "pending" });
-        if (!created) throw new Error("PREPAYMENT_RESERVATION_CREATE_FAILED");
+        throw new Error("PREPAYMENT_REQUIRES_SAVED_AGREEMENT");
       }
+      const targetReservation = mergeReservationPaymentState(reservation, existingReservation);
       const savedReservation = await applyReservationAction(targetReservation.id, "prepayment", {
         amount,
         clientId: syncClientIdRef.current,
@@ -7221,8 +7234,12 @@ export function BookingPanel() {
       await syncReservationDraftForStatus(savedReservation);
     } catch (error) {
       setPrepaymentAlreadyPaid(Boolean(reservation.prepaymentReceivedAt));
-      setPrepaymentAmountTarget(reservation);
-      setBookingDateWarning("Не удалось записать предоплату на сервере. Обновите бронь и повторите действие.");
+      if (error instanceof Error && error.message === "PREPAYMENT_REQUIRES_SAVED_AGREEMENT") {
+        setBookingDateWarning("Предоплата не записана: сначала успешно отправьте заявку «На согласование» и дождитесь её сохранения на сервере.");
+      } else {
+        setPrepaymentAmountTarget(reservation);
+        setBookingDateWarning("Не удалось записать предоплату на сервере. Обновите бронь и повторите действие.");
+      }
       void sendDebugLog("reservation-prepayment-action-error", {
         message: error instanceof Error ? error.message : String(error),
         reservationId: reservation.id
@@ -7698,14 +7715,30 @@ export function BookingPanel() {
     if (!ensureReservationDatesAreNotPast(reservation)) return;
 
     setSendState("sending");
-    setLastReservation(reservation);
     const inserted = await insertTextIntoActiveWhatsAppChat(buildReservationMessage(reservation, rooms));
     if (inserted) {
-      setAgreementSent(true);
-      setAgreementEverSent(true);
-      await holdRoomsForAgreement(reservation);
-      await ensureGuestContactForReservation(reservation);
-      await saveAgreementDraftForReservation(reservation);
+      try {
+        await holdRoomsForAgreement(reservation);
+        await ensureGuestContactForReservation(reservation);
+        const pendingReservation = { ...reservation, status: "pending" as const };
+        const saved = await updateReservation(pendingReservation);
+        if (!saved) throw new Error("AGREEMENT_RESERVATION_SAVE_FAILED");
+        setAgreementSent(true);
+        setAgreementEverSent(true);
+        await saveAgreementDraftForReservation(pendingReservation);
+      } catch (error) {
+        await clearRoomHoldsForReservation(reservation, true).catch(() => undefined);
+        setLastReservation(null);
+        setAgreementSent(false);
+        setBookingDateWarning("Заявка отправлена в чат, но не сохранена на сервере. Предоплата и подтверждение брони заблокированы — повторите «На согласование» после восстановления сервера.");
+        void sendDebugLog("reservation-agreement-save-error", {
+          message: error instanceof Error ? error.message : String(error),
+          reservationId: reservation.id
+        });
+        setSendState("error");
+        window.setTimeout(() => setSendState("idle"), 2600);
+        return;
+      }
     }
     setSendState(inserted ? "sent" : "error");
     window.setTimeout(() => setSendState("idle"), 2600);
@@ -7721,12 +7754,28 @@ export function BookingPanel() {
     setSendState("sending");
     const inserted = await insertTextIntoActiveWhatsAppChat(buildReservationTotalMessage(reservation, rooms));
     if (inserted) {
-      setLastReservation(reservation);
-      setAgreementSent(true);
-      setAgreementEverSent(true);
-      await holdRoomsForAgreement(reservation);
-      await ensureGuestContactForReservation(reservation);
-      await saveAgreementDraftForReservation(reservation);
+      try {
+        await holdRoomsForAgreement(reservation);
+        await ensureGuestContactForReservation(reservation);
+        const pendingReservation = { ...reservation, status: "pending" as const };
+        const saved = await updateReservation(pendingReservation);
+        if (!saved) throw new Error("AGREEMENT_RESERVATION_SAVE_FAILED");
+        setAgreementSent(true);
+        setAgreementEverSent(true);
+        await saveAgreementDraftForReservation(pendingReservation);
+      } catch (error) {
+        await clearRoomHoldsForReservation(reservation, true).catch(() => undefined);
+        setLastReservation(null);
+        setAgreementSent(false);
+        setBookingDateWarning("Заявка отправлена в чат, но не сохранена на сервере. Предоплата и подтверждение брони заблокированы — повторите «На согласование» после восстановления сервера.");
+        void sendDebugLog("reservation-agreement-total-save-error", {
+          message: error instanceof Error ? error.message : String(error),
+          reservationId: reservation.id
+        });
+        setSendState("error");
+        window.setTimeout(() => setSendState("idle"), 2600);
+        return;
+      }
     }
     setSendState(inserted ? "sent" : "error");
     window.setTimeout(() => setSendState("idle"), 2600);
@@ -8703,10 +8752,9 @@ export function BookingPanel() {
                     className={`gpb-payment-mark-button ${lastReservation?.prepaymentReceivedAt ? "is-done" : ""}`}
                     type="button"
                     onClick={() => {
-                      const reservation = lastReservation ?? currentReservationDraft;
-                      if (reservation) void togglePrepaymentPaid(reservation);
+                      if (lastReservation) void togglePrepaymentPaid(lastReservation);
                     }}
-                    disabled={isCurrentChatOwnedByOther || Boolean(lastReservation?.noShowAt || lastReservation?.status === "cancelled") || (!lastReservation && !currentReservationDraft)}
+                    disabled={isCurrentChatOwnedByOther || !lastReservation || Boolean(lastReservation.noShowAt || lastReservation.status === "cancelled")}
                   >
                     <Check size={15} />
                     <span>{lastReservation?.prepaymentReceivedAt ? "Предоплата получена" : "Внести предоплату"}</span>
@@ -24337,6 +24385,11 @@ function reservationConfirmationNeedsSave(existingReservation: Reservation, conf
     (existingReservation.paidAmount ?? 0) !== (confirmedReservation.paidAmount ?? 0) ||
     existingReservation.prepaymentReceivedAt !== confirmedReservation.prepaymentReceivedAt ||
     existingReservation.balancePaidAt !== confirmedReservation.balancePaidAt;
+}
+
+function getChatDraftContentFingerprint(draft: ChatBookingDraft) {
+  const { updatedAt: _updatedAt, ...content } = draft;
+  return JSON.stringify(content);
 }
 
 function formatReservationConfirmationServiceLines(reservation: Reservation, rooms: Room[]) {

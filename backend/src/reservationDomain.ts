@@ -47,7 +47,33 @@ export function applyReservationAction(
 
   if (action === "prepayment") {
     if (reservation.status === "cancelled" || reservation.noShowAt) throw new Error("RESERVATION_NOT_PAYABLE");
-    if (reservation.prepaymentReceivedAt) return reservation;
+    if (reservation.prepaymentReceivedAt) {
+      const paymentTotal = reservationPaymentTotal(reservation);
+      const acceptedAmount = Math.max(
+        0,
+        paymentTotal,
+        Number(reservation.prepayment ?? 0),
+        Number(reservation.paidAmount ?? 0)
+      );
+      const normalizedItems = items.map((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+        const record = item as ReservationDomainRecord;
+        const itemPaid = Math.max(0, Number(record.paidAmount ?? 0), Number(record.prepayment ?? 0));
+        return itemPaid === Number(record.paidAmount ?? 0) ? item : { ...record, paidAmount: itemPaid };
+      });
+      if (
+        acceptedAmount === Number(reservation.paidAmount ?? 0) &&
+        normalizedItems.every((item, index) => item === items[index])
+      ) {
+        return reservation;
+      }
+      return {
+        ...reservation,
+        items: normalizedItems,
+        paidAmount: acceptedAmount,
+        updatedAt: now
+      };
+    }
     const requestedAmount = Number(input.amount ?? reservation.prepayment ?? 0);
     const amount = Number.isFinite(requestedAmount) ? Math.max(0, requestedAmount) : 0;
     if (!amount) throw new Error("PAYMENT_AMOUNT_REQUIRED");

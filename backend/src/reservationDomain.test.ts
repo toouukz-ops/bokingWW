@@ -48,6 +48,21 @@ test("reservation actions are idempotent and keep one payment per type", () => {
   assert.equal(paid.paidAmount, 15_000);
 });
 
+test("repeated prepayment repairs stale paid totals from the payment journal", () => {
+  const repaired = applyReservationAction({
+    id: "r1",
+    status: "booked",
+    total: 30_900,
+    prepayment: 15_450,
+    prepaymentReceivedAt: "2026-07-27T12:00:00.000Z",
+    paidAmount: 0,
+    items: [{ total: 30_900, prepayment: 15_450, paidAmount: 0 }],
+    payments: [{ type: "prepayment", amount: 15_450 }]
+  }, "prepayment", { now: "2026-07-27T13:00:00.000Z" });
+  assert.equal(repaired.paidAmount, 15_450);
+  assert.equal((repaired.items as Array<{ paidAmount: number }>)[0].paidAmount, 15_450);
+});
+
 test("check-in requires booking and check-out requires check-in", () => {
   const now = "2026-07-27T12:00:00.000Z";
   assert.throws(() => applyReservationAction({ status: "pending" }, "check-in", { now }), /NOT_CHECK_IN_READY/);

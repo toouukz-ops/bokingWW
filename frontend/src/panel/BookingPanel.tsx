@@ -24904,11 +24904,11 @@ function getReservationPaidAmount(
   }
 ) {
   if (reservation.balancePaidAt) return reservation.total;
-  if (typeof reservation.paidAmount === "number") {
-    return clampNumber(reservation.paidAmount, 0, reservation.total);
-  }
   if (reservation.payments?.length) {
     return getReservationPaymentsTotal(reservation.payments, reservation.total);
+  }
+  if (typeof reservation.paidAmount === "number") {
+    return clampNumber(reservation.paidAmount, 0, reservation.total);
   }
   const acceptedPrepayment = hasReservationPrepayment(reservation) ? reservation.prepayment : 0;
   return acceptedPrepayment;
@@ -27048,7 +27048,7 @@ function buildReservationTotalMessage(reservation: Reservation, rooms: Room[]) {
 }
 
 function buildReservationPaymentConfirmationMessage(reservation: Reservation, rooms: Room[], defaultStayCheckInTime = DEFAULT_CHECK_IN_TIME) {
-  const paidAmount = Math.max(0, reservation.paidAmount ?? 0);
+  const paidAmount = getReservationPaidAmount(reservation);
   const balance = Math.max(0, reservation.total - paidAmount);
   const paymentLabel = getManualSalePaymentLabel(reservation.paymentMethod ?? "");
   const hasPayment = paidAmount > 0 || Boolean(reservation.prepaymentReceivedAt || reservation.balancePaidAt);

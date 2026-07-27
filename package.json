@@ -6,7 +6,7 @@
     "install:all": "npm install --prefix frontend && npm install --prefix backend",
     "build": "npm run build --prefix frontend",
     "dev:backend": "npm run dev --prefix backend",
+    "test": "npm run test --prefix backend",
     "typecheck": "npm run typecheck --prefix frontend && npm run typecheck --prefix backend"
   }
 }
-

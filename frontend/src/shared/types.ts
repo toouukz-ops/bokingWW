@@ -328,6 +328,7 @@ export type ManualChatStatus =
   | "price-sent"
   | "agreement"
   | "prepayment"
+  | "balance"
   | "booked"
   | "checked-in"
   | "checked-out"

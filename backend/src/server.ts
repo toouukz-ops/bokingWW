@@ -44,6 +44,8 @@ import {
   saveReservationData,
   saveRoomHoldData
 } from "./appData.js";
+import { applyReservationAction, isBlockingReservation, type ReservationAction } from "./reservationDomain.js";
+import { mergeChatDraftUpdate } from "./chatDraftDomain.js";
 import { exportServerBackup, importServerBackup } from "./backup.js";
 import { createStubDraft, bookingDraftRequestSchema } from "./booking.js";
 import { config } from "./config.js";
@@ -330,34 +332,8 @@ function reservationBlockingItemsEqual(
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
-const PENDING_RESERVATION_BLOCK_MS = 15 * 60 * 1000;
-
-function getReservationTimestampMs(reservation: Record<string, unknown>) {
-  const updatedAt = Date.parse(toReservationText(reservation.updatedAt));
-  if (Number.isFinite(updatedAt)) return updatedAt;
-  const createdAt = Date.parse(toReservationText(reservation.createdAt));
-  return Number.isFinite(createdAt) ? createdAt : 0;
-}
-
-function hasReservationPaymentSignal(reservation: Record<string, unknown>) {
-  const paidAmount = Number(reservation.paidAmount ?? 0);
-  const payments = Array.isArray(reservation.payments) ? reservation.payments : [];
-  return Boolean(
-    toReservationText(reservation.prepaymentReceivedAt) ||
-    toReservationText(reservation.balancePaidAt) ||
-    paidAmount > 0 ||
-    payments.length > 0
-  );
-}
-
 function isServerBlockingReservation(reservation: Record<string, unknown>) {
-  const status = toReservationText(reservation.status);
-  if (reservation.isAddOnSale || reservation.noShowAt) return false;
-  if (status === "booked") return true;
-  if (status !== "pending") return false;
-  if (hasReservationPaymentSignal(reservation)) return true;
-  const timestampMs = getReservationTimestampMs(reservation);
-  return Boolean(timestampMs && Date.now() - timestampMs <= PENDING_RESERVATION_BLOCK_MS);
+  return isBlockingReservation(reservation);
 }
 
 async function validateReservationBeforeSave(id: string, reservation: Record<string, unknown>) {
@@ -1976,6 +1952,37 @@ app.put("/api/reservations/:id", async (request, reply) => {
   return reservation;
 });
 
+app.post("/api/reservations/:id/actions/:action", async (request, reply) => {
+  const { id, action } = request.params as { id: string; action: ReservationAction };
+  const query = request.query as { clientId?: string };
+  const supportedActions: ReservationAction[] = ["confirm", "prepayment", "balance", "check-in", "check-out"];
+  if (!supportedActions.includes(action)) return reply.status(400).send({ error: "Unsupported reservation action" });
+
+  const decodedId = decodeURIComponent(id);
+  const existing = (await listReservations()).find((reservation) => reservation.id === decodedId);
+  if (!existing) return reply.status(404).send({ error: "Reservation not found" });
+
+  let nextReservation: Record<string, unknown>;
+  try {
+    nextReservation = applyReservationAction(existing, action, {
+      ...(request.body && typeof request.body === "object" ? request.body as Record<string, unknown> : {}),
+      now: new Date().toISOString()
+    });
+  } catch (error) {
+    return reply.status(409).send({ error: error instanceof Error ? error.message : String(error) });
+  }
+
+  if (action === "confirm") {
+    const validation = await validateReservationBeforeSave(decodedId, nextReservation);
+    if (!validation.ok) return reply.status(validation.status).send(validation);
+  }
+
+  const reservation = nextReservation === existing ? existing : await saveReservationData(decodedId, nextReservation);
+  upsertCachedReservationStatusSource(reservation);
+  broadcastRealtime("reservations.changed", { action: "upsert", reservation }, query.clientId);
+  return reservation;
+});
+
 app.delete("/api/reservations/:id", async (request, reply) => {
   const { id } = request.params as { id: string };
   const query = request.query as { clientId?: string };
@@ -2044,7 +2051,13 @@ app.get("/api/chat-status", async (request) => {
 
 app.get("/api/chat-drafts/:chatId", async (request) => {
   const { chatId } = request.params as { chatId: string };
-  return { draft: await getChatDraftById(decodeURIComponent(chatId)) };
+  const decodedChatId = decodeURIComponent(chatId);
+  const storedDraft = await getChatDraftById(decodedChatId);
+  const draft = await sanitizeChatDraft(storedDraft);
+  if (draft && storedDraft && JSON.stringify(draft) !== JSON.stringify(storedDraft)) {
+    await saveChatDraftData(decodedChatId, draft as Record<string, unknown>);
+  }
+  return { draft };
 });
 
 async function sanitizeChatDrafts(drafts: Record<string, unknown>) {
@@ -2059,7 +2072,17 @@ async function sanitizeChatDraft(draft: unknown) {
 
   const draftRecord = draft as Record<string, unknown>;
   const lastReservation = draftRecord.lastReservation;
-  if (!lastReservation || typeof lastReservation !== "object" || Array.isArray(lastReservation)) return draftRecord;
+  if (!lastReservation || typeof lastReservation !== "object" || Array.isArray(lastReservation)) {
+    const linkedReservation = await findReservationForDraft(draftRecord);
+    return linkedReservation
+      ? {
+        ...draftRecord,
+        agreementEverSent: true,
+        lastReservation: linkedReservation,
+        prepaymentAlreadyPaid: Boolean(linkedReservation.prepaymentReceivedAt)
+      }
+      : draftRecord;
+  }
 
   const reservationId = typeof (lastReservation as Record<string, unknown>).id === "string"
     ? (lastReservation as Record<string, unknown>).id
@@ -2073,6 +2096,31 @@ async function sanitizeChatDraft(draft: unknown) {
   }
 
   return clearDraftReservationLink(draftRecord);
+}
+
+async function findReservationForDraft(draft: Record<string, unknown>) {
+  const phone = normalizeReservationPhone(draft.phone);
+  if (!phone) return null;
+  const checkIn = toReservationText(draft.checkIn);
+  const checkOut = toReservationText(draft.checkOut);
+  const selectedRoomIds = Array.isArray(draft.selectedBookingRoomIds)
+    ? draft.selectedBookingRoomIds.map(toReservationText).filter(Boolean).sort()
+    : [];
+  const candidates = (await listReservations())
+    .filter((reservation) =>
+      !reservation.isAddOnSale &&
+      reservation.status !== "cancelled" &&
+      !reservation.noShowAt &&
+      normalizeReservationPhone(reservation.phone) === phone
+    )
+    .filter((reservation) => !checkIn || !checkOut || (reservation.checkIn === checkIn && reservation.checkOut === checkOut))
+    .filter((reservation) => {
+      if (!selectedRoomIds.length) return true;
+      const roomIds = Array.isArray(reservation.roomIds) ? reservation.roomIds.map(toReservationText).filter(Boolean).sort() : [];
+      return roomIds.length === selectedRoomIds.length && roomIds.every((roomId, index) => roomId === selectedRoomIds[index]);
+    })
+    .sort((left, right) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 function clearDraftReservationLink(draft: Record<string, unknown>) {
@@ -2104,7 +2152,9 @@ app.put("/api/chat-drafts/:chatId", async (request, reply) => {
   }
 
   const decodedChatId = decodeURIComponent(chatId);
-  const draft = await saveChatDraftData(decodedChatId, await sanitizeChatDraft(body.draft));
+  const existingDraft = await getChatDraftById(decodedChatId);
+  const mergedDraft = mergeChatDraftUpdate(existingDraft, body.draft as Record<string, unknown>);
+  const draft = await saveChatDraftData(decodedChatId, await sanitizeChatDraft(mergedDraft));
   upsertCachedChatDraftStatusSource(decodedChatId, draft);
   broadcastRealtime("chat-drafts.changed", { action: "upsert", chatId: decodedChatId, draft });
   return { draft };

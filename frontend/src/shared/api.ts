@@ -525,6 +525,32 @@ export async function saveReservation(reservation: Reservation, options: { clien
   }
 }
 
+export async function applyReservationAction(
+  reservationId: string,
+  action: "confirm" | "prepayment" | "balance" | "check-in" | "check-out",
+  payload: { amount?: number; method?: string; clientId?: string } = {}
+): Promise<Reservation> {
+  const params = new URLSearchParams();
+  if (payload.clientId) params.set("clientId", payload.clientId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(
+    `${API_BASE_URL}/api/reservations/${encodeURIComponent(reservationId)}/actions/${encodeURIComponent(action)}${suffix}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: payload.amount, method: payload.method })
+    }
+  );
+  if (!response.ok) {
+    const details = await response.text().catch(() => "");
+    throw new Error(`Reservation action failed: ${response.status}${details ? ` ${details.slice(0, 500)}` : ""}`);
+  }
+  const reservation = await response.json() as Reservation;
+  const reservations = await getLocalReservations();
+  await saveReservations(reservations.filter((item) => item.id !== reservation.id).concat(reservation));
+  return reservation;
+}
+
 export async function deleteReservation(reservationId: string): Promise<void> {
   const reservations = await getLocalReservations();
   await saveReservations(reservations.filter((item) => item.id !== reservationId));
@@ -1072,15 +1098,12 @@ async function saveChatBookingDraftsToServer(drafts: Record<string, ChatBookingD
 }
 
 async function saveChatBookingDraftToServer(chatId: string, draft: ChatBookingDraft): Promise<void> {
-  try {
-    await fetch(`${API_BASE_URL}/api/chat-drafts/${encodeURIComponent(chatId)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ draft })
-    });
-  } catch {
-    return;
-  }
+  const response = await fetch(`${API_BASE_URL}/api/chat-drafts/${encodeURIComponent(chatId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ draft })
+  });
+  if (!response.ok) throw new Error(`Chat draft save failed: ${response.status}`);
 }
 
 async function deleteChatBookingDraftFromServer(chatId: string): Promise<void> {

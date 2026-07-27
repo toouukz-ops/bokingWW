@@ -46,6 +46,7 @@ import {
 import { jsPDF } from "jspdf";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent, type MouseEvent } from "react";
 import {
+  applyReservationAction,
   clearBookingStatistics,
   claimActiveDialog,
   claimContactLock,
@@ -1212,6 +1213,7 @@ export function BookingPanel() {
   } | null>(null);
   const shouldKeepAdminCommentListeningRef = useRef(false);
   const activeChatIdRef = useRef("");
+  const autoContactChatIdRef = useRef("");
   const activeChatRef = useRef<ActiveChat | null>(null);
   const menuAdminPhoneRef = useRef("");
   const menuCookPhoneRef = useRef("");
@@ -2434,6 +2436,34 @@ export function BookingPanel() {
     if (!activeChat) return;
     applyStoredGuestContactForActiveChat(activeChat);
   }, [activeChat?.id, activeChat?.phone, activeChat?.title, guestContacts]);
+
+  useEffect(() => {
+    if (!activeChat || manualSaleOpen || bookingNewChatOpen) return;
+    if (autoContactChatIdRef.current === activeChat.id) return;
+    autoContactChatIdRef.current = activeChat.id;
+    let isCancelled = false;
+
+    const timeoutId = window.setTimeout(async () => {
+      const sourceChatId = activeChat.id;
+      const extracted = await extractGuestPhoneFromChat({ allowProfileLookup: true });
+      if (isCancelled || activeChatIdRef.current !== sourceChatId || !extracted?.phone) return;
+      const normalizedPhone = formatStrictContactPhone(extracted.phone);
+      if (!isCompleteContactPhone(normalizedPhone)) return;
+      const contactName = extracted.name || getGuestNameFallbackFromPhone(normalizedPhone);
+      const saved = await saveContactToDatabase(contactName, normalizedPhone);
+      if (isCancelled || activeChatIdRef.current !== sourceChatId) return;
+      setContactSaveState(saved ? "saved" : "error");
+      if (saved) {
+        setContactLookupNotice({ tone: "success", text: "Контакт автоматически связан с активным чатом." });
+      }
+      window.setTimeout(() => setContactSaveState("idle"), 1800);
+    }, 450);
+
+    return () => {
+      isCancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [activeChat?.id, bookingNewChatOpen, manualSaleOpen]);
 
   useEffect(() => {
     if (!activeChat || isRestoringChatDraftRef.current) return;
@@ -3759,6 +3789,7 @@ export function BookingPanel() {
   const canConfirmAgreement = Boolean(currentReservationDraft && currentReservationDraft.status !== "cancelled" && !hasSelectedHourlyConflict && !currentReservationHasPastDate);
   const isBookingConfirmed = Boolean(panelActiveReservation);
   const cancelableReservation = panelActiveReservation ?? phoneMatchedActiveReservation;
+  const actionableReservation = panelActiveReservation ?? phoneMatchedActiveReservation ?? lastReservation;
   const isBookingLocked = isBookingConfirmed || isCurrentChatOwnedByOther;
   const currentChatMenuOrders = useMemo(
     () => {
@@ -5626,10 +5657,8 @@ export function BookingPanel() {
 
     setGuestFirstName(name);
     setContactExtracted(true);
-    setLastReservation(null);
-    setAgreementSent(false);
     if (chat) {
-      await saveChatDraftForChat(chat, { agreementSent: false, guestFirstName: name, lastReservation: null });
+      await saveChatDraftForChat(chat, { guestFirstName: name });
     }
   }
 
@@ -5672,15 +5701,11 @@ export function BookingPanel() {
       setContactSavedInWhatsApp(false);
       recentContactExtractionAtRef.current = Date.now();
       if (contactName) setGuestFirstName(contactName);
-      setLastReservation(null);
-      setAgreementSent(false);
       if (chat) {
         setActiveChat(chat);
       const extractedDraftPatch = {
-        agreementSent: false,
         chatStartedAt: chatStartedAt || new Date().toISOString(),
         guestFirstName: contactName,
-        lastReservation: null,
         manualSaleOpen: false,
         phone: normalizedPhone
       };
@@ -6672,16 +6697,38 @@ export function BookingPanel() {
       ...reservation,
       status: "booked" as const
     }, existingReservation);
-    const saved = await updateReservation(confirmedReservation);
-    if (!saved) return;
-    dismissReservationDailyReminderForReservation(confirmedReservation.id);
-    setSelectedRoomId(confirmedReservation.roomIds[0] || selectedRoomId);
-    setSelectedBookingRoomIds(confirmedReservation.roomIds);
+    let savedReservation: Reservation;
+    if (existingReservation) {
+      const draftSaved = await updateReservation({ ...confirmedReservation, status: existingReservation.status });
+      if (!draftSaved) return;
+      try {
+        savedReservation = await applyReservationAction(confirmedReservation.id, "confirm", {
+          clientId: syncClientIdRef.current
+        });
+        replaceReservationInState(savedReservation);
+        if (shouldAttachReservationToActiveChat(savedReservation)) setLastReservation(savedReservation);
+        await syncReservationDraftForStatus(savedReservation);
+      } catch (error) {
+        setBookingDateWarning("Бронь не подтверждена: сервер отклонил проверку занятости. Обновите шахматку и повторите действие.");
+        void sendDebugLog("reservation-confirm-action-error", {
+          message: error instanceof Error ? error.message : String(error),
+          reservationId: confirmedReservation.id
+        });
+        return;
+      }
+    } else {
+      const saved = await updateReservation(confirmedReservation);
+      if (!saved) return;
+      savedReservation = confirmedReservation;
+    }
+    dismissReservationDailyReminderForReservation(savedReservation.id);
+    setSelectedRoomId(savedReservation.roomIds[0] || selectedRoomId);
+    setSelectedBookingRoomIds(savedReservation.roomIds);
     setAgreementSent(true);
     setAgreementEverSent(true);
     await Promise.all([
-      clearRoomHoldsForReservation(confirmedReservation, true),
-      saveAgreementDraftForReservation(confirmedReservation, { includeActiveChat: true })
+      clearRoomHoldsForReservation(savedReservation, true),
+      saveAgreementDraftForReservation(savedReservation, { includeActiveChat: true })
     ]);
   }
 
@@ -7043,6 +7090,25 @@ export function BookingPanel() {
       return;
     }
 
+    if (!hasBalancePaid) {
+      try {
+        const savedReservation = await applyReservationAction(reservation.id, "balance", {
+          clientId: syncClientIdRef.current,
+          method: manualSalePaymentMethod || reservation.paymentMethod
+        });
+        replaceReservationInState(savedReservation);
+        if (shouldAttachReservationToActiveChat(savedReservation)) setLastReservation(savedReservation);
+        await syncReservationDraftForStatus(savedReservation);
+      } catch (error) {
+        setBookingDateWarning("Не удалось принять доплату на сервере. Обновите бронь и повторите действие.");
+        void sendDebugLog("reservation-balance-action-error", {
+          message: error instanceof Error ? error.message : String(error),
+          reservationId: reservation.id
+        });
+      }
+      return;
+    }
+
     const nextItems = getReservationItems(reservation, pricedRooms).map((item) => ({
       ...item,
       paidAmount: hasBalancePaid ? item.prepayment : item.total,
@@ -7088,15 +7154,33 @@ export function BookingPanel() {
   }
 
   async function confirmPrepaymentAmount(reservation: Reservation, amount: number) {
-    const now = new Date().toISOString();
-    const updatedReservation = applyReservationPrepaymentAmount(reservation, amount, manualSalePaymentMethod || reservation.paymentMethod, now);
-    setPrepaymentAlreadyPaid(updatedReservation.prepayment > 0);
     setPrepaymentAmountTarget(null);
-    const saved = await updateReservation(updatedReservation, { optimisticLocal: true });
-    if (!saved) {
+    try {
+      const existingReservation = findExistingReservationForDraft(reservation);
+      let targetReservation = existingReservation
+        ? mergeReservationPaymentState(reservation, existingReservation)
+        : reservation;
+      if (!existingReservation) {
+        const created = await updateReservation({ ...targetReservation, status: "pending" });
+        if (!created) throw new Error("PREPAYMENT_RESERVATION_CREATE_FAILED");
+      }
+      const savedReservation = await applyReservationAction(targetReservation.id, "prepayment", {
+        amount,
+        clientId: syncClientIdRef.current,
+        method: manualSalePaymentMethod || targetReservation.paymentMethod
+      });
+      setPrepaymentAlreadyPaid(Boolean(savedReservation.prepaymentReceivedAt));
+      replaceReservationInState(savedReservation);
+      if (shouldAttachReservationToActiveChat(savedReservation)) setLastReservation(savedReservation);
+      await syncReservationDraftForStatus(savedReservation);
+    } catch (error) {
       setPrepaymentAlreadyPaid(Boolean(reservation.prepaymentReceivedAt));
       setPrepaymentAmountTarget(reservation);
-      return;
+      setBookingDateWarning("Не удалось записать предоплату на сервере. Обновите бронь и повторите действие.");
+      void sendDebugLog("reservation-prepayment-action-error", {
+        message: error instanceof Error ? error.message : String(error),
+        reservationId: reservation.id
+      });
     }
   }
 
@@ -7411,6 +7495,24 @@ export function BookingPanel() {
       return;
     }
 
+    if (!hasCheckedIn) {
+      try {
+        const savedReservation = await applyReservationAction(reservation.id, "check-in", {
+          clientId: syncClientIdRef.current
+        });
+        replaceReservationInState(savedReservation);
+        if (shouldAttachReservationToActiveChat(savedReservation)) setLastReservation(savedReservation);
+        await syncReservationDraftForStatus(savedReservation);
+      } catch (error) {
+        setBookingDateWarning("Не удалось отметить въезд на сервере. Обновите бронь и повторите действие.");
+        void sendDebugLog("reservation-check-in-action-error", {
+          message: error instanceof Error ? error.message : String(error),
+          reservationId: reservation.id
+        });
+      }
+      return;
+    }
+
     await updateReservation({
       ...reservation,
       items: getReservationItems(reservation, pricedRooms).map((item) => ({ ...item, checkedInAt: hasCheckedIn ? undefined : now })),
@@ -7422,6 +7524,23 @@ export function BookingPanel() {
 
   async function toggleCheckedOut(reservation: Reservation) {
     const hasCheckedOut = Boolean(reservation.checkedOutAt);
+    if (!hasCheckedOut) {
+      try {
+        const savedReservation = await applyReservationAction(reservation.id, "check-out", {
+          clientId: syncClientIdRef.current
+        });
+        replaceReservationInState(savedReservation);
+        if (shouldAttachReservationToActiveChat(savedReservation)) setLastReservation(savedReservation);
+        await syncReservationDraftForStatus(savedReservation);
+      } catch (error) {
+        setBookingDateWarning("Не удалось отметить выезд на сервере. Проверьте, что въезд уже отмечен.");
+        void sendDebugLog("reservation-check-out-action-error", {
+          message: error instanceof Error ? error.message : String(error),
+          reservationId: reservation.id
+        });
+      }
+      return;
+    }
     const now = new Date().toISOString();
     await updateReservation({
       ...reservation,
@@ -8547,19 +8666,19 @@ export function BookingPanel() {
                     <span>{lastReservation?.prepaymentReceivedAt ? "Предоплата получена" : "Внести предоплату"}</span>
                   </button>
                   <button
-                    className={`gpb-payment-mark-button ${lastReservation?.balancePaidAt ? "is-done" : ""}`}
+                    className={`gpb-payment-mark-button ${actionableReservation?.balancePaidAt ? "is-done" : ""}`}
                     type="button"
-                    onClick={() => lastReservation && toggleBalancePaid(lastReservation)}
-                    disabled={isCurrentChatOwnedByOther || !lastReservation || lastReservation.status === "cancelled" || Boolean(lastReservation.noShowAt)}
+                    onClick={() => actionableReservation && toggleBalancePaid(actionableReservation)}
+                    disabled={isCurrentChatOwnedByOther || !actionableReservation || actionableReservation.status === "cancelled" || Boolean(actionableReservation.noShowAt)}
                   >
                     <Check size={15} />
                     <span>Доплата получена</span>
                   </button>
                   <button
-                    className={`gpb-payment-mark-button ${lastReservation?.checkedInAt ? "is-done" : ""}`}
+                    className={`gpb-payment-mark-button ${actionableReservation?.checkedInAt ? "is-done" : ""}`}
                     type="button"
-                    onClick={() => lastReservation && toggleCheckedIn(lastReservation)}
-                    disabled={isCurrentChatOwnedByOther || !lastReservation || lastReservation.status === "cancelled" || Boolean(lastReservation.noShowAt)}
+                    onClick={() => actionableReservation && toggleCheckedIn(actionableReservation)}
+                    disabled={isCurrentChatOwnedByOther || !actionableReservation || actionableReservation.status === "cancelled" || Boolean(actionableReservation.noShowAt)}
                   >
                     <Check size={15} />
                     <span>Гость въехал</span>
@@ -8567,8 +8686,8 @@ export function BookingPanel() {
                   <button
                     className="gpb-payment-mark-button"
                     type="button"
-                    onClick={() => lastReservation && setExtendReservationTarget(lastReservation)}
-                    disabled={isCurrentChatOwnedByOther || !lastReservation || lastReservation.status === "cancelled" || Boolean(lastReservation.noShowAt)}
+                    onClick={() => actionableReservation && setExtendReservationTarget(actionableReservation)}
+                    disabled={isCurrentChatOwnedByOther || !actionableReservation || actionableReservation.status === "cancelled" || Boolean(actionableReservation.noShowAt)}
                   >
                     <Plus size={15} />
                     <span>Продлить</span>

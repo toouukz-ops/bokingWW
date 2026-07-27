@@ -57,13 +57,7 @@ const MANUAL_CHAT_STATUS_OPTIONS: Array<{ value: ManualChatStatus; label: string
   { value: "none", label: "Без статуса", tone: "muted" },
   { value: "chat-started", label: "Чат начат", tone: "info" },
   { value: "room-sent", label: "Номер отправлен", tone: "info" },
-  { value: "price-sent", label: "Прайс отправлен", tone: "info" },
-  { value: "agreement", label: "На согласовании", tone: "pending" },
-  { value: "prepayment", label: "Предоплата получена", tone: "success" },
-  { value: "booked", label: "Забронировано", tone: "success" },
-  { value: "checked-in", label: "Въехал", tone: "success" },
-  { value: "checked-out", label: "Выехал", tone: "muted" },
-  { value: "cancelled", label: "Снято с брони", tone: "danger" }
+  { value: "price-sent", label: "Прайс отправлен", tone: "info" }
 ];
 
 function isExtensionContextInvalidatedError(error: unknown) {
@@ -946,8 +940,8 @@ function getChatRowTitle(row: HTMLElement) {
 
 function getDraftStatusItem(draft: ChatBookingDraft): ChatStatusItem | null {
   const manualStatus = getManualChatStatusItem(draft.manualStatus, draft.manualStatusAt || draft.updatedAt);
-  if (manualStatus && draft.manualStatusAt) return manualStatus;
   if (draft.agreementEverSent || draft.agreementSent) return { label: "На согласовании", tone: "pending", updatedAt: draft.updatedAt };
+  if (manualStatus && draft.manualStatusAt) return manualStatus;
   if (draft.catalogStatus === "room-sent") return { label: "Номер отправлен", tone: "info", updatedAt: draft.catalogStatusAt || draft.updatedAt };
   if (draft.catalogStatus === "price-sent") return { label: "Прайс отправлен", tone: "info", updatedAt: draft.catalogStatusAt || draft.updatedAt };
   if (draft.chatStartedAt) return { label: "Чат начат", tone: "info", updatedAt: draft.chatStartedAt };
@@ -968,6 +962,8 @@ function getManualChatStatusItem(status: ChatBookingDraft["manualStatus"], updat
       return { label: "На согласовании", manualStatus: status, tone: "pending", updatedAt };
     case "prepayment":
       return { label: "Предоплата получена", manualStatus: status, tone: "success", updatedAt };
+    case "balance":
+      return { label: "Доплата получена", manualStatus: status, tone: "success", updatedAt };
     case "booked":
       return { label: "Забронировано", manualStatus: status, tone: "success", updatedAt };
     case "checked-in":
@@ -988,6 +984,7 @@ function getReservationStatusItem(reservation: Reservation): ChatStatusItem {
   if (isReservationCheckedOut(reservation)) return { label: "Выехал", tone: "muted", updatedAt: reservation.checkedOutAt || getReservationScheduledCheckOutIso(reservation) || updatedAt };
   if (reservation.extendedAt) return { label: "Продлен", tone: "extended", updatedAt: reservation.extendedAt };
   if (reservation.checkedInAt) return { label: "Въехал", tone: "success", updatedAt: reservation.checkedInAt };
+  if (reservation.balancePaidAt) return { label: "Доплата получена", tone: "success", updatedAt: reservation.balancePaidAt };
   if (reservation.status === "booked") return { label: "Забронировано", tone: "success", updatedAt };
   if (reservation.prepaymentReceivedAt) return { label: "Предоплата получена", tone: "success", updatedAt: reservation.prepaymentReceivedAt };
   return { label: "На согласовании", tone: "pending", updatedAt };
@@ -1044,13 +1041,16 @@ function setLatestTitleStatus(index: ChatStatusIndex, title: string, status: Cha
 }
 
 function getStatusPriority(status: ChatStatusItem | null | undefined) {
-  if (status?.manualStatus) return 100;
+  // Manual labels are useful before a server-side booking event exists, but
+  // must never conceal a real agreement/payment/booking/check-in/check-out.
+  if (status?.manualStatus) return 35;
   switch (status?.label) {
     case "Незаезд":
     case "Снято с брони":
     case "Выехал":
       return 60;
     case "Предоплата получена":
+    case "Доплата получена":
     case "Забронировано":
     case "Въехал":
     case "Продлен":

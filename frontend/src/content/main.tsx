@@ -208,12 +208,6 @@ function getChatStatusIdentityKeys(identity: ReturnType<typeof getChatIdentityFo
   ].filter(Boolean)));
 }
 
-function syncLoadedStatusForActiveChat() {
-  if (!activeChatStatusIdentity) return;
-  const status = getStatusForChatIdentity(activeChatStatusIdentity);
-  syncLoadedStatusForIdentity(activeChatStatusIdentity, status);
-}
-
 function syncLoadedStatusForIdentity(
   identity: ReturnType<typeof getChatIdentityForRow>,
   status: ChatStatusItem | null
@@ -328,13 +322,9 @@ async function recordAutomaticChatStatus(
   await saveAutomaticStatusDraftLocally(identity.chatId, draft);
   const status = getDraftStatusItem(draft);
   if (status) {
-    setLatestStatus(chatStatusIndex.byChatId, identity.chatId, status);
-    setLatestStatus(chatStatusIndex.byWaChatId, identity.waChatId, status);
-    setLatestStatus(chatStatusIndex.byPhone, identity.phone, status);
-    setLatestTitleStatus(chatStatusIndex, identity.title, status);
-    addStatusIndexItem(chatStatusIndex, { phone: identity.phone, status, title: identity.title });
+    syncLoadedStatusForIdentity(identity, status);
   }
-  scheduleApplyChatStatuses();
+  applyChatStatusesToWhatsAppList();
 
   await fetchWithTimeout(`${API_BASE_URL}/api/chat-drafts/${encodeURIComponent(identity.chatId)}`, 8000, {
     method: "PUT",
@@ -360,7 +350,6 @@ function scheduleApplyChatStatuses() {
   if (chatStatusRefreshTimer) return;
   chatStatusRefreshTimer = window.setTimeout(() => {
     chatStatusRefreshTimer = null;
-    syncLoadedStatusForActiveChat();
     applyChatStatusesToWhatsAppList();
   }, 180);
 }
@@ -680,25 +669,17 @@ function getWhatsAppChatRows(sidebar: HTMLElement) {
 
 function uniqueChatRows(rows: HTMLElement[]) {
   const sortedRows = rows.sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top);
-  return sortedRows.filter((row) => !sortedRows.some((otherRow) => otherRow !== row && otherRow.contains(row)));
+  return sortedRows.filter((row) => !sortedRows.some((otherRow) => otherRow !== row && row.contains(otherRow)));
 }
 
 function findWhatsAppChatRow(element: HTMLElement, sidebar: HTMLElement, sidebarRect: DOMRect) {
   let current: HTMLElement | null = element;
   let best: HTMLElement | null = null;
 
-  for (let depth = 0; current && depth < 12; depth += 1) {
+  for (let depth = 0; current && depth < 8; depth += 1) {
     if (isVisibleChatRow(current, sidebarRect)) {
-      const currentRect = current.getBoundingClientRect();
-      const bestRect = best?.getBoundingClientRect();
-      if (
-        !best ||
-        current.matches('[role="listitem"], [role="row"], [data-testid="cell-frame-container"]') ||
-        currentRect.width > (bestRect?.width ?? 0) ||
-        currentRect.left < (bestRect?.left ?? Number.POSITIVE_INFINITY)
-      ) {
-        best = current;
-      }
+      best = current;
+      break;
     }
     if (current.parentElement === sidebar) break;
     current = current.parentElement;
@@ -956,6 +937,7 @@ function updateChatStatusSourceDebug(serverDrafts: number, serverReservations: n
 
 function getChatRowTitle(row: HTMLElement) {
   const candidates = Array.from(row.querySelectorAll<HTMLElement>("[title], span[dir='auto']"))
+    .filter((element) => !element.closest(".gpb-wa-chat-status-badge, .gpb-wa-chat-status-menu"))
     .map((element) => element.getAttribute("title") || element.textContent || "")
     .map(normalizeText)
     .filter((value) => value && !extractPhoneFromText(value) && !isNonChatRowText(value));
@@ -1163,20 +1145,24 @@ function normalizeText(value: string) {
 }
 
 function getElementText(element: HTMLElement) {
+  const cleanClone = element.cloneNode(true) as HTMLElement;
+  cleanClone.querySelectorAll(".gpb-wa-chat-status-badge, .gpb-wa-chat-status-menu").forEach((item) => item.remove());
   return [
-    element.innerText || "",
+    cleanClone.textContent || "",
     element.getAttribute("title") || "",
     element.getAttribute("aria-label") || "",
     element.getAttribute("data-id") || "",
     element.getAttribute("data-chat-id") || "",
-    ...Array.from(element.querySelectorAll<HTMLElement>("[title], [aria-label], [data-id]")).map((item) =>
+    ...Array.from(element.querySelectorAll<HTMLElement>("[title], [aria-label], [data-id]"))
+      .filter((item) => !item.closest(".gpb-wa-chat-status-badge, .gpb-wa-chat-status-menu"))
+      .map((item) =>
       [
         item.getAttribute("title"),
         item.getAttribute("aria-label"),
         item.getAttribute("data-id"),
         item.getAttribute("data-chat-id")
       ].filter(Boolean).join(" ")
-    )
+      )
   ].join(" ");
 }
 

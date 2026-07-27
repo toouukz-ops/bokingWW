@@ -17,6 +17,7 @@ import {
   getChatDraftById,
   getChatDraftData,
   getChatStatusSourcesData,
+  getChatStatusSourcesForIdentityData,
   listChatMessageDialogs,
   listChatMessages,
   listAiReplyLogs,
@@ -2023,6 +2024,21 @@ app.get("/api/chat-drafts", async (request) => {
 
 app.get("/api/chat-statuses", async () => {
   return getCachedChatStatusSources();
+});
+
+app.get("/api/chat-status", async (request) => {
+  const query = request.query as { chatId?: string; phone?: string; waChatId?: string };
+  const chatId = toSafeString(query.chatId).toLowerCase();
+  const phoneDigits = normalizeReservationPhone(query.phone);
+  const phone = phoneDigits ? `+${phoneDigits}` : "";
+  const waChatId = toSafeString(query.waChatId).toLowerCase();
+  const chatIds = [
+    chatId,
+    phone ? `phone:${phone}` : "",
+    waChatId ? `wa:${waChatId}` : ""
+  ];
+  const phones = phoneDigits ? [phone, phoneDigits] : [];
+  return getChatStatusSourcesForIdentityData(chatIds, phones, waChatId ? [waChatId] : []);
 });
 
 app.get("/api/chat-drafts/:chatId", async (request) => {

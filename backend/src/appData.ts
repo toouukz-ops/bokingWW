@@ -67,6 +67,30 @@ export async function getChatStatusSourcesData() {
   };
 }
 
+export async function getChatStatusSourcesForIdentityData(chatIds: string[], phones: string[], waChatIds: string[]) {
+  const normalizedChatIds = Array.from(new Set(chatIds.filter(Boolean)));
+  const normalizedPhones = Array.from(new Set(phones.filter(Boolean)));
+  const normalizedWaChatIds = Array.from(new Set(waChatIds.filter(Boolean)));
+  const draftFilters: Array<Record<string, unknown>> = [];
+  if (normalizedChatIds.length) draftFilters.push({ chatId: { $in: normalizedChatIds } });
+  if (normalizedPhones.length) draftFilters.push({ "draft.phone": { $in: normalizedPhones } });
+  if (normalizedWaChatIds.length) draftFilters.push({ "draft.waChatId": { $in: normalizedWaChatIds } });
+
+  const [draftDocuments, reservationDocuments] = await Promise.all([
+    draftFilters.length
+      ? chatDrafts.find({ $or: draftFilters }).toArray()
+      : Promise.resolve([]),
+    normalizedPhones.length
+      ? reservations.find({ phone: { $in: normalizedPhones }, isAddOnSale: { $ne: true } }).toArray()
+      : Promise.resolve([])
+  ]);
+
+  return {
+    drafts: Object.fromEntries(draftDocuments.map((document) => [document.chatId, document.draft])),
+    reservations: reservationDocuments
+  };
+}
+
 export async function listReservationConflictCandidates(id: string, roomIds: string[]) {
   const normalizedRoomIds = Array.from(new Set(roomIds.filter(Boolean)));
   if (!normalizedRoomIds.length) {

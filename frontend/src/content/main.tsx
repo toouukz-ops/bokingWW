@@ -26,9 +26,7 @@ type ChatStatusIndex = {
 let chatStatusIndex: ChatStatusIndex = createEmptyChatStatusIndex();
 let chatStatusRefreshTimer: number | null = null;
 let chatStatusOverlayStarted = false;
-let chatStatusPollTimer: number | null = null;
 let chatStatusRefreshInFlight = false;
-let chatStatusEvents: EventSource | null = null;
 let manualStatusMenu: HTMLElement | null = null;
 let activeChatStatusRow: HTMLElement | null = null;
 let activeChatStatusIdentity: ReturnType<typeof getChatIdentityForRow> | null = null;
@@ -120,8 +118,6 @@ function startWhatsAppChatStatusOverlay() {
       void applyLocalStatusToActiveChat();
     });
   } catch {
-    if (chatStatusPollTimer) window.clearInterval(chatStatusPollTimer);
-    chatStatusPollTimer = null;
     chatStatusOverlayStarted = false;
     observer.disconnect();
   }
@@ -159,8 +155,8 @@ async function activateChatStatusRow(row: HTMLElement) {
     const localSources = await getLocalChatStatusSources();
     const drafts = mergeChatDraftStatusSources(localSources.drafts, serverSources.drafts);
     const reservations = mergeReservationStatusSources(localSources.reservations, serverSources.reservations);
-    chatStatusIndex = createChatStatusIndexFromSources(drafts, reservations);
-    syncLoadedStatusForActiveChat();
+    const status = resolveStatusForIdentityFromSources(identity, drafts, reservations) ?? EMPTY_CHAT_STATUS;
+    syncLoadedStatusForIdentity(identity, status);
     applyChatStatusesToWhatsAppList();
   } catch {
     // The local status already remains visible for the selected chat.
@@ -170,8 +166,8 @@ async function activateChatStatusRow(row: HTMLElement) {
 async function applyLocalStatusToActiveChat() {
   if (!activeChatStatusRow || !activeChatStatusIdentity) return;
   const localSources = await getLocalChatStatusSources();
-  chatStatusIndex = createChatStatusIndexFromSources(localSources.drafts, localSources.reservations);
-  syncLoadedStatusForActiveChat();
+  const status = resolveStatusForIdentityFromSources(activeChatStatusIdentity, localSources.drafts, localSources.reservations) ?? EMPTY_CHAT_STATUS;
+  syncLoadedStatusForIdentity(activeChatStatusIdentity, status);
   applyChatStatusesToWhatsAppList();
 }
 
@@ -190,10 +186,19 @@ function getChatStatusIdentityKeys(identity: ReturnType<typeof getChatIdentityFo
 function syncLoadedStatusForActiveChat() {
   if (!activeChatStatusIdentity) return;
   const status = getStatusForChatIdentity(activeChatStatusIdentity);
-  const keys = getChatStatusIdentityKeys(activeChatStatusIdentity);
-  if (!status || status.label === EMPTY_CHAT_STATUS.label) {
+  syncLoadedStatusForIdentity(activeChatStatusIdentity, status);
+}
+
+function syncLoadedStatusForIdentity(
+  identity: ReturnType<typeof getChatIdentityForRow>,
+  status: ChatStatusItem | null
+) {
+  const keys = getChatStatusIdentityKeys(identity);
+  if (!status) {
     keys.forEach((key) => loadedChatStatuses.delete(key));
-    if (activeChatStatusRow) clearChatStatusRow(activeChatStatusRow);
+    if (activeChatStatusRow && activeChatStatusIdentity && getChatStatusIdentityKey(activeChatStatusIdentity) === getChatStatusIdentityKey(identity)) {
+      clearChatStatusRow(activeChatStatusRow);
+    }
     return;
   }
   keys.forEach((key) => loadedChatStatuses.set(key, status));
@@ -220,19 +225,6 @@ async function fetchServerChatStatusForIdentity(identity: ReturnType<typeof getC
     drafts: normalizeChatDrafts((payload as { drafts?: unknown })?.drafts),
     reservations: normalizeReservations((payload as { reservations?: unknown })?.reservations)
   };
-}
-
-function startChatStatusRealtimeSync() {
-  if (chatStatusEvents) return;
-  try {
-    const events = new EventSource(`${API_BASE_URL}/api/events?clientId=chat-status-overlay`);
-    const refresh = () => void refreshChatStatusIndex();
-    events.addEventListener("chat-drafts.changed", refresh);
-    events.addEventListener("reservations.changed", refresh);
-    chatStatusEvents = events;
-  } catch {
-    chatStatusEvents = null;
-  }
 }
 
 function detectOutgoingChatStatusEvents(mutations: MutationRecord[]) {
@@ -360,19 +352,6 @@ async function refreshChatStatusIndex() {
   }
 }
 
-async function buildChatStatusIndex(): Promise<ChatStatusIndex> {
-  const localSources = await getLocalChatStatusSources();
-  const serverResult = await Promise.allSettled([fetchServerChatStatusSources()]);
-  const serverSources = serverResult[0]?.status === "fulfilled"
-    ? serverResult[0].value
-    : { drafts: {}, reservations: [] };
-  const drafts = mergeChatDraftStatusSources(localSources.drafts, serverSources.drafts);
-  const reservations = mergeReservationStatusSources(localSources.reservations, serverSources.reservations);
-
-  updateChatStatusSourceDebug(Object.keys(serverSources.drafts).length, serverSources.reservations.length);
-  return createChatStatusIndexFromSources(drafts, reservations);
-}
-
 function getLocalChatStatusSources(): Promise<{ drafts: Record<string, ChatBookingDraft>; reservations: Reservation[] }> {
   return new Promise((resolve) => {
     try {
@@ -390,16 +369,6 @@ function getLocalChatStatusSources(): Promise<{ drafts: Record<string, ChatBooki
       resolve({ drafts: {}, reservations: [] });
     }
   });
-}
-
-async function fetchServerChatStatusSources(): Promise<{ drafts: Record<string, ChatBookingDraft>; reservations: Reservation[] }> {
-  const response = await fetchWithTimeout(`${API_BASE_URL}/api/chat-statuses`, 20_000);
-  if (!response.ok) throw new Error(`Chat statuses request failed: ${response.status}`);
-  const payload = await response.json();
-  return {
-    drafts: normalizeChatDrafts((payload as { drafts?: unknown })?.drafts),
-    reservations: normalizeReservations((payload as { reservations?: unknown })?.reservations)
-  };
 }
 
 function mergeChatDraftStatusSources(
@@ -429,6 +398,54 @@ function mergeReservationStatusSources(localReservations: Reservation[], serverR
 
 function compareStatusSourceDates(left: string | undefined, right: string | undefined) {
   return String(left || "").localeCompare(String(right || ""));
+}
+
+function resolveStatusForIdentityFromSources(
+  identity: ReturnType<typeof getChatIdentityForRow>,
+  drafts: Record<string, ChatBookingDraft>,
+  reservations: Reservation[]
+) {
+  const identityPhone = normalizePhone(identity.phone);
+  const identityWaChatId = normalizeWhatsAppChatId(identity.waChatId);
+  const identityTitle = normalizeTitle(identity.title);
+  const strongCandidates: ChatStatusItem[] = [];
+  const titleCandidates: ChatStatusItem[] = [];
+
+  Object.entries(drafts).forEach(([chatId, draft]) => {
+    const draftPhone = normalizePhone(draft.phone);
+    const draftWaChatId = normalizeWhatsAppChatId(draft.waChatId || extractWaChatIdFromChatId(chatId));
+    const draftTitles = [
+      extractDraftTitleFromChatId(chatId),
+      draft.guestFirstName,
+      draft.lastReservation?.guestFirstName
+    ].map(normalizeTitle).filter(Boolean);
+    const strongMatch = chatId === identity.chatId ||
+      Boolean(identityWaChatId && draftWaChatId === identityWaChatId) ||
+      Boolean(identityPhone && draftPhone === identityPhone);
+    const titleMatch = Boolean(identityTitle && draftTitles.includes(identityTitle));
+    if (!strongMatch && !titleMatch) return;
+    const status = getDraftStatusItem(draft);
+    if (status) (strongMatch ? strongCandidates : titleCandidates).push(status);
+  });
+
+  reservations.forEach((reservation) => {
+    const strongMatch = Boolean(identityPhone && normalizePhone(reservation.phone) === identityPhone);
+    const titleMatch = Boolean(identityTitle && normalizeTitle(reservation.guestFirstName) === identityTitle);
+    if (strongMatch || titleMatch) {
+      (strongMatch ? strongCandidates : titleCandidates).push(getReservationStatusItem(reservation));
+    }
+  });
+
+  const candidates = strongCandidates.length ? strongCandidates : titleCandidates;
+  return candidates.reduce<ChatStatusItem | null>((current, candidate) => {
+    if (!current) return candidate;
+    const currentPriority = getStatusPriority(current);
+    const candidatePriority = getStatusPriority(candidate);
+    if (candidatePriority !== currentPriority) {
+      return candidatePriority > currentPriority ? candidate : current;
+    }
+    return getStatusUpdatedAt(candidate).localeCompare(getStatusUpdatedAt(current)) >= 0 ? candidate : current;
+  }, null);
 }
 
 function fetchWithTimeout(url: string, timeoutMs: number, init?: RequestInit) {
@@ -523,7 +540,28 @@ function getWhatsAppSidebar() {
 
 function applyChatStatusToRow(row: HTMLElement, status: ChatStatusItem) {
   if (status.label === EMPTY_CHAT_STATUS.label) {
+    const currentBadge = row.querySelector<HTMLElement>(".gpb-wa-chat-status-badge");
+    if (
+      row.dataset.gpbChatStatus === status.label &&
+      currentBadge?.classList.contains("gpb-wa-chat-status-empty") &&
+      currentBadge.textContent === status.label
+    ) {
+      return;
+    }
     clearChatStatusRow(row);
+    row.style.position = "relative";
+    row.dataset.gpbChatStatus = status.label;
+    const badge = document.createElement("span");
+    badge.className = "gpb-wa-chat-status-badge gpb-wa-chat-status-empty";
+    badge.textContent = status.label;
+    badge.title = "Нажмите, чтобы поменять статус";
+    badge.dataset.gpbManualStatus = status.manualStatus || "none";
+    badge.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openManualStatusMenu(row, badge, status);
+    };
+    row.appendChild(badge);
     return;
   }
   const nextToneClass = `gpb-wa-chat-status-${status.tone}`;
@@ -616,10 +654,18 @@ function findWhatsAppChatRow(element: HTMLElement, sidebar: HTMLElement, sidebar
   let current: HTMLElement | null = element;
   let best: HTMLElement | null = null;
 
-  for (let depth = 0; current && depth < 8; depth += 1) {
+  for (let depth = 0; current && depth < 12; depth += 1) {
     if (isVisibleChatRow(current, sidebarRect)) {
-      best = current;
-      break;
+      const currentRect = current.getBoundingClientRect();
+      const bestRect = best?.getBoundingClientRect();
+      if (
+        !best ||
+        current.matches('[role="listitem"], [role="row"], [data-testid="cell-frame-container"]') ||
+        currentRect.width > (bestRect?.width ?? 0) ||
+        currentRect.left < (bestRect?.left ?? Number.POSITIVE_INFINITY)
+      ) {
+        best = current;
+      }
     }
     if (current.parentElement === sidebar) break;
     current = current.parentElement;
@@ -701,6 +747,8 @@ function openManualStatusMenu(row: HTMLElement, badge: HTMLElement, currentStatu
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
+      activeChatStatusRow = row;
+      activeChatStatusIdentity = identity;
       void saveManualChatStatus(identity, option).finally(closeManualStatusMenu);
     });
     menu.appendChild(button);
@@ -732,11 +780,9 @@ async function saveManualChatStatus(
   const status = option.value === "none"
     ? { ...EMPTY_CHAT_STATUS, updatedAt: now }
     : { label: option.label, manualStatus: option.value, tone: option.tone, updatedAt: now };
-  setLatestStatus(chatStatusIndex.byChatId, identity.chatId, status);
-  setLatestStatus(chatStatusIndex.byWaChatId, identity.waChatId, status);
-  setLatestStatus(chatStatusIndex.byPhone, identity.phone, status);
-  setLatestTitleStatus(chatStatusIndex, identity.title, status);
-  scheduleApplyChatStatuses();
+  activeChatStatusIdentity = identity;
+  syncLoadedStatusForIdentity(identity, status);
+  applyChatStatusesToWhatsAppList();
 
   const existingDraft = await fetchServerChatDraft(identity.chatId).catch(() => null);
   const phone = identity.phone ? `+${identity.phone}` : "";
@@ -747,18 +793,16 @@ async function saveManualChatStatus(
     phone,
     waChatId: identity.waChatId
   });
+  await saveAutomaticStatusDraftLocally(identity.chatId, draft);
 
   await fetchWithTimeout(`${API_BASE_URL}/api/chat-drafts/${encodeURIComponent(identity.chatId)}`, 8000, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ draft })
-  });
+  }).catch(() => undefined);
 
-  setLatestStatus(chatStatusIndex.byChatId, identity.chatId, status);
-  setLatestStatus(chatStatusIndex.byWaChatId, identity.waChatId, status);
-  setLatestStatus(chatStatusIndex.byPhone, identity.phone, status);
-  setLatestTitleStatus(chatStatusIndex, identity.title, status);
-  scheduleApplyChatStatuses();
+  syncLoadedStatusForIdentity(identity, status);
+  applyChatStatusesToWhatsAppList();
   void refreshChatStatusIndex();
 }
 

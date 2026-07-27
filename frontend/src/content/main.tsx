@@ -306,7 +306,7 @@ function getLocalChatStatusSources(): Promise<{ drafts: Record<string, ChatBooki
 }
 
 async function fetchServerChatStatusSources(): Promise<{ drafts: Record<string, ChatBookingDraft>; reservations: Reservation[] }> {
-  const response = await fetchWithTimeout(`${API_BASE_URL}/api/chat-statuses`, 8000);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/chat-statuses`, 20_000);
   if (!response.ok) throw new Error(`Chat statuses request failed: ${response.status}`);
   const payload = await response.json();
   return {
@@ -610,7 +610,7 @@ async function saveManualChatStatus(
 ) {
   const now = new Date().toISOString();
   const status = option.value === "none"
-    ? EMPTY_CHAT_STATUS
+    ? { ...EMPTY_CHAT_STATUS, updatedAt: now }
     : { label: option.label, manualStatus: option.value, tone: option.tone, updatedAt: now };
   setLatestStatus(chatStatusIndex.byChatId, identity.chatId, status);
   setLatestStatus(chatStatusIndex.byWaChatId, identity.waChatId, status);
@@ -766,15 +766,19 @@ function getChatRowTitle(row: HTMLElement) {
 }
 
 function getDraftStatusItem(draft: ChatBookingDraft): ChatStatusItem | null {
+  const manualStatus = getManualChatStatusItem(draft.manualStatus, draft.manualStatusAt || draft.updatedAt);
+  if (manualStatus && draft.manualStatusAt) return manualStatus;
   if (draft.agreementEverSent || draft.agreementSent) return { label: "На согласовании", tone: "pending", updatedAt: draft.updatedAt };
   if (draft.catalogStatus === "room-sent") return { label: "Номер отправлен", tone: "info", updatedAt: draft.catalogStatusAt || draft.updatedAt };
   if (draft.catalogStatus === "price-sent") return { label: "Прайс отправлен", tone: "info", updatedAt: draft.catalogStatusAt || draft.updatedAt };
   if (draft.chatStartedAt) return { label: "Чат начат", tone: "info", updatedAt: draft.chatStartedAt };
-  return getManualChatStatusItem(draft.manualStatus, draft.manualStatusAt || draft.updatedAt);
+  return manualStatus;
 }
 
 function getManualChatStatusItem(status: ChatBookingDraft["manualStatus"], updatedAt = ""): ChatStatusItem | null {
   switch (status) {
+    case "none":
+      return { label: "Без статуса", manualStatus: status, tone: "muted", updatedAt };
     case "chat-started":
       return { label: "Чат начат", manualStatus: status, tone: "info", updatedAt };
     case "room-sent":
@@ -861,7 +865,6 @@ function setLatestTitleStatus(index: ChatStatusIndex, title: string, status: Cha
 }
 
 function getStatusPriority(status: ChatStatusItem | null | undefined) {
-  if (status?.manualStatus === "none") return 0;
   if (status?.manualStatus) return 100;
   switch (status?.label) {
     case "Незаезд":

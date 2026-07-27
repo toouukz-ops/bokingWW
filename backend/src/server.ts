@@ -209,6 +209,69 @@ const frontendDebugLogs: Array<{
   createdAt: string;
 }> = [];
 const realtimeClients = new Set<{ clientId: string; send: (event: string, data: unknown) => void }>();
+type ChatStatusSources = {
+  drafts: Record<string, unknown>;
+  reservations: Array<Record<string, unknown> & { id: string }>;
+};
+let chatStatusSourcesCache: ChatStatusSources | null = null;
+let chatStatusSourcesRefresh: Promise<ChatStatusSources> | null = null;
+
+function getCachedChatStatusSources() {
+  if (chatStatusSourcesCache) return Promise.resolve(chatStatusSourcesCache);
+  if (chatStatusSourcesRefresh) return chatStatusSourcesRefresh;
+  chatStatusSourcesRefresh = getChatStatusSourcesData()
+    .then((sources) => {
+      chatStatusSourcesCache = sources;
+      return sources;
+    })
+    .finally(() => {
+      chatStatusSourcesRefresh = null;
+    });
+  return chatStatusSourcesRefresh;
+}
+
+function replaceCachedReservationStatusSources(items: ChatStatusSources["reservations"]) {
+  if (!chatStatusSourcesCache) return;
+  chatStatusSourcesCache = { ...chatStatusSourcesCache, reservations: items };
+}
+
+function upsertCachedReservationStatusSource(reservation: ChatStatusSources["reservations"][number]) {
+  if (!chatStatusSourcesCache) return;
+  chatStatusSourcesCache = {
+    ...chatStatusSourcesCache,
+    reservations: chatStatusSourcesCache.reservations
+      .filter((item) => item.id !== reservation.id)
+      .concat(reservation)
+  };
+}
+
+function deleteCachedReservationStatusSource(id: string) {
+  if (!chatStatusSourcesCache) return;
+  chatStatusSourcesCache = {
+    ...chatStatusSourcesCache,
+    reservations: chatStatusSourcesCache.reservations.filter((item) => item.id !== id)
+  };
+}
+
+function replaceCachedChatDraftStatusSources(drafts: Record<string, unknown>) {
+  if (!chatStatusSourcesCache) return;
+  chatStatusSourcesCache = { ...chatStatusSourcesCache, drafts };
+}
+
+function upsertCachedChatDraftStatusSource(chatId: string, draft: unknown) {
+  if (!chatStatusSourcesCache) return;
+  chatStatusSourcesCache = {
+    ...chatStatusSourcesCache,
+    drafts: { ...chatStatusSourcesCache.drafts, [chatId]: draft }
+  };
+}
+
+function deleteCachedChatDraftStatusSource(chatId: string) {
+  if (!chatStatusSourcesCache) return;
+  const drafts = { ...chatStatusSourcesCache.drafts };
+  delete drafts[chatId];
+  chatStatusSourcesCache = { ...chatStatusSourcesCache, drafts };
+}
 
 function broadcastRealtime(event: string, data: unknown, sourceClientId = "") {
   for (const client of realtimeClients) {
@@ -1888,6 +1951,7 @@ app.put("/api/reservations", async (request) => {
   const body = request.body as { items?: Array<Record<string, unknown>> } | undefined;
   const query = request.query as { clientId?: string };
   const items = await replaceReservations(Array.isArray(body?.items) ? body.items : []);
+  replaceCachedReservationStatusSources(items);
   broadcastRealtime("reservations.changed", { action: "replace", items }, query.clientId);
   return items;
 });
@@ -1906,6 +1970,7 @@ app.put("/api/reservations/:id", async (request, reply) => {
   }
 
   const reservation = await saveReservationData(id, body);
+  upsertCachedReservationStatusSource(reservation);
   broadcastRealtime("reservations.changed", { action: "upsert", reservation }, query.clientId);
   return reservation;
 });
@@ -1914,7 +1979,9 @@ app.delete("/api/reservations/:id", async (request, reply) => {
   const { id } = request.params as { id: string };
   const query = request.query as { clientId?: string };
   await deleteReservationData(id);
-  broadcastRealtime("reservations.changed", { action: "delete", id: decodeURIComponent(id) }, query.clientId);
+  const decodedId = decodeURIComponent(id);
+  deleteCachedReservationStatusSource(decodedId);
+  broadcastRealtime("reservations.changed", { action: "delete", id: decodedId }, query.clientId);
   return reply.status(204).send();
 });
 
@@ -1955,7 +2022,7 @@ app.get("/api/chat-drafts", async (request) => {
 });
 
 app.get("/api/chat-statuses", async () => {
-  return getChatStatusSourcesData();
+  return getCachedChatStatusSources();
 });
 
 app.get("/api/chat-drafts/:chatId", async (request) => {
@@ -2007,6 +2074,7 @@ app.put("/api/chat-drafts", async (request) => {
   const body = request.body as { drafts?: Record<string, unknown> } | undefined;
   const drafts = body?.drafts && typeof body.drafts === "object" && !Array.isArray(body.drafts) ? body.drafts : {};
   const savedDrafts = await replaceChatDraftData(await sanitizeChatDrafts(drafts));
+  replaceCachedChatDraftStatusSources(savedDrafts);
   broadcastRealtime("chat-drafts.changed", { action: "replace", drafts: savedDrafts });
   return { drafts: savedDrafts };
 });
@@ -2020,6 +2088,7 @@ app.put("/api/chat-drafts/:chatId", async (request, reply) => {
 
   const decodedChatId = decodeURIComponent(chatId);
   const draft = await saveChatDraftData(decodedChatId, await sanitizeChatDraft(body.draft));
+  upsertCachedChatDraftStatusSource(decodedChatId, draft);
   broadcastRealtime("chat-drafts.changed", { action: "upsert", chatId: decodedChatId, draft });
   return { draft };
 });
@@ -2028,6 +2097,7 @@ app.delete("/api/chat-drafts/:chatId", async (request, reply) => {
   const { chatId } = request.params as { chatId: string };
   const decodedChatId = decodeURIComponent(chatId);
   await deleteChatDraftData(decodedChatId);
+  deleteCachedChatDraftStatusSource(decodedChatId);
   broadcastRealtime("chat-drafts.changed", { action: "delete", chatId: decodedChatId });
   return reply.status(204).send();
 });
@@ -2237,4 +2307,8 @@ process.on("SIGTERM", close);
 await app.listen({
   port: config.port,
   host: process.env.HOST ?? "0.0.0.0"
+});
+
+void getCachedChatStatusSources().catch((error) => {
+  app.log.error(error, "Chat status cache warmup failed");
 });

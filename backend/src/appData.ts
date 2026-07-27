@@ -365,8 +365,9 @@ export async function listRoomHolds() {
 
 export async function saveRoomHoldData(id: string, hold: Record<string, unknown>) {
   const now = new Date();
+  const { _id: _ignoredMongoId, createdAt, ...mutableHold } = hold;
   const document = {
-    ...hold,
+    ...mutableHold,
     id,
     updatedAt: now
   };
@@ -374,7 +375,7 @@ export async function saveRoomHoldData(id: string, hold: Record<string, unknown>
     { id },
     {
       $set: document,
-      $setOnInsert: { createdAt: typeof hold.createdAt === "string" ? hold.createdAt : now.toISOString() }
+      $setOnInsert: { createdAt: typeof createdAt === "string" ? createdAt : now.toISOString() }
     },
     { upsert: true }
   );

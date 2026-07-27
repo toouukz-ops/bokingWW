@@ -1,0 +1,105 @@
+{
+  "exportedAt": "2026-07-04T08:21:03.571Z",
+  "chatId": "phone:+77779840724",
+  "draftLastReservation": {
+    "id": "reservation-1783097678276",
+    "roomIds": [
+      "object-custom-1777970768487"
+    ],
+    "items": [
+      {
+        "id": "item-object-custom-1777970768487-1783097691103-c7e09eff0bb638",
+        "roomId": "object-custom-1777970768487",
+        "checkIn": "2026-07-05",
+        "checkOut": "2026-07-07",
+        "checkInTime": "13:00",
+        "checkOutTime": "12:00",
+        "priceSnapshot": {
+          "capturedAt": "2026-07-03T16:54:51.103Z",
+          "dailyPrices": [
+            {
+              "date": "2026-07-05",
+              "price": 44900,
+              "priceType": "weekend"
+            },
+            {
+              "date": "2026-07-06",
+              "price": 49900,
+              "priceType": "holiday"
+            }
+          ],
+          "roomSubtotal": 94800,
+          "extraInventoryTotal": 11974
+        },
+        "subtotal": 106774,
+        "discountAmount": 0,
+        "total": 106774,
+        "prepayment": 53400,
+        "paidAmount": 53400
+      }
+    ],
+    "payments": [
+      {
+        "id": "payment-1783097682871",
+        "type": "prepayment",
+        "amount": 53400,
+        "method": "kaspi",
+        "paidAt": "2026-07-03T16:54:42.871Z"
+      }
+    ],
+    "guestFirstName": "Гость 0724",
+    "phone": "+77779840724",
+    "checkIn": "2026-07-05",
+    "checkOut": "2026-07-07",
+    "checkInTime": "13:00",
+    "checkOutTime": "12:00",
+    "comment": "",
+    "adminComment": "",
+    "adults": 2,
+    "teenagers": 1,
+    "children": 2,
+    "hasPet": false,
+    "extraBed": true,
+    "extraBedType": "air-bed",
+    "airMattressCount": 0,
+    "rollawayCount": 0,
+    "extraInventoryByRoomId": {
+      "object-custom-1777970768487": {
+        "airBeds": 0,
+        "rollaways": 0,
+        "extraPlaces": 1,
+        "items": [
+          {
+            "id": "extra-object-custom-1777970768487-1783095990189-583ae8128a25d8",
+            "typeId": "Надувной матрас",
+            "label": "Надувной матрас",
+            "guestType": "teen"
+          }
+        ]
+      }
+    },
+    "extraInventoryChargeEnabled": true,
+    "inventoryAirBedPrice": 10000,
+    "inventoryRollawayPrice": 5000,
+    "inventoryExtraPlacePrice": 0,
+    "inventoryExtraPlaceAdultPercent": 50,
+    "inventoryExtraPlaceTeenPercent": 40,
+    "inventoryExtraPlaceChildPercent": 30,
+    "extraInventoryManual": true,
+    "hourlyHours": 2,
+    "discountPercent": 0,
+    "subtotal": 106774,
+    "discountAmount": 0,
+    "total": 106774,
+    "prepayment": 53400,
+    "paidAmount": 53400,
+    "paymentLink": "https://pay.kaspi.kz/pay/spef4ehk",
+    "paymentMethod": "kaspi",
+    "breakfastIncluded": true,
+    "breakfastDiscountAmount": 0,
+    "isManualSale": false,
+    "status": "booked",
+    "prepaymentReceivedAt": "2026-07-03T16:54:42.871Z",
+    "updatedAt": "2026-07-03T17:19:38.489Z"
+  }
+}

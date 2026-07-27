@@ -1,0 +1,61 @@
+{
+  "exportedAt": "2026-07-04T06:03:50.874Z",
+  "aliases": {
+    "phone:+357070698025": {
+      "adminComment": "",
+      "adults": 8,
+      "agreementEverSent": true,
+      "agreementSent": false,
+      "airMattressCount": 3,
+      "breakfastIncluded": true,
+      "catalogStatusAt": "",
+      "checkIn": "2026-06-22",
+      "checkInTime": "13:00",
+      "checkOut": "2026-06-26",
+      "checkOutTime": "12:00",
+      "children": 6,
+      "comment": "",
+      "discountPercent": 0,
+      "extraBed": true,
+      "extraBedType": "air-bed",
+      "extraInventoryByRoomId": {
+        "object-custom-1777970238823": {
+          "airBeds": 2,
+          "rollaways": 0
+        },
+        "object-custom-1777970506652": {
+          "airBeds": 1,
+          "rollaways": 0
+        }
+      },
+      "extraInventoryChargeEnabled": false,
+      "extraInventoryManual": true,
+      "guestFirstName": "",
+      "hasPet": false,
+      "hourlyHours": 2,
+      "inventoryAirBedPrice": 10000,
+      "inventoryRollawayPrice": 5000,
+      "lastReservation": null,
+      "manualSaleAmount": 0,
+      "manualSaleComment": "",
+      "manualSaleOpen": false,
+      "manualSalePaymentMethod": "",
+      "manualSalePeriod": "day",
+      "manualTotalAmount": 0,
+      "packageDiscountEnabled": false,
+      "phone": "",
+      "prepaymentAlreadyPaid": false,
+      "rollawayCount": 0,
+      "roomDateOverrides": {
+        "object-custom-1777970238823": {
+          "checkIn": "2026-06-22",
+          "checkOut": "2026-06-25"
+        }
+      },
+      "selectedBookingRoomIds": [],
+      "selectedRoomId": "object-custom-1777900879409",
+      "updatedAt": "2026-06-25T10:35:13.943Z"
+    },
+    "title:гость 8025": null
+  }
+}

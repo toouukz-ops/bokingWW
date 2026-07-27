@@ -1,0 +1,162 @@
+{
+  "exportedAt": "2026-07-04T06:00:55.053Z",
+  "chatId": "phone:+77004698025",
+  "draft": {
+    "selectedRoomId": "",
+    "selectedBookingRoomIds": [],
+    "roomDateOverrides": {},
+    "checkIn": "2026-06-22",
+    "checkOut": "2026-07-05",
+    "checkInTime": "13:00",
+    "checkOutTime": "12:00",
+    "comment": "",
+    "adminComment": "",
+    "guestFirstName": "Гость 8025",
+    "phone": "+77004698025",
+    "adults": 8,
+    "teenagers": 0,
+    "children": 6,
+    "hasPet": false,
+    "extraBed": true,
+    "extraBedType": "air-bed",
+    "airMattressCount": 3,
+    "rollawayCount": 0,
+    "extraInventoryByRoomId": {
+      "object-custom-1777970238823": {
+        "airBeds": 2,
+        "rollaways": 0
+      },
+      "object-custom-1777970506652": {
+        "airBeds": 1,
+        "rollaways": 0
+      }
+    },
+    "extraInventoryChargeEnabled": true,
+    "inventoryAirBedPrice": 10000,
+    "inventoryRollawayPrice": 5000,
+    "inventoryExtraPlacePrice": 0,
+    "inventoryExtraPlaceAdultPercent": 50,
+    "inventoryExtraPlaceTeenPercent": 40,
+    "inventoryExtraPlaceChildPercent": 30,
+    "extraInventoryManual": true,
+    "hourlyHours": 2,
+    "discountPercent": 0,
+    "packageDiscountEnabled": false,
+    "periodDiscountEnabled": false,
+    "pricePdfPeriodDiscountApplied": false,
+    "breakfastIncluded": true,
+    "manualTotalAmount": 0,
+    "manualSaleOpen": false,
+    "manualSaleAmount": 0,
+    "manualSaleComment": "",
+    "manualSalePaymentMethod": "",
+    "manualSalePeriod": "day",
+    "prepaymentAlreadyPaid": false,
+    "catalogStatusAt": "",
+    "agreementSent": true,
+    "agreementEverSent": true,
+    "lastReservation": {
+      "adminComment": "",
+      "adults": 8,
+      "airMattressCount": 3,
+      "breakfastDiscountAmount": 0,
+      "breakfastIncluded": true,
+      "checkIn": "2026-06-22",
+      "checkInTime": "13:00",
+      "checkOut": "2026-07-05",
+      "checkOutTime": "12:00",
+      "children": 6,
+      "comment": "",
+      "createdAt": "2026-06-22T09:42:41.848Z",
+      "discountAmount": 0,
+      "discountPercent": 0,
+      "extraBed": true,
+      "extraBedType": "air-bed",
+      "extraInventoryByRoomId": {
+        "object-custom-1777970238823": {
+          "airBeds": 2,
+          "rollaways": 0
+        },
+        "object-custom-1777970506652": {
+          "airBeds": 1,
+          "rollaways": 0
+        }
+      },
+      "guestFirstName": "Гость 8025",
+      "hasPet": false,
+      "hourlyHours": 2,
+      "id": "reservation-1782121361848",
+      "isManualSale": false,
+      "items": [
+        {
+          "checkIn": "2026-06-22",
+          "checkInTime": "13:00",
+          "checkOut": "2026-06-26",
+          "checkOutTime": "12:00",
+          "discountAmount": 0,
+          "id": "item-object-custom-1777970768487-1782121361847-f8ae493606281",
+          "paidAmount": 0,
+          "prepayment": 69800,
+          "roomId": "object-custom-1777970768487",
+          "subtotal": 139600,
+          "total": 139600
+        },
+        {
+          "checkIn": "2026-06-22",
+          "checkInTime": "13:00",
+          "checkOut": "2026-06-26",
+          "checkOutTime": "12:00",
+          "discountAmount": 0,
+          "id": "item-object-custom-1777970010917-1782121361847-9540e6c585c14",
+          "paidAmount": 0,
+          "prepayment": 65800,
+          "roomId": "object-custom-1777970010917",
+          "subtotal": 131600,
+          "total": 131600
+        },
+        {
+          "checkIn": "2026-06-22",
+          "checkInTime": "13:00",
+          "checkOut": "2026-06-26",
+          "checkOutTime": "12:00",
+          "discountAmount": 0,
+          "id": "item-object-custom-1777970506652-1782121361847-b89eaf27e77c98",
+          "paidAmount": 0,
+          "prepayment": 69800,
+          "roomId": "object-custom-1777970506652",
+          "subtotal": 139600,
+          "total": 139600
+        },
+        {
+          "checkIn": "2026-06-22",
+          "checkInTime": "13:00",
+          "checkOut": "2026-06-25",
+          "checkOutTime": "12:00",
+          "discountAmount": 0,
+          "id": "item-object-custom-1777970238823-1782121361848-da6e576de041e",
+          "paidAmount": 0,
+          "prepayment": 49350,
+          "roomId": "object-custom-1777970238823",
+          "subtotal": 98700,
+          "total": 98700
+        }
+      ],
+      "paidAmount": 0,
+      "paymentLink": "https://pay.kaspi.kz/pay/spef4ehk",
+      "payments": [],
+      "phone": "+77004698025",
+      "prepayment": 254750,
+      "rollawayCount": 0,
+      "roomIds": [
+        "object-custom-1777970768487",
+        "object-custom-1777970010917",
+        "object-custom-1777970506652",
+        "object-custom-1777970238823"
+      ],
+      "status": "pending",
+      "subtotal": 509500,
+      "total": 509500
+    },
+    "updatedAt": "2026-07-04T05:59:07.256Z"
+  }
+}

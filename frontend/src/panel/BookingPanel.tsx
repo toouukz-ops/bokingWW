@@ -1379,7 +1379,7 @@ export function BookingPanel() {
     }
     return null;
   }, [activeChat?.phone, guestPhone, guestPhonePrefix, reservations]);
-  const panelActiveReservation = isBookingPanelActiveReservation(lastReservation)
+  const panelActiveReservation = isBookingPanelWorkflowReservation(lastReservation)
     ? lastReservation
     : phoneMatchedActiveReservation;
   const bookedReservationRooms = useMemo(
@@ -3821,11 +3821,14 @@ export function BookingPanel() {
   const hasActiveLastReservation = Boolean(panelActiveReservation);
   const hasBookingSelection = Boolean(selectedBookingRooms.length);
   const currentReservationDraft = hasBookingSelection ? buildReservationDraft(hasActiveLastReservation ? panelActiveReservation?.status ?? "pending" : "pending") : null;
+  const prepaymentReservation = currentReservationDraft
+    ? findExistingReservationForDraft(currentReservationDraft)
+    : null;
   const hasSelectedHourlyConflict = selectedHourlyConflicts.length > 0;
   const currentReservationHasPastDate = Boolean(currentReservationDraft && isReservationDateInPast(currentReservationDraft));
   const canSendAgreementText = Boolean(currentReservationDraft && !hasSelectedHourlyConflict && !currentReservationHasPastDate);
   const canConfirmAgreement = Boolean(currentReservationDraft && currentReservationDraft.status !== "cancelled" && !hasSelectedHourlyConflict && !currentReservationHasPastDate);
-  const isBookingConfirmed = Boolean(panelActiveReservation);
+  const isBookingConfirmed = Boolean(panelActiveReservation?.status === "booked");
   const cancelableReservation = panelActiveReservation ?? phoneMatchedActiveReservation;
   const actionableReservation = panelActiveReservation ?? phoneMatchedActiveReservation ?? lastReservation;
   const isBookingLocked = isBookingConfirmed || isCurrentChatOwnedByOther;
@@ -8749,15 +8752,15 @@ export function BookingPanel() {
                 </div>
                 <div className="gpb-booking-total-actions">
                   <button
-                    className={`gpb-payment-mark-button ${lastReservation?.prepaymentReceivedAt ? "is-done" : ""}`}
+                    className={`gpb-payment-mark-button ${prepaymentReservation?.prepaymentReceivedAt ? "is-done" : ""}`}
                     type="button"
                     onClick={() => {
-                      if (lastReservation) void togglePrepaymentPaid(lastReservation);
+                      if (prepaymentReservation) void togglePrepaymentPaid(prepaymentReservation);
                     }}
-                    disabled={isCurrentChatOwnedByOther || !lastReservation || Boolean(lastReservation.noShowAt || lastReservation.status === "cancelled")}
+                    disabled={isCurrentChatOwnedByOther || !prepaymentReservation || Boolean(prepaymentReservation.noShowAt || prepaymentReservation.status === "cancelled")}
                   >
                     <Check size={15} />
-                    <span>{lastReservation?.prepaymentReceivedAt ? "Предоплата получена" : "Внести предоплату"}</span>
+                    <span>{prepaymentReservation?.prepaymentReceivedAt ? "Предоплата получена" : "Внести предоплату"}</span>
                   </button>
                   <button
                     className={`gpb-payment-mark-button ${actionableReservation?.balancePaidAt ? "is-done" : ""}`}
@@ -25596,6 +25599,15 @@ function isReservationBlockingExtraInventory(reservation: Pick<Reservation, "sta
 
 function isBookingPanelActiveReservation(reservation: Pick<Reservation, "status" | "checkedInAt" | "checkedOutAt" | "checkOut" | "checkOutTime"> | null | undefined) {
   return Boolean(reservation?.status === "booked" && !isReservationCheckedOut(reservation) && !isReservationPastStay(reservation));
+}
+
+function isBookingPanelWorkflowReservation(reservation: Pick<Reservation, "status" | "checkedInAt" | "checkedOutAt" | "checkOut" | "checkOutTime"> | null | undefined) {
+  return Boolean(
+    reservation &&
+    (reservation.status === "pending" || reservation.status === "booked") &&
+    !isReservationCheckedOut(reservation) &&
+    !isReservationPastStay(reservation)
+  );
 }
 
 function getReservationScheduledCheckOutIso(reservation: Pick<Reservation, "checkOut" | "checkOutTime">) {

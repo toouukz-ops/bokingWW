@@ -15,6 +15,7 @@ import {
   Download,
   Eraser,
   Check,
+  ClipboardList,
   Plus,
   Hotel,
   Image,
@@ -47,6 +48,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEv
 import {
   clearBookingStatistics,
   claimActiveDialog,
+  claimContactLock,
   cropRoomMedia,
   deleteObjectGalleryMedia,
   deleteMenuOrder,
@@ -61,6 +63,7 @@ import {
   exportServerBackupData,
   getActiveDialogs,
   getAllChatBookingDrafts,
+  getContactLocks,
   getAiReplySuggestions,
   getExpenseCategories,
   getExpenseEntries,
@@ -79,6 +82,7 @@ import {
   importLocalBackupData,
   importServerBackupData,
   releaseActiveDialog,
+  releaseContactLock,
   saveGuestContact,
   saveExpenseCategories,
   saveExpenseEntries,
@@ -94,10 +98,11 @@ import {
   uploadRoomMedia
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
-import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, MenuOrder, PaymentSettings, QuickReplyButton, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, RoomWorkStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
+import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ContactLock, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, MenuOrder, PaymentSettings, QuickReplyButton, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, RoomWorkStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
+
 const DEFAULT_CHECK_IN_TIME = "15:00";
 const DEFAULT_CHECK_OUT_TIME = "12:00";
 const PENDING_CONTACT_SAVE_KEY = "gpb-pending-contact-save";
@@ -886,6 +891,53 @@ function filterActiveDialogs(value: unknown, nowMs = Date.now()): ActiveDialog[]
     }));
 }
 
+function filterActiveContactLocks(value: unknown, nowMs = Date.now()): ContactLock[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is ContactLock =>
+      Boolean(
+        item &&
+        typeof item === "object" &&
+        typeof item.phone === "string" &&
+        typeof item.clientId === "string" &&
+        typeof item.operatorName === "string" &&
+        typeof item.status === "string" &&
+        typeof item.expiresAt === "string" &&
+        new Date(item.expiresAt).getTime() > nowMs
+      )
+    )
+    .map((item) => ({
+      phone: formatPhoneDigits(item.phone),
+      clientId: item.clientId,
+      operatorName: item.operatorName.trim() || "Оператор",
+      status: item.status === "saving" || item.status === "checking" || item.status === "matching" ? item.status : "checking",
+      startedAt: typeof item.startedAt === "string" ? item.startedAt : "",
+      updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : "",
+      expiresAt: item.expiresAt
+    }));
+}
+
+function parseReservationSaveErrorDetails(message: string) {
+  const jsonStart = message.indexOf("{");
+  if (jsonStart < 0) return null;
+  try {
+    const value = JSON.parse(message.slice(jsonStart)) as {
+      conflictReservationId?: unknown;
+      error?: unknown;
+      roomId?: unknown;
+      status?: unknown;
+    };
+    return {
+      conflictReservationId: typeof value.conflictReservationId === "string" ? value.conflictReservationId : "",
+      error: typeof value.error === "string" ? value.error : "",
+      roomId: typeof value.roomId === "string" ? value.roomId : "",
+      status: typeof value.status === "number" ? value.status : undefined
+    };
+  } catch {
+    return null;
+  }
+}
+
 function filterActiveRoomHolds(holds: RoomHold[], nowMs = Date.now()) {
   return holds.filter((hold) => new Date(hold.expiresAt).getTime() > nowMs);
 }
@@ -896,6 +948,11 @@ function getCurrentRoomHoldOwnerId(activeChat: ActiveChat | null, guestPhone: st
   if (phone) return createChatId(`phone:${phone}`);
   const name = normalizeExtractedText(guestFirstName);
   return createChatId(name ? `guest:${name}` : "local:booking-panel");
+}
+
+function isRoomHoldOwnedByGuest(hold: RoomHold, ownerId = "", ownerPhone = "") {
+  if (ownerId && hold.ownerId === ownerId) return true;
+  return Boolean(ownerPhone && hold.phone && phonesMatchForContactLookup(hold.phone, ownerPhone));
 }
 
 function roomHoldOverlapsRange(hold: RoomHold, range: { checkIn: string; checkOut: string }, checkInTime: string, checkOutTime: string) {
@@ -1075,6 +1132,7 @@ export function BookingPanel() {
   const [inventoryExtraPlaceChildPercent, setInventoryExtraPlaceChildPercent] = useState(0);
   const [inventoryCustomFields, setInventoryCustomFields] = useState<Record<string, string>>({});
   const [inventoryCustomCounts, setInventoryCustomCounts] = useState<Record<string, number>>({});
+  const [inventoryCustomCapacities, setInventoryCustomCapacities] = useState<Record<string, number>>({});
   const [packageDiscountPercent, setPackageDiscountPercent] = useState(0);
   const [packagePeriodDiscountPercent, setPackagePeriodDiscountPercent] = useState(0);
   const [packagePeriodDiscountFrom, setPackagePeriodDiscountFrom] = useState("");
@@ -1130,10 +1188,15 @@ export function BookingPanel() {
   const [agreementRefreshState, setAgreementRefreshState] = useState<"idle" | "refreshing" | "refreshed" | "error">("idle");
   const [clearBookingState, setClearBookingState] = useState<"idle" | "clearing" | "cleared">("idle");
   const [contactSaveState, setContactSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [contactLookupNotice, setContactLookupNotice] = useState<{ tone: "info" | "success" | "warning" | "error"; text: string } | null>(null);
+  const [contactVerificationState, setContactVerificationState] = useState<{
+    phone: string;
+    status: "idle" | "matching" | "checking" | "matched" | "mismatch";
+  }>({ phone: "", status: "idle" });
+  const [contactLookupNotice, setContactLookupNotice] = useState<{ tone: "info" | "success" | "warning" | "error"; text: string; phone?: string } | null>(null);
   const [contactServerSyncByPhone, setContactServerSyncByPhone] = useState<Record<string, "pending" | "synced" | "error">>({});
   const [roomHolds, setRoomHolds] = useState<RoomHold[]>([]);
   const [activeDialogs, setActiveDialogs] = useState<ActiveDialog[]>([]);
+  const [contactLocks, setContactLocks] = useState<ContactLock[]>([]);
   const [holdNowMs, setHoldNowMs] = useState(() => Date.now());
   const [todayWeatherState, setTodayWeatherState] = useState<WeatherState>({ status: "idle" });
   const [isDiscountFocused, setIsDiscountFocused] = useState(false);
@@ -1229,6 +1292,10 @@ export function BookingPanel() {
     () => getCurrentRoomHoldOwnerId(activeChat, guestPhone, guestPhonePrefix, guestFirstName),
     [activeChat?.id, guestFirstName, guestPhone, guestPhonePrefix]
   );
+  const currentHoldOwnerPhone = useMemo(
+    () => formatStrictContactPhone(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone || activeChat?.phone || ""),
+    [activeChat?.phone, guestPhone, guestPhonePrefix]
+  );
   const availableRooms = useMemo(
     () => pricedRooms.filter((room) =>
       isRoomAvailableInBookingPanel(room) &&
@@ -1237,8 +1304,8 @@ export function BookingPanel() {
     [checkIn, checkOut, checkInTime, checkOutTime, pricedRooms, reservations]
   );
   const availableExtraInventory = useMemo(
-    () => getAvailableExtraInventory(reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms, inventoryCustomCounts),
-    [checkIn, checkOut, inventoryAirBeds, inventoryCustomCounts, inventoryRollaways, pricedRooms, reservations]
+    () => getAvailableExtraInventory(reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms, inventoryCustomCounts, inventoryCustomCapacities),
+    [checkIn, checkOut, inventoryAirBeds, inventoryCustomCapacities, inventoryCustomCounts, inventoryRollaways, pricedRooms, reservations]
   );
   const visibleAvailableRooms = useMemo(
     () => availableRooms,
@@ -1287,25 +1354,40 @@ export function BookingPanel() {
   const configuredLinkMethods = useMemo(() => buildSettingMethodList(LINK_METHODS, linkMethods), [linkMethods]);
   const configuredPaymentMethods = useMemo(() => buildPaymentMethodSelectionList(paymentMethods), [paymentMethods]);
   const roomAvailabilityConflicts = useMemo(
-    () => buildRoomAvailabilityConflicts(pricedRooms, reservations, checkIn, checkOut, checkInTime, checkOutTime, activeRoomHolds, currentHoldOwnerId),
-    [activeRoomHolds, checkIn, checkOut, checkInTime, checkOutTime, currentHoldOwnerId, reservations, pricedRooms]
+    () => buildRoomAvailabilityConflicts(pricedRooms, reservations, checkIn, checkOut, checkInTime, checkOutTime, activeRoomHolds, currentHoldOwnerId, currentHoldOwnerPhone),
+    [activeRoomHolds, checkIn, checkOut, checkInTime, checkOutTime, currentHoldOwnerId, currentHoldOwnerPhone, reservations, pricedRooms]
   );
   const saunaBusySlotsByRoomId = useMemo(
     () => buildHourlyBusySlotsByRoomId(pricedRooms, reservations, checkIn),
     [checkIn, reservations, pricedRooms]
   );
+  const phoneMatchedActiveReservation = useMemo(() => {
+    const phones = [
+      activeChat?.phone,
+      buildPhoneWithPrefix(guestPhone, guestPhonePrefix),
+      guestPhone
+    ];
+    for (const phone of phones) {
+      const matchingReservation = findBestActiveReservationForPhone(phone || "");
+      if (matchingReservation) return matchingReservation;
+    }
+    return null;
+  }, [activeChat?.phone, guestPhone, guestPhonePrefix, reservations]);
+  const panelActiveReservation = isBookingPanelActiveReservation(lastReservation)
+    ? lastReservation
+    : phoneMatchedActiveReservation;
   const bookedReservationRooms = useMemo(
-    () => isBookingPanelActiveReservation(lastReservation)
-      ? lastReservation.roomIds
+    () => panelActiveReservation
+      ? panelActiveReservation.roomIds
         .map((roomId) => pricedRooms.find((room) => room.id === roomId))
         .filter((room): room is Room => Boolean(room))
       : [],
-    [lastReservation?.checkOut, lastReservation?.checkOutTime, lastReservation?.checkedInAt, lastReservation?.checkedOutAt, lastReservation?.roomIds, lastReservation?.status, pricedRooms]
+    [panelActiveReservation?.checkOut, panelActiveReservation?.checkOutTime, panelActiveReservation?.checkedInAt, panelActiveReservation?.checkedOutAt, panelActiveReservation?.roomIds, panelActiveReservation?.status, pricedRooms]
   );
   const catalogPanelRooms = useMemo(() => {
-    const sourceRooms = isBookingPanelActiveReservation(lastReservation) ? bookedReservationRooms : catalogCandidateRooms;
+    const sourceRooms = panelActiveReservation ? bookedReservationRooms : catalogCandidateRooms;
     return sourceRooms.filter((room) => room.objectType !== "gazebo");
-  }, [bookedReservationRooms, catalogCandidateRooms, lastReservation]);
+  }, [bookedReservationRooms, catalogCandidateRooms, panelActiveReservation]);
   const addOnSaleServiceRoom = useMemo(
     () => pricedRooms.find((room) => room.objectType === "sauna" && isRoomAvailableInBookingPanel(room)) ?? null,
     [pricedRooms]
@@ -1316,9 +1398,9 @@ export function BookingPanel() {
   );
   const addOnSaleConflicts = useMemo(
     () => addOnSaleServiceRoom
-      ? getHourlyRoomTimeConflicts(addOnSaleServiceRoom, reservations, addOnSaleDate, addOnSaleStartTime, addOnSaleEndTime, activeRoomHolds, currentHoldOwnerId)
+      ? getHourlyRoomTimeConflicts(addOnSaleServiceRoom, reservations, addOnSaleDate, addOnSaleStartTime, addOnSaleEndTime, activeRoomHolds, currentHoldOwnerId, currentHoldOwnerPhone)
       : [],
-    [activeRoomHolds, addOnSaleDate, addOnSaleEndTime, addOnSaleServiceRoom, addOnSaleStartTime, currentHoldOwnerId, reservations]
+    [activeRoomHolds, addOnSaleDate, addOnSaleEndTime, addOnSaleServiceRoom, addOnSaleStartTime, currentHoldOwnerId, currentHoldOwnerPhone, reservations]
   );
   const addOnSaleTotal = useMemo(
     () => addOnSaleServiceRoom ? calculateRoomStayPrice(addOnSaleServiceRoom, addOnSaleDate, addOnSaleDate, addOnSaleHours) : 0,
@@ -1403,10 +1485,10 @@ export function BookingPanel() {
     [kitchenAddOnSales]
   );
   const catalogAvailabilitySummary = useMemo(
-    () => isBookingPanelActiveReservation(lastReservation)
-      ? buildBookedCatalogSummary(bookedReservationRooms, lastReservation)
+    () => panelActiveReservation
+      ? buildBookedCatalogSummary(bookedReservationRooms, panelActiveReservation)
       : buildCatalogAvailabilitySummary(visibleAvailableRooms.filter((room) => room.objectType !== "gazebo"), reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms),
-    [bookedReservationRooms, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, lastReservation, pricedRooms, reservations, visibleAvailableRooms]
+    [bookedReservationRooms, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, panelActiveReservation, pricedRooms, reservations, visibleAvailableRooms]
   );
   const pricePdfCandidateRooms = useMemo(() => {
     const roomsForPrice = pricedRooms.filter(isRoomAvailableInBookingPanel);
@@ -1421,9 +1503,10 @@ export function BookingPanel() {
       checkOut,
       defaultCheckInTime,
       DEFAULT_CHECK_OUT_TIME,
-      currentHoldOwnerId
+      currentHoldOwnerId,
+      currentHoldOwnerPhone
     ),
-    [activeRoomHolds, checkIn, checkOut, currentHoldOwnerId, defaultCheckInTime, pricePdfCandidateRooms, reservations]
+    [activeRoomHolds, checkIn, checkOut, currentHoldOwnerId, currentHoldOwnerPhone, defaultCheckInTime, pricePdfCandidateRooms, reservations]
   );
   const pricePdfAvailabilitySummary = useMemo(() => {
     const selectedRoomIdSet = new Set(pricePdfRoomIds);
@@ -1450,11 +1533,11 @@ export function BookingPanel() {
   const selectedHourlyConflicts = useMemo(
     () => proposalRooms.flatMap((room) =>
       isHourlyBookingObject(room)
-        ? getHourlyRoomTimeConflicts(room, reservations, checkIn, checkInTime, checkOutTime)
+        ? getHourlyRoomTimeConflicts(room, reservations, checkIn, checkInTime, checkOutTime, activeRoomHolds, currentHoldOwnerId, currentHoldOwnerPhone)
           .filter((conflict) => conflict.reservation?.id !== lastReservation?.id)
         : []
     ),
-    [checkIn, checkInTime, checkOutTime, lastReservation?.id, proposalRooms, reservations]
+    [activeRoomHolds, checkIn, checkInTime, checkOutTime, currentHoldOwnerId, currentHoldOwnerPhone, lastReservation?.id, proposalRooms, reservations]
   );
   const hasHourlyBookingObject = proposalRooms.some(isHourlyBookingObject);
   const activeExtraInventoryByRoomId = filterExtraInventoryByRooms(extraInventoryByRoomId, proposalRooms);
@@ -1489,9 +1572,9 @@ export function BookingPanel() {
   const effectiveBookingTotals = getEffectiveBookingTotals(bookingTotals, manualTotalAmount, discountPercent);
   const isManualSaleMode = manualSaleOpen;
   const isNewBookingChatMode = bookingNewChatOpen;
-  const contactInputPhoneForLookup = formatPhoneDigits(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+  const contactInputPhoneForLookup = formatStrictContactPhone(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
   const activeChatPhoneForLookup = activeChat
-    ? formatPhoneDigits(activeChat.phone || extractPhoneFromText([activeChat.title, activeChat.name].filter(Boolean).join(" ")))
+    ? formatStrictContactPhone(activeChat.phone || "")
     : "";
   const activeChatMatchesInputPhone = Boolean(
     contactInputPhoneForLookup &&
@@ -1507,20 +1590,68 @@ export function BookingPanel() {
   const storedContactForInputPhone = isManualPhoneEntryMode && !contactExtracted && isCompleteContactPhone(contactInputPhoneForLookup)
     ? findStoredGuestContactByPhone(contactInputPhoneForLookup)
     : null;
-  const activeContactLookupNotice = storedContactForInputPhone
-    ? {
-      tone: "warning" as const,
-      text: `Контакт уже есть в базе: ${storedContactForInputPhone.appeal || getGuestNameFallbackFromPhone(storedContactForInputPhone.phone)}. Откройте его вручную в WhatsApp.`
-    }
-    : contactLookupNotice;
   const shouldTrustContactInputPhone = Boolean(
     isCompleteContactPhone(contactInputPhoneForLookup) &&
     (isManualPhoneEntryMode || contactExtracted || !activeChatPhoneForLookup || activeChatMatchesInputPhone)
   );
   const contactDatabasePhone = shouldTrustContactInputPhone ? contactInputPhoneForLookup : activeChatPhoneForLookup || contactInputPhoneForLookup;
+  const contactLookupNoticeForCurrentPhone = contactLookupNotice && (
+    contactLookupNotice.phone
+      ? (!contactDatabasePhone || phonesMatchForContactLookup(contactLookupNotice.phone, contactDatabasePhone))
+      : contactLookupNotice.tone !== "success"
+  )
+    ? contactLookupNotice
+    : null;
   const contactDatabaseRecord = contactDatabasePhone ? findStoredGuestContactByPhone(contactDatabasePhone) : null;
   const contactDatabaseSyncState = contactDatabasePhone ? contactServerSyncByPhone[normalizePhoneSearch(contactDatabasePhone)] : undefined;
+  const hasVerifiedContactInDatabase = Boolean(contactDatabaseRecord || contactDatabaseSyncState === "synced");
+  const activeContactLookupNotice = storedContactForInputPhone
+    ? {
+      tone: "warning" as const,
+      text: `Контакт уже есть в базе: ${storedContactForInputPhone.appeal || getGuestNameFallbackFromPhone(storedContactForInputPhone.phone)}. Откройте его вручную в WhatsApp.`
+    }
+    : hasVerifiedContactInDatabase && contactLookupNoticeForCurrentPhone?.tone !== "error"
+      ? null
+      : contactLookupNoticeForCurrentPhone;
+  const currentContactLock = contactDatabasePhone
+    ? contactLocks.find((lock) => phonesMatchForContactLookup(lock.phone, contactDatabasePhone) && new Date(lock.expiresAt).getTime() > holdNowMs) ?? null
+    : null;
+  const isContactLockedByOther = Boolean(currentContactLock && currentContactLock.clientId !== syncClientIdRef.current);
   const contactDatabaseState = getContactDatabaseState(contactDatabasePhone, contactDatabaseRecord, contactDatabaseSyncState, contactSaveState, backendState);
+  const isContactVerificationActive = Boolean(
+    contactVerificationState.phone &&
+    contactDatabasePhone &&
+    phonesMatchForContactLookup(contactVerificationState.phone, contactDatabasePhone)
+  );
+  const contactStatusView = isContactLockedByOther && currentContactLock
+    ? {
+      detail: formatReservationPhone(currentContactLock.phone),
+      label: `Проверяет ${currentContactLock.operatorName || "оператор"}`,
+      tone: "pending" as const,
+      busy: true
+    }
+    : isContactVerificationActive && contactVerificationState.status === "matching"
+      ? {
+        detail: formatReservationPhone(contactDatabasePhone),
+        label: "Сопоставляем чат",
+        tone: "checking" as const,
+        busy: true
+      }
+      : isContactVerificationActive && contactVerificationState.status === "checking"
+        ? {
+          detail: formatReservationPhone(contactDatabasePhone),
+          label: "Проверяем в базе",
+          tone: "checking" as const,
+          busy: true
+        }
+        : isContactVerificationActive && contactVerificationState.status === "mismatch"
+          ? {
+            detail: "нажмите обновить",
+            label: "Телефон не совпал",
+            tone: "warning" as const,
+            busy: false
+          }
+          : { ...contactDatabaseState, busy: contactSaveState === "saving" };
   const bookingPaymentAmount = isManualSaleMode ? effectiveBookingTotals.total : effectiveBookingTotals.prepayment;
 
   useEffect(() => {
@@ -1614,30 +1745,70 @@ export function BookingPanel() {
 
   useEffect(() => {
     const normalizedPhone = contactDatabasePhone;
-    if (!isCompleteContactPhone(normalizedPhone) || contactDatabaseRecord) return;
+    if (!isCompleteContactPhone(normalizedPhone)) {
+      setContactVerificationState({ phone: "", status: "idle" });
+      return;
+    }
+    if (
+      !isManualPhoneEntryMode &&
+      activeChatPhoneForLookup &&
+      contactInputPhoneForLookup &&
+      !activeChatMatchesInputPhone
+    ) {
+      setContactVerificationState({ phone: normalizedPhone, status: "mismatch" });
+      return;
+    }
+    if (contactDatabaseRecord) {
+      setContactVerificationState({ phone: normalizedPhone, status: "matched" });
+      setContactServerSyncByPhone((current) => ({ ...current, [normalizePhoneSearch(normalizedPhone)]: "synced" }));
+      return;
+    }
 
     let isCancelled = false;
+    setContactVerificationState({ phone: normalizedPhone, status: "matching" });
+    window.setTimeout(() => {
+      if (!isCancelled) setContactVerificationState({ phone: normalizedPhone, status: "checking" });
+    }, 180);
+    void claimContactLock({
+      clientId: syncClientIdRef.current,
+      operatorName: currentOperatorName,
+      phone: normalizedPhone,
+      status: "checking"
+    }).catch(() => undefined);
     getGuestContact(normalizedPhone)
       .then((contact) => {
-        if (isCancelled || !contact) return;
+        if (isCancelled) return;
+        if (!contact) {
+          setContactVerificationState({ phone: normalizedPhone, status: "matched" });
+          return;
+        }
         setGuestContacts((currentContacts) =>
           currentContacts
             .filter((currentContact) => !phonesMatchForContactLookup(currentContact.phone, contact.phone))
             .concat(contact)
         );
         setContactServerSyncByPhone((current) => ({ ...current, [normalizePhoneSearch(contact.phone)]: "synced" }));
+        setContactVerificationState({ phone: normalizedPhone, status: "matched" });
       })
       .catch((error) => {
+        if (isCancelled) return;
+        setContactVerificationState({ phone: normalizedPhone, status: "matched" });
         debugContactFlow("guest-contact-single-lookup-error", {
           message: error instanceof Error ? error.message : String(error),
           phone: normalizedPhone
         });
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          void releaseContactLock(normalizedPhone, syncClientIdRef.current).catch(() => undefined);
+        }
       });
 
     return () => {
       isCancelled = true;
+      void releaseContactLock(normalizedPhone, syncClientIdRef.current).catch(() => undefined);
     };
-  }, [contactDatabasePhone, contactDatabaseRecord?.phone]);
+  }, [activeChatMatchesInputPhone, activeChatPhoneForLookup, contactDatabasePhone, contactDatabaseRecord?.phone, contactInputPhoneForLookup, currentOperatorName, isManualPhoneEntryMode]);
 
   useEffect(() => {
     const phoneForName = isCompleteContactPhone(contactInputPhoneForLookup) ? contactInputPhoneForLookup : contactDatabasePhone;
@@ -1678,6 +1849,10 @@ export function BookingPanel() {
       if (!isMounted) return;
       setActiveDialogs(filterActiveDialogs(dialogs));
     }).catch(() => undefined);
+    getContactLocks().then((locks) => {
+      if (!isMounted) return;
+      setContactLocks(filterActiveContactLocks(locks));
+    }).catch(() => undefined);
 
     const handleStorageChange = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
       if (areaName !== "local") return;
@@ -1707,6 +1882,45 @@ export function BookingPanel() {
       }
       if (payload.action === "delete" && typeof payload.chatKey === "string") {
         setActiveDialogs((currentDialogs) => currentDialogs.filter((dialog) => dialog.chatKey !== payload.chatKey));
+      }
+    });
+    events.addEventListener("contact-locks.changed", (event) => {
+      const payload = safeParseRealtimeEvent(event);
+      if (!payload || typeof payload !== "object") return;
+      if (payload.action === "upsert" && payload.lock) {
+        const lock = filterActiveContactLocks([payload.lock])[0];
+        if (!lock) return;
+        setContactLocks((currentLocks) => filterActiveContactLocks(currentLocks.filter((item) => !phonesMatchForContactLookup(item.phone, lock.phone)).concat(lock)));
+      }
+      if (payload.action === "delete" && typeof payload.phone === "string") {
+        const deletedPhone = formatPhoneDigits(payload.phone);
+        setContactLocks((currentLocks) => currentLocks.filter((lock) => !phonesMatchForContactLookup(lock.phone, deletedPhone)));
+      }
+    });
+    events.addEventListener("guest-contacts.changed", (event) => {
+      const payload = safeParseRealtimeEvent(event);
+      if (!payload || typeof payload !== "object") return;
+      if (payload.action === "upsert" && payload.contact && typeof payload.contact === "object") {
+        const contact = payload.contact as GuestContact;
+        const contactPhone = formatPhoneDigits(contact.phone || "");
+        if (!contactPhone) return;
+        const normalizedContact = { ...contact, phone: contactPhone };
+        setGuestContacts((currentContacts) =>
+          currentContacts
+            .filter((currentContact) => !phonesMatchForContactLookup(currentContact.phone, contactPhone))
+            .concat(normalizedContact)
+        );
+        setContactServerSyncByPhone((current) => ({ ...current, [normalizePhoneSearch(contactPhone)]: "synced" }));
+        setContactLocks((currentLocks) => currentLocks.filter((lock) => !phonesMatchForContactLookup(lock.phone, contactPhone)));
+      }
+      if (payload.action === "delete" && typeof payload.phone === "string") {
+        const deletedPhone = formatPhoneDigits(payload.phone);
+        setGuestContacts((currentContacts) => currentContacts.filter((contact) => !phonesMatchForContactLookup(contact.phone, deletedPhone)));
+        setContactServerSyncByPhone((current) => {
+          const next = { ...current };
+          delete next[normalizePhoneSearch(deletedPhone)];
+          return next;
+        });
       }
     });
     events.addEventListener("room-holds.changed", (event) => {
@@ -1822,6 +2036,7 @@ export function BookingPanel() {
       const now = Date.now();
       setHoldNowMs(now);
       setActiveDialogs((currentDialogs) => filterActiveDialogs(currentDialogs, now));
+      setContactLocks((currentLocks) => filterActiveContactLocks(currentLocks, now));
     }, 1000);
     return () => window.clearInterval(intervalId);
   }, []);
@@ -2028,13 +2243,15 @@ export function BookingPanel() {
 
     let isCancelled = false;
     let isSaving = false;
+    const chatMessagePhone = formatPhoneDigits(activeChat.phone ?? "");
+    const chatMessageSaveKey = chatMessagePhone ? `phone:${chatMessagePhone}` : "";
 
     const createPayload = (messages: ChatMessageLogItem[]) => ({
-      chatTitle: activeChat.title,
+      chatTitle: getChatMessageStorageTitle(activeChat.title, chatMessagePhone),
       clientId: syncClientIdRef.current,
       messages,
       operatorName: currentOperatorName,
-      phone: activeChat.phone ?? ""
+      phone: chatMessagePhone
     });
 
     const markMessagesSaved = (messages: ChatMessageLogItem[]) => {
@@ -2064,8 +2281,8 @@ export function BookingPanel() {
 
     const flushPendingMessages = async () => {
       const pendingMessages = chatMessagePendingRef.current[activeChat.id] ?? [];
-      if (!pendingMessages.length) return true;
-      const isSaved = await saveChatMessages(activeChat.id, createPayload(pendingMessages));
+      if (!pendingMessages.length || !chatMessageSaveKey) return true;
+      const isSaved = await saveChatMessages(chatMessageSaveKey, createPayload(pendingMessages));
       if (!isSaved || isCancelled) return false;
       markMessagesSaved(pendingMessages);
       clearPendingMessages(pendingMessages);
@@ -2073,7 +2290,7 @@ export function BookingPanel() {
     };
 
     const saveVisibleMessages = async () => {
-      if (isCancelled || isSaving || !chatMessageStateLoadedRef.current) return;
+      if (isCancelled || isSaving || !chatMessageStateLoadedRef.current || !chatMessageSaveKey) return;
       isSaving = true;
       try {
         await flushPendingMessages();
@@ -2105,7 +2322,7 @@ export function BookingPanel() {
         });
         if (!newMessages.length) return;
 
-        const isSaved = await saveChatMessages(activeChat.id, createPayload(newMessages));
+        const isSaved = await saveChatMessages(chatMessageSaveKey, createPayload(newMessages));
         if (isCancelled) return;
         if (isSaved) {
           markMessagesSaved(newMessages);
@@ -2551,6 +2768,7 @@ export function BookingPanel() {
     setInventoryExtraPlaceChildPercent(settings.inventoryExtraPlaceChildPercent);
     setInventoryCustomFields(settings.inventoryCustomFields);
     setInventoryCustomCounts(settings.inventoryCustomCounts);
+    setInventoryCustomCapacities(settings.inventoryCustomCapacities);
     setPackageDiscountPercent(settings.packageDiscountPercent);
     setPackagePeriodDiscountPercent(settings.packagePeriodDiscountPercent);
     setPackagePeriodDiscountFrom(settings.packagePeriodDiscountFrom);
@@ -2621,6 +2839,7 @@ export function BookingPanel() {
       inventoryExtraPlaceChildPercent,
       inventoryCustomFields,
       inventoryCustomCounts,
+      inventoryCustomCapacities,
       packageDiscountPercent,
       packagePeriodDiscountPercent,
       packagePeriodDiscountFrom,
@@ -2648,6 +2867,7 @@ export function BookingPanel() {
     const draftCheckOutTime = hasHourlyBookingObject ? checkOutTime : DEFAULT_CHECK_OUT_TIME;
 
     return {
+      waChatId: activeChat?.waChatId || undefined,
       selectedRoomId,
       selectedBookingRoomIds,
       roomDateOverrides,
@@ -2735,12 +2955,19 @@ export function BookingPanel() {
       });
       return;
     }
-    const draft = reconcileDraftReservationDates({ ...buildChatDraft(), ...patch, updatedAt: new Date().toISOString() });
+    const draft = reconcileDraftReservationDates({
+      ...buildChatDraft(),
+      ...patch,
+      waChatId: chat.waChatId || patch.waChatId || activeChat?.waChatId || undefined,
+      updatedAt: new Date().toISOString()
+    });
     const normalizedPhone = formatPhoneDigits(draft.phone);
     const chatPhone = formatPhoneDigits(chat.phone || "");
     const phoneBelongsToChat = !normalizedPhone || !chatPhone || phonesMatchForContactLookup(chatPhone, normalizedPhone);
     const phoneChatId = normalizedPhone ? createChatId(`phone:${normalizedPhone}`) : "";
     const shouldSaveOnlyPhoneAlias = Boolean(normalizedPhone && phoneChatId && !chatPhone && chat.id.startsWith("title:"));
+    const waChatId = chat.waChatId || draft.waChatId || "";
+    const waChatKey = waChatId ? createChatId(`wa:${waChatId}`) : "";
 
     if (!phoneBelongsToChat) {
       void sendDebugLog("chat-draft-save-blocked-phone-mismatch", {
@@ -2758,6 +2985,9 @@ export function BookingPanel() {
 
     if (!shouldSaveOnlyPhoneAlias) {
       await saveCachedChatBookingDraft(chat.id, draft);
+    }
+    if (waChatKey && waChatKey !== chat.id) {
+      await saveCachedChatBookingDraft(waChatKey, draft);
     }
     if (phoneChatId && phoneChatId !== chat.id) {
       const existingPhoneDraft = getCachedChatBookingDraft(phoneChatId) ?? await getChatBookingDraft(phoneChatId);
@@ -2817,6 +3047,8 @@ export function BookingPanel() {
     const activeChat = activeChatRef.current;
     if (!activeChat || !chatId) return false;
     if (chatId === activeChat.id) return true;
+    if (activeChat.waChatId && draft.waChatId && activeChat.waChatId === draft.waChatId) return true;
+    if (activeChat.waChatId && chatId === createChatId(`wa:${activeChat.waChatId}`)) return true;
     const activePhone = formatPhoneDigits(activeChat.phone || "");
     const draftPhone = formatPhoneDigits(draft.phone || draft.lastReservation?.phone || "");
     if (activePhone && draftPhone && phonesMatchForContactLookup(activePhone, draftPhone)) return true;
@@ -2883,10 +3115,12 @@ export function BookingPanel() {
   async function findFallbackChatDraftForActiveChat(chat: ActiveChat, cachedDrafts?: Record<string, ChatBookingDraft>, fallbackPhone = "") {
     const drafts = cachedDrafts ?? draftCacheRef.current;
     const rawChatPhone = chat.phone || fallbackPhone;
+    const chatWaId = chat.waChatId || "";
     const chatPhone = isSuspiciousPhoneForGuestFallbackTitle(chat.title, rawChatPhone) ? "" : normalizePhoneSearch(rawChatPhone);
     const chatTitle = normalizeContactLookupText(chat.title || "");
-    if (!chatPhone && !chatTitle) return null;
+    if (!chatWaId && !chatPhone && !chatTitle) return null;
     const matches = Object.values(drafts).filter((draft) => {
+      if (chatWaId && draft.waChatId === chatWaId) return true;
       const draftPhone = normalizePhoneSearch(draft.phone || draft.lastReservation?.phone || "");
       if (chatPhone && draftPhone && phonesMatchForContactLookup(chatPhone, draftPhone)) return true;
       if (chatTitle && isChatDraftLinkedToActiveTitle(draft, chat)) return true;
@@ -3079,20 +3313,35 @@ export function BookingPanel() {
     }
   }
 
-  function applyManualPhoneExistingContact(contact: GuestContact) {
-    const phoneParts = splitPhoneForInput(contact.phone);
+  function applyStoredContactToContactInputs(contact: GuestContact, noticeText?: string) {
+    const normalizedPhone = formatPhoneDigits(contact.phone || "");
+    if (!normalizedPhone) return;
+    const phoneParts = splitPhoneForInput(normalizedPhone);
+    const contactName = contact.appeal || getGuestNameFallbackFromPhone(normalizedPhone);
     setGuestPhonePrefix(phoneParts.prefix);
     setGuestPhone(formatLocalPhoneInput(phoneParts.local));
-    setGuestFirstName(contact.appeal || getGuestNameFallbackFromPhone(contact.phone));
+    if (contactName) setGuestFirstName(contactName);
     setContactExtracted(true);
     setContactSavedInWhatsApp(false);
     setContactSaveState("saved");
-    setContactServerSyncByPhone((current) => ({ ...current, [normalizePhoneSearch(contact.phone)]: "synced" }));
+    setContactServerSyncByPhone((current) => ({ ...current, [normalizePhoneSearch(normalizedPhone)]: "synced" }));
+    if (noticeText) {
+      setContactLookupNotice({
+        phone: normalizedPhone,
+        tone: "success",
+        text: noticeText
+      });
+    }
+    window.setTimeout(() => setContactSaveState("idle"), 2400);
+  }
+
+  function applyManualPhoneExistingContact(contact: GuestContact) {
+    applyStoredContactToContactInputs(contact);
     setContactLookupNotice({
+      phone: contact.phone,
       tone: "warning",
       text: `Контакт уже есть в базе: ${contact.appeal || getGuestNameFallbackFromPhone(contact.phone)}. Откройте его вручную в WhatsApp.`
     });
-    window.setTimeout(() => setContactSaveState("idle"), 2400);
   }
 
   function resolveReservationGuestName(name: string, phone: string) {
@@ -3424,9 +3673,9 @@ export function BookingPanel() {
 
   useEffect(() => {
     const visibleIds = new Set(catalogPanelRooms.map((room) => room.id));
-    if (isBookingPanelActiveReservation(lastReservation)) {
-      setSelectedRoomId(lastReservation.roomIds[0] || "");
-      setSelectedBookingRoomIds(lastReservation.roomIds);
+    if (panelActiveReservation) {
+      setSelectedRoomId(panelActiveReservation.roomIds[0] || "");
+      setSelectedBookingRoomIds(panelActiveReservation.roomIds);
       return;
     }
     const selectableIds = new Set(catalogPanelRooms
@@ -3438,16 +3687,22 @@ export function BookingPanel() {
         : ""
     );
     setSelectedBookingRoomIds((currentIds) => currentIds.filter((roomId) => visibleIds.has(roomId) && selectableIds.has(roomId)));
-  }, [catalogPanelRooms, checkIn, checkInTime, checkOut, checkOutTime, lastReservation, reservations]);
+  }, [catalogPanelRooms, checkIn, checkInTime, checkOut, checkOutTime, panelActiveReservation, reservations]);
 
   useEffect(() => {
-    if (lastReservation || !guestPhone.trim()) return;
-    const currentPhone = normalizePhoneSearch(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+    if (lastReservation) return;
+    const currentPhone = normalizePhoneSearch(
+      activeChat?.phone ||
+      contactDatabasePhone ||
+      buildPhoneWithPrefix(guestPhone, guestPhonePrefix) ||
+      guestPhone
+    );
     if (!currentPhone) return;
     if (clearedBookingPhoneRef.current && clearedBookingPhoneRef.current === currentPhone) return;
     const matchingReservation = findBestActiveReservationForPhone(currentPhone);
     if (!matchingReservation) return;
     const matchingOverrides = buildRoomDateOverridesFromReservation(matchingReservation);
+    const phoneParts = splitPhoneForInput(formatPhoneDigits(matchingReservation.phone));
     setLastReservation(matchingReservation);
     setSelectedRoomId(matchingReservation.roomIds[0] || "");
     setSelectedBookingRoomIds(matchingReservation.roomIds);
@@ -3456,6 +3711,9 @@ export function BookingPanel() {
     setCheckOut(matchingReservation.checkOut);
     setCheckInTime(matchingReservation.checkInTime);
     setCheckOutTime(matchingReservation.checkOutTime);
+    setGuestFirstName(resolveReservationGuestName(matchingReservation.guestFirstName, matchingReservation.phone));
+    setGuestPhonePrefix(phoneParts.prefix);
+    setGuestPhone(formatLocalPhoneInput(phoneParts.local));
     setAgreementSent(true);
     setAgreementEverSent(true);
     void saveCurrentChatDraft({
@@ -3465,9 +3723,11 @@ export function BookingPanel() {
       checkOut: matchingReservation.checkOut,
       checkInTime: matchingReservation.checkInTime,
       checkOutTime: matchingReservation.checkOutTime,
-      lastReservation: matchingReservation
+      guestFirstName: resolveReservationGuestName(matchingReservation.guestFirstName, matchingReservation.phone),
+      lastReservation: matchingReservation,
+      phone: formatPhoneDigits(matchingReservation.phone) || matchingReservation.phone
     });
-  }, [guestPhone, guestPhonePrefix, lastReservation, reservations]);
+  }, [activeChat?.phone, contactDatabasePhone, guestPhone, guestPhonePrefix, lastReservation, reservations]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -3490,19 +3750,15 @@ export function BookingPanel() {
     if (backendState === "offline") return "API offline";
     return "Проверка API";
   }, [backendState]);
-  const phoneMatchedActiveReservation = useMemo(() => {
-    const currentPhone = normalizePhoneSearch(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
-    return currentPhone ? findBestActiveReservationForPhone(currentPhone) : null;
-  }, [guestPhone, guestPhonePrefix, reservations]);
-  const hasActiveLastReservation = isBookingPanelActiveReservation(lastReservation);
+  const hasActiveLastReservation = Boolean(panelActiveReservation);
   const hasBookingSelection = Boolean(selectedBookingRooms.length);
-  const currentReservationDraft = hasBookingSelection ? buildReservationDraft(hasActiveLastReservation ? lastReservation?.status ?? "pending" : "pending") : null;
+  const currentReservationDraft = hasBookingSelection ? buildReservationDraft(hasActiveLastReservation ? panelActiveReservation?.status ?? "pending" : "pending") : null;
   const hasSelectedHourlyConflict = selectedHourlyConflicts.length > 0;
   const currentReservationHasPastDate = Boolean(currentReservationDraft && isReservationDateInPast(currentReservationDraft));
   const canSendAgreementText = Boolean(currentReservationDraft && !hasSelectedHourlyConflict && !currentReservationHasPastDate);
   const canConfirmAgreement = Boolean(currentReservationDraft && currentReservationDraft.status !== "cancelled" && !hasSelectedHourlyConflict && !currentReservationHasPastDate);
-  const isBookingConfirmed = isBookingPanelActiveReservation(lastReservation);
-  const cancelableReservation = isBookingConfirmed ? lastReservation : phoneMatchedActiveReservation;
+  const isBookingConfirmed = Boolean(panelActiveReservation);
+  const cancelableReservation = panelActiveReservation ?? phoneMatchedActiveReservation;
   const isBookingLocked = isBookingConfirmed || isCurrentChatOwnedByOther;
   const currentChatMenuOrders = useMemo(
     () => {
@@ -4093,7 +4349,6 @@ export function BookingPanel() {
     setSendState("sending");
     try {
       await preloadMediaBlobs(getRoomMediaCachePaths(catalogPanelRooms));
-      await waitForNextPaint();
       const blob = await createAvailableRoomsSnapshotBlob(bookingDatesSnapshotRef.current, catalogSnapshotRef.current);
       const file = new File([blob], `available-rooms-${checkIn || "today"}.jpg`, { type: "image/jpeg" });
       const sent = await sendImageFileToActiveWhatsAppChatWithAttachmentFallback(file, "");
@@ -4265,14 +4520,15 @@ export function BookingPanel() {
 
   async function markMenuOrderDone(order: MenuOrder) {
     if (order.status === "done") {
-      await updateMenuOrder(order, { status: "sentToKitchen", archivedAt: "" });
+      await updateMenuOrder(order, { status: "sentToKitchen", archivedAt: "", doneAt: "" });
       return;
     }
-    await updateMenuOrder(order, { status: "done", archivedAt: new Date().toISOString() });
+    const doneAt = new Date().toISOString();
+    await updateMenuOrder(order, { status: "done", doneAt, archivedAt: doneAt });
   }
 
   async function restoreMenuOrder(order: MenuOrder) {
-    await updateMenuOrder(order, { status: "new", archivedAt: "", kitchenSentAt: "" });
+    await updateMenuOrder(order, { status: "new", archivedAt: "", kitchenSentAt: "", doneAt: "" });
     setSelectedMenuOrderId(order.id);
     setIsMenuOrdersOverlayOpen(true);
   }
@@ -4425,7 +4681,7 @@ export function BookingPanel() {
     const dateRange = getRoomDateRange(roomId, checkIn, checkOut, roomDateOverrides);
     return activeRoomHolds.find((hold) =>
       hold.roomId === roomId &&
-      hold.ownerId === currentHoldOwnerId &&
+      isRoomHoldOwnedByGuest(hold, currentHoldOwnerId, currentHoldOwnerPhone) &&
       roomHoldOverlapsRange(hold, dateRange, checkInTime, checkOutTime)
     ) ?? null;
   }
@@ -4434,7 +4690,7 @@ export function BookingPanel() {
     const dateRange = getRoomDateRange(roomId, checkIn, checkOut, roomDateOverrides);
     return activeRoomHolds.find((hold) =>
       hold.roomId === roomId &&
-      hold.ownerId !== currentHoldOwnerId &&
+      !isRoomHoldOwnedByGuest(hold, currentHoldOwnerId, currentHoldOwnerPhone) &&
       roomHoldOverlapsRange(hold, dateRange, checkInTime, checkOutTime)
     ) ?? null;
   }
@@ -4482,7 +4738,7 @@ export function BookingPanel() {
     const nextAgreementHolds = reservationItems.map((item) => createAgreementRoomHold(reservation, item, expiresAt));
     const nextHolds = activeHolds
       .filter((hold) => {
-        if (hold.ownerId !== currentHoldOwnerId) return true;
+        if (!isRoomHoldOwnedByGuest(hold, currentHoldOwnerId, currentHoldOwnerPhone)) return true;
         return !reservationItems.some((item) =>
           item.roomId === hold.roomId &&
           roomHoldOverlapsRange(
@@ -4534,7 +4790,11 @@ export function BookingPanel() {
       expiresAt
     };
     const nextHolds = filterActiveRoomHolds(roomHolds)
-      .filter((item) => !(item.roomId === hold.roomId && item.ownerId === hold.ownerId && roomHoldOverlapsRange(item, dateRange, checkInTime, checkOutTime)))
+      .filter((item) => !(
+        item.roomId === hold.roomId &&
+        isRoomHoldOwnedByGuest(item, hold.ownerId, hold.phone) &&
+        roomHoldOverlapsRange(item, dateRange, checkInTime, checkOutTime)
+      ))
       .concat(hold);
     setRoomHolds(nextHolds);
     await saveStoredRoomHolds(nextHolds);
@@ -4555,7 +4815,7 @@ export function BookingPanel() {
   async function clearRoomHoldsForReservation(reservation: Reservation, allOwners = false) {
     const reservationItems = getReservationItems(reservation);
     const nextHolds = roomHolds.filter((hold) => {
-      if (!allOwners && hold.ownerId !== currentHoldOwnerId) return true;
+      if (!allOwners && !isRoomHoldOwnedByGuest(hold, currentHoldOwnerId, currentHoldOwnerPhone)) return true;
       return !reservationItems.some((item) =>
         item.roomId === hold.roomId &&
         roomHoldOverlapsRange(
@@ -4982,6 +5242,10 @@ export function BookingPanel() {
     await saveMenuItems(nextItems);
   }
 
+  async function handleMenuItemsReorder(nextItems: MenuItem[]) {
+    await saveMenuItems(nextItems);
+  }
+
   async function downloadMenuItemPhoto(item: MenuItem) {
     if (!item.photoPath) return;
 
@@ -5010,6 +5274,23 @@ export function BookingPanel() {
 
     const zipBlob = await createZipBlob(files);
     downloadBlobFile(zipBlob, `menu-photos-${formatDateInput(new Date())}.zip`);
+  }
+
+  function downloadMenuText() {
+    const lines = [
+      "Меню Green Pine Burabay",
+      `Дата выгрузки: ${formatDateInput(new Date())}`,
+      "",
+      ...menuItems
+        .filter((item) => item.title.trim())
+        .map((item, index) => [
+          `${index + 1}. ${item.title.trim()}`,
+          `Цена: ${formatPrice(item.price || 0)}`,
+          item.cookingTime.trim() ? `Время приготовления: ${item.cookingTime.trim()}` : "",
+          item.composition.trim() ? `Состав: ${item.composition.trim()}` : ""
+        ].filter(Boolean).join("\n"))
+    ];
+    downloadTextFile(`menu-${formatDateInput(new Date())}.txt`, lines.join("\n\n"), "text/plain;charset=utf-8");
   }
 
   async function handleWeatherSettingsChange(nextSettings: { name: string; latitude: number; longitude: number }) {
@@ -5045,8 +5326,12 @@ export function BookingPanel() {
 
   async function handleInventoryCustomFieldChange(fieldId: string, value: string) {
     const nextFields = { ...inventoryCustomFields, [fieldId]: value };
+    const nextCapacities = inventoryCustomCapacities[fieldId]
+      ? inventoryCustomCapacities
+      : { ...inventoryCustomCapacities, [fieldId]: getDefaultExtraInventoryUnitCapacity(fieldId, value) };
     setInventoryCustomFields(nextFields);
-    await savePaymentSettings(buildPaymentSettingsPatch({ inventoryCustomFields: nextFields }));
+    setInventoryCustomCapacities(nextCapacities);
+    await savePaymentSettings(buildPaymentSettingsPatch({ inventoryCustomFields: nextFields, inventoryCustomCapacities: nextCapacities }));
   }
 
   async function handleInventoryCustomCountChange(fieldId: string, value: number) {
@@ -5055,12 +5340,20 @@ export function BookingPanel() {
     await savePaymentSettings(buildPaymentSettingsPatch({ inventoryCustomCounts: nextCounts }));
   }
 
+  async function handleInventoryCustomCapacityChange(fieldId: string, value: number) {
+    const nextCapacities = { ...inventoryCustomCapacities, [fieldId]: Math.max(1, Math.round(value || 1)) };
+    setInventoryCustomCapacities(nextCapacities);
+    await savePaymentSettings(buildPaymentSettingsPatch({ inventoryCustomCapacities: nextCapacities }));
+  }
+
   async function handleInventoryCustomFieldDelete(fieldId: string) {
     const nextFields = removeRecordKey(inventoryCustomFields, fieldId);
     const nextCounts = removeRecordKey(inventoryCustomCounts, fieldId);
+    const nextCapacities = removeRecordKey(inventoryCustomCapacities, fieldId);
     setInventoryCustomFields(nextFields);
     setInventoryCustomCounts(nextCounts);
-    await savePaymentSettings(buildPaymentSettingsPatch({ inventoryCustomFields: nextFields, inventoryCustomCounts: nextCounts }));
+    setInventoryCustomCapacities(nextCapacities);
+    await savePaymentSettings(buildPaymentSettingsPatch({ inventoryCustomFields: nextFields, inventoryCustomCounts: nextCounts, inventoryCustomCapacities: nextCapacities }));
   }
 
   async function handlePackageSettingsChange(nextSettings: {
@@ -5465,6 +5758,14 @@ export function BookingPanel() {
   }
 
   async function handleContactAction() {
+    if (isContactLockedByOther && currentContactLock) {
+      setContactLookupNotice({
+        tone: "warning",
+        text: `${currentContactLock.operatorName || "Другой оператор"} уже проверяет этот номер. Дождитесь окончания.`
+      });
+      return;
+    }
+
     const phoneForSave = getCompleteContactPhoneForSave();
     const hasPhoneForSave = Boolean(phoneForSave);
     debugContactFlow("contact-action-start", {
@@ -5502,7 +5803,36 @@ export function BookingPanel() {
     if (isManualSaleMode || isNewBookingChatMode) return;
     setContactSaveState("idle");
     setContactExtracted(false);
-    await extractContactFromChat();
+    setContactLookupNotice(null);
+    const extracted = await extractContactFromChat();
+    const normalizedPhone = formatStrictContactPhone(extracted?.phone || activeChat?.phone || contactDatabasePhone);
+    if (!isCompleteContactPhone(normalizedPhone)) {
+      setContactLookupNotice({
+        tone: "error",
+        text: "Телефон активного чата не определен. Проверьте выбранный чат."
+      });
+      return;
+    }
+
+    setContactVerificationState({ phone: normalizedPhone, status: "checking" });
+    const storedContact = await findLatestStoredGuestContactByPhone(normalizedPhone);
+    if (storedContact) {
+      applyStoredContactToContactInputs(
+        storedContact,
+        `Контакт проверен: ${storedContact.appeal || getGuestNameFallbackFromPhone(storedContact.phone)}.`
+      );
+      setContactVerificationState({ phone: normalizedPhone, status: "matched" });
+      return;
+    }
+
+    setContactVerificationState({ phone: normalizedPhone, status: "matched" });
+      setContactLookupNotice({
+        tone: isContactRowLocked ? "warning" : "info",
+        phone: normalizedPhone,
+        text: isContactRowLocked
+          ? "Контакт активного чата не найден в базе. Бронь уже активна, можно проверить номер и сохранить вручную после снятия блокировки."
+          : "Контакт активного чата не найден в базе. Нажмите Сохранить."
+    });
   }
 
   function getContactActionLabel() {
@@ -5511,17 +5841,18 @@ export function BookingPanel() {
     if (contactSaveState === "saving") return "Сохраняю...";
     if (contactSaveState === "saved") return "Сохранено";
     if (contactSaveState === "error") return "Ошибка";
+    if (contactDatabaseRecord) return "Обновить";
     if (contactSavedInWhatsApp) return "Перезаписать";
     return "Сохранить";
   }
 
   function resolvePanelGuestPhone() {
-    const inputPhone = formatPhoneDigits(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
+    const inputPhone = formatStrictContactPhone(buildPhoneWithPrefix(guestPhone, guestPhonePrefix) || guestPhone);
     const activeChatPhone = activeChat
-      ? formatPhoneDigits(activeChat.phone || extractPhoneFromText([activeChat.title, activeChat.name].filter(Boolean).join(" ")))
+      ? formatStrictContactPhone(activeChat.phone || "")
       : "";
     if (isCompleteContactPhone(inputPhone)) return inputPhone;
-    return formatPhoneDigits(activeChatPhone || "");
+    return activeChatPhone;
   }
 
   function getCompleteContactPhoneForSave() {
@@ -5563,10 +5894,9 @@ export function BookingPanel() {
 
     try {
       const templateName = getGuestNameFallbackFromPhone(normalizedPhone);
-      const safeName = getSafeGuestName(contactOverride?.name || guestFirstName, normalizedPhone);
-      const contactName = templateName || safeName || guestFirstName;
+      const contactName = templateName || getSafeGuestName(contactOverride?.name || guestFirstName, normalizedPhone) || guestFirstName;
       if (contactName && contactName !== guestFirstName) setGuestFirstName(contactName);
-      debugContactFlow("save-contact-name-resolved", { templateName, safeName, contactName });
+      debugContactFlow("save-contact-name-resolved", { templateName, contactName });
 
       const databaseSaved = await saveContactToDatabase(contactName, normalizedPhone);
       debugContactFlow("save-contact-database-result", { contactName, normalizedPhone, databaseSaved });
@@ -5684,40 +6014,108 @@ export function BookingPanel() {
     const phoneKey = normalizePhoneSearch(normalizedPhone);
     if (!phoneKey) return false;
 
-    const optimisticContact = {
+    const contactForSave = {
       phone: normalizedPhone,
       appeal: contactName || getGuestNameFallbackFromPhone(normalizedPhone),
       inquiryDate: new Date().toISOString()
     };
 
-    debugContactFlow("database-save-queued", { contactName, normalizedPhone });
-    setGuestContacts((currentContacts) =>
-      currentContacts.filter((contact) => normalizePhoneSearch(contact.phone) !== phoneKey).concat(optimisticContact)
-    );
+    debugContactFlow("database-save-start", { contactName, normalizedPhone });
     setContactServerSyncByPhone((current) => ({ ...current, [phoneKey]: "pending" }));
+    let lockClaimedByThisClient = false;
 
-    void saveGuestContact(optimisticContact)
-      .then((savedContact) => {
-        setGuestContacts((currentContacts) =>
-          currentContacts.filter((contact) => normalizePhoneSearch(contact.phone) !== normalizePhoneSearch(savedContact.phone)).concat(savedContact)
-        );
-        setContactServerSyncByPhone((current) => ({ ...current, [phoneKey]: "synced" }));
-        setContactLookupNotice((currentNotice) => currentNotice?.tone === "error" ? null : currentNotice);
-        debugContactFlow("database-save-success", savedContact as unknown as Record<string, unknown>);
-      })
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        setContactServerSyncByPhone((current) => ({ ...current, [phoneKey]: "error" }));
-        debugContactFlow("database-save-error", { message, normalizedPhone });
-        setContactLookupNotice({
-          tone: "error",
-          text: /abort/i.test(message)
-            ? "Контакт сохранен локально. Сервер не ответил, можно продолжать работу."
-            : `Контакт сохранен локально, но сервер не принял запись: ${message}`
+    const applySavedContact = (savedContact: typeof contactForSave) => {
+      setGuestContacts((currentContacts) =>
+        currentContacts.filter((contact) => normalizePhoneSearch(contact.phone) !== normalizePhoneSearch(savedContact.phone)).concat(savedContact)
+      );
+      setContactServerSyncByPhone((current) => ({ ...current, [phoneKey]: "synced" }));
+      setContactLookupNotice((currentNotice) => currentNotice?.tone === "error" ? null : currentNotice);
+    };
+
+    try {
+      try {
+        const lock = await claimContactLock({
+          clientId: syncClientIdRef.current,
+          operatorName: currentOperatorName,
+          phone: normalizedPhone,
+          status: "saving"
         });
-      });
+        setContactLocks((currentLocks) =>
+          filterActiveContactLocks(currentLocks.filter((item) => !phonesMatchForContactLookup(item.phone, lock.phone)).concat(lock))
+        );
+        if (lock.clientId !== syncClientIdRef.current) {
+          setContactLookupNotice({
+            phone: normalizedPhone,
+            tone: "warning",
+            text: `${lock.operatorName || "Другой оператор"} уже сохраняет этот номер. Дождитесь окончания.`
+          });
+          return false;
+        }
+        lockClaimedByThisClient = true;
+      } catch (lockError) {
+        debugContactFlow("database-save-lock-unavailable", {
+          message: lockError instanceof Error ? lockError.message : String(lockError),
+          normalizedPhone
+        });
+      }
 
-    return true;
+      const savedContact = await withContactSaveTimeout(saveGuestContact(contactForSave), 9000);
+      applySavedContact(savedContact);
+      void loadGuestContacts();
+      debugContactFlow("database-save-success", savedContact as unknown as Record<string, unknown>);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const savedContact = await lookupSavedContactAfterSaveFailure(normalizedPhone, message);
+      if (savedContact) {
+        applySavedContact(savedContact);
+        void loadGuestContacts();
+        debugContactFlow("database-save-confirmed-after-error", {
+          normalizedPhone,
+          message,
+          savedContact
+        });
+        return true;
+      }
+      setContactServerSyncByPhone((current) => ({ ...current, [phoneKey]: "error" }));
+      debugContactFlow("database-save-error", { message, normalizedPhone });
+      setContactLookupNotice({
+        phone: normalizedPhone,
+        tone: "error",
+        text: /abort/i.test(message)
+          ? "Контакт не сохранен: сервер не ответил."
+          : `Контакт не сохранен: ${message}`
+      });
+      return false;
+    } finally {
+      if (lockClaimedByThisClient) {
+        void releaseContactLock(normalizedPhone, syncClientIdRef.current).catch(() => undefined);
+      }
+    }
+  }
+
+  async function lookupSavedContactAfterSaveFailure(normalizedPhone: string, reason: string) {
+    try {
+      const contact = await withContactSaveTimeout(getGuestContact(normalizedPhone), 4500);
+      return contact;
+    } catch (lookupError) {
+      debugContactFlow("database-save-confirm-lookup-error", {
+        normalizedPhone,
+        reason,
+        message: lookupError instanceof Error ? lookupError.message : String(lookupError)
+      });
+      return null;
+    }
+  }
+
+  function withContactSaveTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+    return new Promise<T>((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => reject(new Error(`contact save timeout ${timeoutMs}ms`)), timeoutMs);
+      promise
+        .then(resolve)
+        .catch(reject)
+        .finally(() => window.clearTimeout(timeoutId));
+    });
   }
 
   async function saveManualSaleContact(contactName: string, normalizedPhone: string) {
@@ -5772,7 +6170,7 @@ export function BookingPanel() {
     setContactSavedInWhatsApp(false);
 
     if (!databaseSaved) {
-      setContactLookupNotice({ tone: "error", text: "Не удалось сохранить контакт в базе." });
+      setContactLookupNotice({ phone: normalizedPhone, tone: "error", text: "Не удалось сохранить контакт в базе." });
       setContactSaveState("error");
       return;
     }
@@ -5797,6 +6195,7 @@ export function BookingPanel() {
 
     const opened = openWhatsAppChatDirectlyByPhone(normalizedPhone);
     setContactLookupNotice({
+      phone: normalizedPhone,
       tone: opened ? "success" : "warning",
       text: opened
         ? `${contactName} сохранен в базе. Чат открывается по номеру.`
@@ -6276,12 +6675,14 @@ export function BookingPanel() {
     const saved = await updateReservation(confirmedReservation);
     if (!saved) return;
     dismissReservationDailyReminderForReservation(confirmedReservation.id);
-    await clearRoomHoldsForReservation(confirmedReservation, true);
     setSelectedRoomId(confirmedReservation.roomIds[0] || selectedRoomId);
     setSelectedBookingRoomIds(confirmedReservation.roomIds);
     setAgreementSent(true);
     setAgreementEverSent(true);
-    await saveAgreementDraftForReservation(confirmedReservation, { includeActiveChat: true });
+    await Promise.all([
+      clearRoomHoldsForReservation(confirmedReservation, true),
+      saveAgreementDraftForReservation(confirmedReservation, { includeActiveChat: true })
+    ]);
   }
 
   async function cancelReservation(reservation: Reservation, reason?: string) {
@@ -6439,13 +6840,28 @@ export function BookingPanel() {
         }
       }
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("Reservation save failed: 409")) {
+      const serverErrorDetails = parseReservationSaveErrorDetails(message);
+      if (message.includes("Guest contact must be saved before reservation") || serverErrorDetails?.error === "Guest contact must be saved before reservation") {
+        setBookingDateWarning("Бронь не сохранена: контакт не найден в базе. Сначала сохраните контакт и дождитесь статуса «Сохранен в базе».");
+      } else if (message.includes("Reservation save failed: 409") || serverErrorDetails?.status === 409) {
         const latestReservations = await refreshReservationsAfterSaveConflict();
-        const conflict = findReservationSaveConflict(normalizedReservation, latestReservations);
+        const conflict = serverErrorDetails?.conflictReservationId
+          ? latestReservations.find((item) => item.id === serverErrorDetails.conflictReservationId)
+          : findReservationSaveConflict(normalizedReservation, latestReservations);
+        const conflictRoom = serverErrorDetails?.roomId
+          ? pricedRooms.find((room) => room.id === serverErrorDetails.roomId)
+          : undefined;
+        const roomLabel = conflictRoom
+          ? formatBookingPickerObjectLabel(conflictRoom)
+          : conflict
+            ? pricedRooms
+              .filter((room) => conflict.roomIds.includes(room.id) && normalizedReservation.roomIds.includes(room.id))
+              .map(formatBookingPickerObjectLabel)[0]
+            : "";
         const conflictGuest = conflict?.guestFirstName || formatReservationPhone(conflict?.phone || "") || "другая бронь";
         setBookingDateWarning(
           conflict
-            ? `Бронь не сохранена: номер уже занят на эти даты (${conflictGuest}). Обновил список броней с сервера.`
+            ? `Бронь не сохранена: ${roomLabel || "номер"} уже занят на эти даты (${conflictGuest}). Обновил список броней с сервера.`
             : "Бронь не сохранена: сервер видит пересечение по номеру. Обновил список броней с сервера."
         );
       } else {
@@ -6492,9 +6908,31 @@ export function BookingPanel() {
     if (reservation.isAddOnSale || reservation.status === "cancelled" || reservation.noShowAt) return true;
     if (reservation.status !== "pending" && reservation.status !== "booked") return true;
 
-    if (!normalizePhoneSearch(reservation.phone)) {
+    const reservationPhone = formatStrictContactPhone(reservation.phone);
+    const reservationPhoneKey = normalizePhoneSearch(reservationPhone);
+    if (!reservationPhoneKey) {
       setBookingDateWarning("Бронь не сохранена: сначала извлеките и сохраните телефон гостя.");
       void sendDebugLog("reservation-save-blocked-missing-phone", {
+        guestFirstName: reservation.guestFirstName,
+        reservationId: reservation.id,
+        roomIds: reservation.roomIds,
+        checkIn: reservation.checkIn,
+        checkOut: reservation.checkOut
+      });
+      return false;
+    }
+
+    const activeChatPhone = formatStrictContactPhone(activeChat?.phone || "");
+    if (
+      activeChatPhone &&
+      !phonesMatchForContactLookup(activeChatPhone, reservationPhone)
+    ) {
+      setBookingDateWarning("Бронь не сохранена: телефон брони не совпадает с активным чатом. Очистите бронирование и извлеките телефон заново.");
+      void sendDebugLog("reservation-save-blocked-phone-mismatch", {
+        activeChatId: activeChat?.id ?? "",
+        activeChatTitle: activeChat?.title ?? "",
+        activeChatPhone,
+        reservationPhone,
         guestFirstName: reservation.guestFirstName,
         reservationId: reservation.id,
         roomIds: reservation.roomIds,
@@ -6653,9 +7091,13 @@ export function BookingPanel() {
     const now = new Date().toISOString();
     const updatedReservation = applyReservationPrepaymentAmount(reservation, amount, manualSalePaymentMethod || reservation.paymentMethod, now);
     setPrepaymentAlreadyPaid(updatedReservation.prepayment > 0);
-    await updateReservation(updatedReservation);
-    await saveAgreementDraftForReservation(updatedReservation);
     setPrepaymentAmountTarget(null);
+    const saved = await updateReservation(updatedReservation, { optimisticLocal: true });
+    if (!saved) {
+      setPrepaymentAlreadyPaid(Boolean(reservation.prepaymentReceivedAt));
+      setPrepaymentAmountTarget(reservation);
+      return;
+    }
   }
 
   async function confirmReservationExtension(reservation: Reservation, nightsToAdd: number, amount: number, paidNow: boolean) {
@@ -7427,7 +7869,7 @@ export function BookingPanel() {
                   if (!isManualSaleMode && !isNewBookingChatMode) setContactExtracted(false);
                 }}
               />
-              <button className="gpb-primary" type="button" onClick={handleContactAction} disabled={isContactRowLocked || contactSaveState === "saving"}>
+              <button className="gpb-primary" type="button" onClick={handleContactAction} disabled={isContactRowLocked || isContactLockedByOther || contactSaveState === "saving"}>
                 {getContactActionLabel()}
               </button>
               {!isManualSaleMode && !isNewBookingChatMode ? (
@@ -7435,15 +7877,15 @@ export function BookingPanel() {
                   className="gpb-secondary-contact-action"
                   type="button"
                   onClick={() => void forceExtractContactFromActiveChat()}
-                  disabled={isContactRowLocked || contactSaveState === "saving" || !activeChat}
-                  title="Извлечь номер из активного чата заново"
-                  aria-label="Извлечь номер заново"
+                  disabled={isContactLockedByOther || contactSaveState === "saving" || !activeChat}
+                  title="Проверить активный чат и перезагрузить контакт из базы"
+                  aria-label="Проверить и перезагрузить контакт"
                 >
                   <RefreshCw size={16} strokeWidth={2.4} />
                 </button>
               ) : null}
             </div>
-            {isManualPhoneEntryMode && activeContactLookupNotice ? (
+            {activeContactLookupNotice ? (
               <div className={`gpb-contact-lookup-notice is-${activeContactLookupNotice.tone}`}>
                 {activeContactLookupNotice.text}
               </div>
@@ -7464,11 +7906,12 @@ export function BookingPanel() {
               </div>
             ) : null}
             <div
-              className={`gpb-contact-database-status is-${contactDatabaseState.tone}`}
-              title={`${contactDatabaseState.label}: ${contactDatabaseState.detail}`}
+              className={`gpb-contact-database-status is-${contactStatusView.tone}`}
+              title={`${contactStatusView.label}: ${contactStatusView.detail}`}
             >
-              <span>{contactDatabaseState.label}</span>
-              <strong>{contactDatabaseState.detail}</strong>
+              {contactStatusView.busy ? <i className="gpb-contact-status-spinner" aria-hidden="true" /> : null}
+              <span>{contactStatusView.label}</span>
+              <strong>{contactStatusView.detail}</strong>
             </div>
           </div>
         </div>
@@ -8888,6 +9331,7 @@ export function BookingPanel() {
           inventoryExtraPlaceChildPercent={inventoryExtraPlaceChildPercent}
           inventoryCustomFields={inventoryCustomFields}
           inventoryCustomCounts={inventoryCustomCounts}
+          inventoryCustomCapacities={inventoryCustomCapacities}
           packageDiscountPercent={packageDiscountPercent}
           packagePeriodDiscountPercent={packagePeriodDiscountPercent}
           packagePeriodDiscountFrom={packagePeriodDiscountFrom}
@@ -8926,6 +9370,8 @@ export function BookingPanel() {
             openMenuOrdersOverlay(order.id);
           }}
           onMenuOrderRestore={(order) => void restoreMenuOrder(order)}
+          onMenuDownload={downloadMenuText}
+          onMenuItemsReorder={(nextItems) => void handleMenuItemsReorder(nextItems)}
           onMenuPhotosDownload={() => void downloadAllMenuPhotos()}
           onMenuItemsBulkPriceChange={handleMenuItemsBulkPriceChange}
           onMenuSettingsSave={handleMenuSettingsSave}
@@ -8945,6 +9391,7 @@ export function BookingPanel() {
           onIncludedCardPagesChange={(pages) => void handleIncludedCardPagesChange(pages)}
           onInventoryCustomFieldChange={handleInventoryCustomFieldChange}
           onInventoryCustomCountChange={handleInventoryCustomCountChange}
+          onInventoryCustomCapacityChange={handleInventoryCustomCapacityChange}
           onInventoryCustomFieldDelete={handleInventoryCustomFieldDelete}
           onPackageSettingsChange={handlePackageSettingsChange}
           onPackageCustomFieldChange={handlePackageCustomFieldChange}
@@ -9297,10 +9744,12 @@ function MenuOrdersWorkspaceOverlay({
                 <button type="button" onClick={() => onSelect(order.id)}>
                   <strong>{order.guestName}</strong>
                   <span>{formatMenuOrderReadyTime(order)} · {formatPrice(order.total)}</span>
+                  <small>Получен: {formatAnalyticsTime(order.createdAt)}</small>
                   <em className={`gpb-menu-order-status-chip ${getMenuOrderStatusChipClass(order)}`}>
                     {order.status === "done" ? "выдан" : order.kitchenSentAt ? "принят" : getMenuOrderStatusLabel(order.status)}
                   </em>
                   {order.status !== "done" && order.kitchenSentAt ? <small>Повару: {formatElapsedSince(order.kitchenSentAt)}</small> : null}
+                  {order.status === "done" && order.doneAt ? <small>Выдан: {formatAnalyticsTime(order.doneAt)}</small> : null}
                 </button>
                 <button className="is-danger" type="button" onClick={() => onDelete(order)} title="Удалить заказ">
                   <Trash2 size={13} />
@@ -9318,6 +9767,9 @@ function MenuOrdersWorkspaceOverlay({
                   <span>{formatReservationPhone(selectedOrder.phone) || "телефон не указан"}</span>
                   <span>{formatMenuOrderReadyTime(selectedOrder)}</span>
                   <span>{getMenuOrderServingModeLabel(selectedOrder.servingMode)}</span>
+                  <span>Получен {formatAnalyticsTime(selectedOrder.createdAt)}</span>
+                  {selectedOrder.kitchenSentAt ? <span>Повару {formatAnalyticsTime(selectedOrder.kitchenSentAt)}</span> : null}
+                  {selectedOrder.doneAt ? <span>Выдан {formatAnalyticsTime(selectedOrder.doneAt)}</span> : null}
                   <b>{formatPrice(selectedOrder.total)}</b>
                 </div>
                 {selectedOrder.kitchenSentAt ? (
@@ -12641,6 +13093,7 @@ function SettingsModal({
   inventoryExtraPlaceChildPercent,
   inventoryCustomFields,
   inventoryCustomCounts,
+  inventoryCustomCapacities,
   packageDiscountPercent,
   packagePeriodDiscountPercent,
   packagePeriodDiscountFrom,
@@ -12676,6 +13129,8 @@ function SettingsModal({
   onMenuOrderDelete,
   onMenuOrderEdit,
   onMenuOrderRestore,
+  onMenuDownload,
+  onMenuItemsReorder,
   onMenuPhotosDownload,
   onMenuItemsBulkPriceChange,
   onMenuSettingsSave,
@@ -12695,6 +13150,7 @@ function SettingsModal({
   onIncludedCardPagesChange,
   onInventoryCustomFieldChange,
   onInventoryCustomCountChange,
+  onInventoryCustomCapacityChange,
   onInventoryCustomFieldDelete,
   onPackageSettingsChange,
   onPackageCustomFieldChange,
@@ -12737,6 +13193,7 @@ function SettingsModal({
   inventoryExtraPlaceChildPercent: number;
   inventoryCustomFields: Record<string, string>;
   inventoryCustomCounts: Record<string, number>;
+  inventoryCustomCapacities: Record<string, number>;
   packageDiscountPercent: number;
   packagePeriodDiscountPercent: number;
   packagePeriodDiscountFrom: string;
@@ -12772,6 +13229,8 @@ function SettingsModal({
   onMenuOrderDelete: (order: MenuOrder) => void;
   onMenuOrderEdit: (order: MenuOrder) => void;
   onMenuOrderRestore: (order: MenuOrder) => void;
+  onMenuDownload: () => void;
+  onMenuItemsReorder: (items: MenuItem[]) => void;
   onMenuPhotosDownload: () => void;
   onMenuItemsBulkPriceChange: (percent: number) => void;
   onMenuSettingsSave: (patch: Pick<PaymentSettings, "menuAdminPhone" | "menuCookPhone" | "menuIntroText">) => void;
@@ -12791,6 +13250,7 @@ function SettingsModal({
   onIncludedCardPagesChange: (pages: IncludedCardPage[]) => void;
   onInventoryCustomFieldChange: (fieldId: string, value: string) => void;
   onInventoryCustomCountChange: (fieldId: string, value: number) => void;
+  onInventoryCustomCapacityChange: (fieldId: string, value: number) => void;
   onInventoryCustomFieldDelete: (fieldId: string) => void;
   onPackageSettingsChange: (settings: {
     discountPercent: number;
@@ -12845,6 +13305,7 @@ function SettingsModal({
   const [localMenuAdminPhone, setLocalMenuAdminPhone] = useState(menuAdminPhone);
   const [localMenuCookPhone, setLocalMenuCookPhone] = useState(menuCookPhone);
   const [localMenuIntroText, setLocalMenuIntroText] = useState(menuIntroText);
+  const [draggedMenuItemId, setDraggedMenuItemId] = useState("");
   const [menuSettingsSaveState, setMenuSettingsSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const backupInputRef = useRef<HTMLInputElement | null>(null);
   const [backupMessage, setBackupMessage] = useState("");
@@ -13075,6 +13536,27 @@ function SettingsModal({
       latitude: toNumber(localWeatherLatitude, weatherLatitude),
       longitude: toNumber(localWeatherLongitude, weatherLongitude)
     });
+  }
+
+  function handleMenuItemDrop(event: DragEvent<HTMLElement>, targetItemId: string) {
+    event.preventDefault();
+    if (!draggedMenuItemId || draggedMenuItemId === targetItemId) {
+      setDraggedMenuItemId("");
+      return;
+    }
+
+    const nextItems = [...menuItems];
+    const draggedIndex = nextItems.findIndex((item) => item.id === draggedMenuItemId);
+    const targetIndex = nextItems.findIndex((item) => item.id === targetItemId);
+    if (draggedIndex < 0 || targetIndex < 0) {
+      setDraggedMenuItemId("");
+      return;
+    }
+
+    const [draggedItem] = nextItems.splice(draggedIndex, 1);
+    nextItems.splice(targetIndex, 0, draggedItem);
+    setDraggedMenuItemId("");
+    onMenuItemsReorder(nextItems);
   }
 
   function saveInventorySettings() {
@@ -13664,7 +14146,18 @@ function SettingsModal({
               {menuItems.length ? (
                 <div className="gpb-menu-settings-list">
                   {menuItems.map((item) => (
-                    <div className="gpb-menu-settings-card" key={item.id}>
+                    <div
+                      className={`gpb-menu-settings-card ${draggedMenuItemId === item.id ? "is-dragging" : ""}`}
+                      draggable
+                      key={item.id}
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData("text/plain", item.id);
+                        setDraggedMenuItemId(item.id);
+                      }}
+                      onDragEnd={() => setDraggedMenuItemId("")}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={(event) => handleMenuItemDrop(event, item.id)}
+                    >
                       <div className="gpb-menu-settings-photo">
                         {item.photoPath ? (
                           <MediaImage alt={item.title || "Блюдо"} path={item.photoPath} />
@@ -13675,21 +14168,43 @@ function SettingsModal({
                       </div>
                       <label>
                         Название блюда
-                        <input value={item.title} onChange={(event) => onMenuItemChange(item.id, { title: event.target.value })} />
+                        <input
+                          value={item.title}
+                          onChange={(event) => onMenuItemChange(item.id, { title: event.target.value })}
+                          onDragStart={(event) => event.stopPropagation()}
+                          onMouseDown={(event) => event.stopPropagation()}
+                        />
                       </label>
                       <label>
                         Цена
-                        <input inputMode="numeric" value={formatExpenseAmountInput(String(item.price || ""))} onChange={(event) => onMenuItemChange(item.id, { price: parsePriceInput(event.target.value) })} />
+                        <input
+                          inputMode="numeric"
+                          value={formatExpenseAmountInput(String(item.price || ""))}
+                          onChange={(event) => onMenuItemChange(item.id, { price: parsePriceInput(event.target.value) })}
+                          onDragStart={(event) => event.stopPropagation()}
+                          onMouseDown={(event) => event.stopPropagation()}
+                        />
                       </label>
                       <label>
                         Время пр-ния
-                        <input placeholder="Например: 25 минут" value={item.cookingTime} onChange={(event) => onMenuItemChange(item.id, { cookingTime: event.target.value })} />
+                        <input
+                          placeholder="Например: 25 минут"
+                          value={item.cookingTime}
+                          onChange={(event) => onMenuItemChange(item.id, { cookingTime: event.target.value })}
+                          onDragStart={(event) => event.stopPropagation()}
+                          onMouseDown={(event) => event.stopPropagation()}
+                        />
                       </label>
                       <label className="gpb-menu-composition-field">
                         Состав
-                        <textarea value={item.composition} onChange={(event) => onMenuItemChange(item.id, { composition: event.target.value })} />
+                        <textarea
+                          value={item.composition}
+                          onChange={(event) => onMenuItemChange(item.id, { composition: event.target.value })}
+                          onDragStart={(event) => event.stopPropagation()}
+                          onMouseDown={(event) => event.stopPropagation()}
+                        />
                       </label>
-                      <div className="gpb-menu-settings-actions">
+                      <div className="gpb-menu-settings-actions" onMouseDown={(event) => event.stopPropagation()}>
                         <label className="gpb-settings-add-button" title="Загрузить фото" aria-label="Загрузить фото">
                           <Image size={15} />
                           <input
@@ -13724,6 +14239,10 @@ function SettingsModal({
                 </button>
                 <button className="gpb-settings-add-button" type="button" onClick={onMenuPhotosDownload} disabled={!menuItems.some((item) => item.photoPath)}>
                   Скачать все фото
+                </button>
+                <button className="gpb-settings-add-button" type="button" onClick={onMenuDownload} disabled={!menuItems.some((item) => item.title.trim())}>
+                  <Download size={15} />
+                  Скачать меню
                 </button>
                 <button className="gpb-primary" type="button" onClick={onMenuItemsSave}>Сохранить</button>
               </div>
@@ -13901,8 +14420,10 @@ function SettingsModal({
                 <EditableSettingsFields
                   fields={inventoryCustomFields}
                   counts={inventoryCustomCounts}
+                  capacities={inventoryCustomCapacities}
                   onChange={onInventoryCustomFieldChange}
                   onCountChange={onInventoryCustomCountChange}
+                  onCapacityChange={onInventoryCustomCapacityChange}
                   onDelete={onInventoryCustomFieldDelete}
                 />
                 <p className="gpb-settings-note">Если фиксированная цена больше 0, она применяется за сутки вместо процента. Если поставить 0, расчет пойдет по процентам из раздела «Прайс / пакет».</p>
@@ -14139,15 +14660,19 @@ function CreateCustomFieldOverlay({
 }
 
 function EditableSettingsFields({
+  capacities,
   counts,
   fields,
   onChange,
+  onCapacityChange,
   onCountChange,
   onDelete
 }: {
+  capacities?: Record<string, number>;
   counts?: Record<string, number>;
   fields: Record<string, string>;
   onChange: (fieldId: string, value: string) => void;
+  onCapacityChange?: (fieldId: string, value: number) => void;
   onCountChange?: (fieldId: string, value: number) => void;
   onDelete: (fieldId: string) => void;
 }) {
@@ -14157,7 +14682,7 @@ function EditableSettingsFields({
   return (
     <div className="gpb-custom-settings-fields">
       {entries.map(([fieldId, value]) => (
-        <label className={`gpb-payment-method-row has-actions ${onCountChange ? "has-count" : ""}`} key={fieldId}>
+        <label className={`gpb-payment-method-row has-actions ${onCountChange ? "has-count" : ""} ${onCapacityChange ? "has-capacity" : ""}`} key={fieldId}>
           <span>{fieldId}</span>
           <input
             placeholder="Значение"
@@ -14172,6 +14697,16 @@ function EditableSettingsFields({
               type="number"
               value={counts?.[fieldId] ?? 0}
               onChange={(event) => onCountChange(fieldId, toNumber(event.target.value, 0))}
+            />
+          ) : null}
+          {onCapacityChange ? (
+            <input
+              inputMode="numeric"
+              min="1"
+              placeholder="Мест/шт."
+              type="number"
+              value={capacities?.[fieldId] ?? getDefaultExtraInventoryUnitCapacity(fieldId, value)}
+              onChange={(event) => onCapacityChange(fieldId, toNumber(event.target.value, 1))}
             />
           ) : null}
           <div className="gpb-settings-row-actions">
@@ -14214,6 +14749,7 @@ function ReservationsModal({
   const [search, setSearch] = useState("");
   const [adminCopyState, setAdminCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [cookCopyState, setCookCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [staffCopyState, setStaffCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [deleteTarget, setDeleteTarget] = useState<Reservation | null>(null);
   const [editingReservation, setEditingReservation] = useState<Reservation | null>(null);
   const [calendarListHeight, setCalendarListHeight] = useState(getStoredReservationCalendarListHeight);
@@ -14288,6 +14824,16 @@ function ReservationsModal({
       setCookCopyState("error");
     }
     window.setTimeout(() => setCookCopyState("idle"), 2200);
+  }
+
+  async function handleCopyStaffBookings() {
+    try {
+      await navigator.clipboard.writeText(buildStaffBookingsExport(visibleReservationsForAdminCopy, rooms, selectedDate, reservations));
+      setStaffCopyState("copied");
+    } catch {
+      setStaffCopyState("error");
+    }
+    window.setTimeout(() => setStaffCopyState("idle"), 2200);
   }
 
   async function handleSaveEditedReservation(reservation: Reservation) {
@@ -14368,6 +14914,10 @@ function ReservationsModal({
             <button type="button" onClick={handleCopyCookBookings} title="Скопировать завтраки для повара">
               <Utensils size={17} />
               <span>{cookCopyState === "copied" ? "Скопировано" : cookCopyState === "error" ? "Ошибка" : "Копировать повару"}</span>
+            </button>
+            <button type="button" onClick={handleCopyStaffBookings} title="Скопировать задачи для персонала">
+              <ClipboardList size={17} />
+              <span>{staffCopyState === "copied" ? "Скопировано" : staffCopyState === "error" ? "Ошибка" : "Копировать персоналу"}</span>
             </button>
             <button type="button" onClick={onClose} title="Закрыть" className="gpb-icon-only-button">
               <X size={20} />
@@ -17947,7 +18497,8 @@ function buildRoomAvailabilityConflicts(
   checkInTime: string,
   checkOutTime: string,
   holds: RoomHold[] = [],
-  ownerId = ""
+  ownerId = "",
+  ownerPhone = ""
 ): AvailabilityConflict[] {
   const reservationConflicts: AvailabilityConflict[] = rooms
     .filter((room) => room.bookable && (isStayBookingObject(room) || isHourlyBookingObject(room)))
@@ -17975,6 +18526,7 @@ function buildRoomAvailabilityConflicts(
     .flatMap((room) =>
       holds
         .filter((hold) =>
+          !isRoomHoldOwnedByGuest(hold, ownerId, ownerPhone) &&
           hold.roomId === room.id &&
           roomHoldOverlapsRange(hold, { checkIn, checkOut }, checkInTime, checkOutTime)
         )
@@ -18000,7 +18552,8 @@ function buildPricePdfRoomStatuses(
   checkOut: string,
   checkInTime: string,
   checkOutTime: string,
-  ownerId = ""
+  ownerId = "",
+  ownerPhone = ""
 ): Record<string, PricePdfRoomStatus> {
   return Object.fromEntries(rooms.map((room) => {
     if (room.workStatus === "cleaning") {
@@ -18010,7 +18563,7 @@ function buildPricePdfRoomStatuses(
       return [room.id, { kind: "repair", label: "Ремонт" } satisfies PricePdfRoomStatus];
     }
 
-    const conflicts = buildRoomAvailabilityConflicts([room], reservations, checkIn, checkOut, checkInTime, checkOutTime, holds, ownerId);
+    const conflicts = buildRoomAvailabilityConflicts([room], reservations, checkIn, checkOut, checkInTime, checkOutTime, holds, ownerId, ownerPhone);
     const holdConflict = conflicts.find((conflict) => conflict.hold);
     if (holdConflict?.hold) {
       const label = isHourlyBookingObject(room)
@@ -18055,7 +18608,8 @@ function getHourlyRoomTimeConflicts(
   startTime: string,
   endTime: string,
   holds: RoomHold[] = [],
-  ownerId = ""
+  ownerId = "",
+  ownerPhone = ""
 ): AvailabilityConflict[] {
   const reservationConflicts: AvailabilityConflict[] = reservations
     .filter((reservation) =>
@@ -18073,7 +18627,7 @@ function getHourlyRoomTimeConflicts(
     }));
   const holdConflicts: AvailabilityConflict[] = holds
     .filter((hold) =>
-      hold.ownerId !== ownerId &&
+      !isRoomHoldOwnedByGuest(hold, ownerId, ownerPhone) &&
       hold.roomId === room.id &&
       roomHoldOverlapsRange(hold, { checkIn: date, checkOut: date }, startTime, endTime)
     )
@@ -18242,23 +18796,26 @@ function timeInputToMinutes(value: string) {
 function detectActiveWhatsAppChat(): ActiveChat | null {
   const selectedTitle = getSelectedChatDisplayName();
   const headerTitle = getActiveChatDisplayName();
-  const title = selectedTitle || headerTitle;
-  const rawPhone = extractPhoneFromSelectedChat() || extractPhoneFromText(title) || (!selectedTitle ? extractPhoneFromActiveChat() : "");
+  const title = getSafeActiveChatTitle(selectedTitle || headerTitle);
+  const waChatId = extractWhatsAppChatIdFromSelectedChat() || extractWhatsAppChatIdFromActiveChat();
+  const rawPhone = extractPhoneFromSelectedChat() || extractPhoneFromText(title) || extractPhoneFromActiveChat();
   const phone = isSuspiciousPhoneForGuestFallbackTitle(title, rawPhone) ? "" : rawPhone;
-  if (!title && !phone) {
+  if (!title && !phone && !waChatId) {
     return null;
   }
 
   return {
-    id: createChatId(phone ? `phone:${phone}` : `title:${title}`),
+    id: createStableChatId({ waChatId, phone, title }),
     phone,
-    title: title || getGuestNameFallbackFromPhone(phone) || phone
+    waChatId,
+    title: phone ? getGuestNameFallbackFromPhone(phone) || title || phone : title
   };
 }
 
 function isSameDetectedChat(left: ActiveChat | null, right: ActiveChat | null) {
   if (!left || !right) return left === right;
   if (left.id === right.id) return true;
+  if (left.waChatId && right.waChatId && left.waChatId === right.waChatId) return true;
   const leftPhone = normalizePhoneSearch(left.phone || "");
   const rightPhone = normalizePhoneSearch(right.phone || "");
   if (leftPhone || rightPhone) return Boolean(leftPhone && rightPhone && leftPhone === rightPhone);
@@ -18268,10 +18825,12 @@ function isSameDetectedChat(left: ActiveChat | null, right: ActiveChat | null) {
 function mergeDetectedChat(currentChat: ActiveChat | null, nextChat: ActiveChat) {
   if (!currentChat) return nextChat;
   const phone = nextChat.phone || currentChat.phone || "";
+  const waChatId = nextChat.waChatId || currentChat.waChatId || "";
   const title = nextChat.title || currentChat.title;
   return {
-    id: createChatId(phone ? `phone:${phone}` : `title:${title}`),
+    id: createStableChatId({ waChatId, phone, title }),
     phone,
+    waChatId,
     title
   };
 }
@@ -18279,10 +18838,12 @@ function mergeDetectedChat(currentChat: ActiveChat | null, nextChat: ActiveChat)
 function createActiveChatFromProfile(profile: { name: string; phone: string }): ActiveChat | null {
   const title = profile.name || profile.phone;
   if (!title) return null;
+  const waChatId = extractWhatsAppChatIdFromSelectedChat() || extractWhatsAppChatIdFromActiveChat();
 
   return {
-    id: createChatId(profile.phone ? `phone:${profile.phone}` : `title:${title}`),
+    id: createStableChatId({ waChatId, phone: profile.phone, title }),
     phone: profile.phone,
+    waChatId,
     title
   };
 }
@@ -18290,19 +18851,32 @@ function createActiveChatFromProfile(profile: { name: string; phone: string }): 
 async function detectActiveWhatsAppChatAsync(): Promise<ActiveChat | null> {
   const selectedTitle = getSelectedChatDisplayName();
   const headerTitle = getActiveChatDisplayName();
-  const title = selectedTitle || headerTitle;
+  const title = getSafeActiveChatTitle(selectedTitle || headerTitle);
+  const waChatId = extractWhatsAppChatIdFromSelectedChat() || extractWhatsAppChatIdFromActiveChat();
   const selectedPhone = extractPhoneFromSelectedChat();
-  const rawPhone = selectedPhone || extractPhoneFromText(title) || (!selectedTitle ? await extractPhoneFromWhatsAppStore() || extractPhoneFromActiveChat() : "");
+  const rawPhone = selectedPhone || extractPhoneFromText(title) || await extractPhoneFromWhatsAppStore() || extractPhoneFromActiveChat();
   const phone = isSuspiciousPhoneForGuestFallbackTitle(title, rawPhone) ? "" : rawPhone;
-  if (!title && !phone) {
+  if (!title && !phone && !waChatId) {
     return null;
   }
 
   return {
-    id: createChatId(phone ? `phone:${phone}` : `title:${title}`),
+    id: createStableChatId({ waChatId, phone, title }),
     phone,
-    title: title || getGuestNameFallbackFromPhone(phone) || phone
+    waChatId,
+    title: phone ? getGuestNameFallbackFromPhone(phone) || title || phone : title
   };
+}
+
+function createStableChatId(chat: Pick<ActiveChat, "waChatId" | "phone" | "title">) {
+  if (chat.waChatId) return createChatId(`wa:${chat.waChatId}`);
+  if (chat.phone) return createChatId(`phone:${chat.phone}`);
+  return createChatId(`title:${chat.title || "active-chat"}`);
+}
+
+function getSafeActiveChatTitle(value: string) {
+  const title = normalizeExtractedText(value);
+  return isWhatsAppSystemChatText(title) ? "" : title;
 }
 
 function getActiveChatDisplayName() {
@@ -18322,6 +18896,8 @@ function extractPhoneFromSelectedChat() {
   if (!selectedChat) return "";
   const text = [
     selectedChat.innerText ?? "",
+    selectedChat.getAttribute("data-id") ?? "",
+    selectedChat.getAttribute("data-chat-id") ?? "",
     selectedChat.getAttribute("title") ?? "",
     selectedChat.getAttribute("aria-label") ?? "",
     ...Array.from(selectedChat.querySelectorAll<HTMLElement>("[data-id*='@c.us'], [data-id*='@s.whatsapp.net'], a[href^='tel:']")).map((element) =>
@@ -18335,6 +18911,46 @@ function extractPhoneFromSelectedChat() {
     )
   ].join(" ");
   return extractPhoneFromText(text);
+}
+
+function extractWhatsAppChatIdFromSelectedChat() {
+  const selectedChat = getSelectedWhatsAppChatElement();
+  return extractWhatsAppChatIdFromElement(selectedChat);
+}
+
+function extractWhatsAppChatIdFromActiveChat() {
+  const header = document.querySelector<HTMLElement>("#main header");
+  return extractWhatsAppChatIdFromElement(header) ||
+    extractWhatsAppChatIdFromElement(document.querySelector<HTMLElement>("#main")) ||
+    extractWhatsAppChatIdFromElement(document.querySelector<HTMLElement>('[aria-selected="true"], [data-testid="cell-frame-container"][aria-selected="true"]'));
+}
+
+function extractWhatsAppChatIdFromElement(root?: HTMLElement | null) {
+  if (!root) return "";
+  const values = [
+    root.getAttribute("data-id"),
+    root.getAttribute("data-chat-id"),
+    root.getAttribute("data-testid"),
+    root.getAttribute("aria-label"),
+    ...Array.from(root.querySelectorAll<HTMLElement>("[data-id], [data-chat-id], [href], [aria-label]")).flatMap((element) => [
+      element.getAttribute("data-id"),
+      element.getAttribute("data-chat-id"),
+      element.getAttribute("href"),
+      element.getAttribute("aria-label")
+    ])
+  ].filter((value): value is string => Boolean(value));
+  for (const value of values) {
+    const chatId = extractWhatsAppChatIdFromText(value);
+    if (chatId) return chatId;
+  }
+  return "";
+}
+
+function extractWhatsAppChatIdFromText(value: string) {
+  const match = value.match(/(?:phone:)?(\d{8,15}@(c\.us|s\.whatsapp\.net))/i) ||
+    value.match(/(?:chat|conversation)[^0-9]*(\d{8,15})/i);
+  if (!match?.[1]) return "";
+  return match[1].includes("@") ? match[1].toLowerCase() : `${match[1]}@c.us`;
 }
 
 function getSelectedWhatsAppChatElement() {
@@ -18395,6 +19011,7 @@ function getContactNameCandidates(root?: HTMLElement | null) {
 
 function isLikelyContactName(value: string) {
   if (!value) return false;
+  if (isWhatsAppSystemChatText(value)) return false;
   if (isGuestFallbackName(value)) return true;
   if (/^(фото|видео|медиа|изображение|картинка|photo|video|media|image|picture)$/i.test(value)) return false;
   if (/ic-|data-icon|wds-|status-|refreshed/i.test(value)) return false;
@@ -18406,6 +19023,14 @@ function isLikelyContactName(value: string) {
   if (/^\d{1,2}:\d{2}$/.test(value)) return false;
   if (/chat-filled|status-refreshed|wa-wordmark|new-chat|непрочитанное|избранное|группы/i.test(value)) return false;
   return !/^(сведения профиля|данные контакта|информация и номер телефона|сведения о компании|данные компании|contact info|profile details|business info|бизнес[\s\u2010-\u2015-]?аккаунт|business[\s\u2010-\u2015-]?account|online|онлайн|в сети|поиск|печатает|typing|last seen|был\(-а\).*|был\(а\).*|был.*|сегодня|вчера.*)$/i.test(value);
+}
+
+function isWhatsAppSystemChatText(value: string) {
+  const text = normalizeExtractedText(value).toLowerCase();
+  if (!text) return false;
+  return /^(вы\s+закрепили\s+сообщение|закрепленное\s+сообщение|закреплено|pinned\s+message|you\s+pinned\s+a\s+message)$/i.test(text) ||
+    /^(вы\s+удалили\s+это\s+сообщение|это\s+сообщение\s+удалено|deleted\s+message|this\s+message\s+was\s+deleted)$/i.test(text) ||
+    /^(фото|видео|медиа|изображение|картинка|аудиозвонок|видеозвонок|photo|video|media|image|picture|voice\s+call|video\s+call)$/i.test(text);
 }
 
 function isWhatsAppMediaDialogOpen() {
@@ -18516,7 +19141,8 @@ async function extractActiveChatProfile(activeChat: ActiveChat | null) {
 }
 
 async function extractActiveChatPhoneOnly(activeChat: ActiveChat | null) {
-  const phone = await extractPhoneFromCurrentChatProfile(activeChat) || activeChat?.phone || "";
+  const fastProfile = await extractActiveChatPhoneFast(activeChat);
+  const phone = fastProfile.phone || activeChat?.phone || "";
   debugContactFlow("extract-phone-only-result", {
     activeChatId: activeChat?.id ?? "",
     activeChatTitle: activeChat?.title ?? "",
@@ -18597,6 +19223,8 @@ function extractPhoneFromActiveChat() {
   const text = [
     header?.innerText ?? "",
     selectedChat?.innerText ?? "",
+    selectedChat?.getAttribute("data-id") ?? "",
+    selectedChat?.getAttribute("data-chat-id") ?? "",
     ...Array.from(document.querySelectorAll<HTMLElement>("#main header [title]")).map((element) => element.getAttribute("title") ?? ""),
     ...Array.from(document.querySelectorAll<HTMLElement>("[data-id], [data-testid], [aria-label]")).map((element) =>
       [
@@ -18612,7 +19240,7 @@ function extractPhoneFromActiveChat() {
 function extractPhoneFromText(text: string) {
   const matches = text.match(/(?:\+?\d[\s().-]*){10,16}/g) ?? [];
   const normalizedPhones = matches
-    .map((match) => formatPhoneDigits(match))
+    .map((match) => formatStrictContactPhone(match))
     .filter(Boolean);
   return normalizedPhones.find((phone) => /^(\+7\d{10})$/.test(phone)) ?? normalizedPhones[0] ?? "";
 }
@@ -19043,20 +19671,22 @@ function mergeSavedChatDialogs(dialogs: ChatMessageDialog[]) {
   const dialogMap = new Map<string, ChatMessageDialog>();
   for (const dialog of dialogs) {
     const key = getSavedChatDialogMergeKey(dialog);
+    const normalizedDialog = normalizeSavedChatDialogIdentity(dialog);
     const existing = dialogMap.get(key);
     if (!existing) {
       dialogMap.set(key, {
-        ...dialog,
-        messages: normalizeSavedChatMessages(dialog.messages)
+        ...normalizedDialog,
+        messages: normalizeSavedChatMessages(normalizedDialog.messages)
       });
       continue;
     }
+    const normalizedExisting = normalizeSavedChatDialogIdentity(existing);
     dialogMap.set(key, {
-      ...existing,
-      chatKey: existing.chatKey || dialog.chatKey,
-      chatTitle: existing.chatTitle || dialog.chatTitle,
-      phone: existing.phone || dialog.phone,
-      messages: normalizeSavedChatMessages(existing.messages.concat(dialog.messages))
+      ...normalizedExisting,
+      chatKey: normalizedExisting.chatKey || normalizedDialog.chatKey,
+      chatTitle: normalizedExisting.chatTitle || normalizedDialog.chatTitle,
+      phone: normalizedExisting.phone || normalizedDialog.phone,
+      messages: normalizeSavedChatMessages(normalizedExisting.messages.concat(normalizedDialog.messages))
     });
   }
   return Array.from(dialogMap.values()).sort((left, right) =>
@@ -19071,7 +19701,28 @@ function getSavedChatDialogMergeKey(dialog: ChatMessageDialog) {
 }
 
 function getSavedChatDialogTitle(dialog: ChatMessageDialog) {
-  return dialog.chatTitle || dialog.phone || dialog.chatKey || "Гость";
+  return getChatMessageStorageTitle(dialog.chatTitle || "", dialog.phone || "") || dialog.chatTitle || dialog.phone || dialog.chatKey || "Гость";
+}
+
+function normalizeSavedChatDialogIdentity(dialog: ChatMessageDialog): ChatMessageDialog {
+  const phone = formatPhoneDigits(dialog.phone || "");
+  return {
+    ...dialog,
+    phone,
+    chatTitle: getChatMessageStorageTitle(dialog.chatTitle || "", phone) || dialog.chatTitle
+  };
+}
+
+function getChatMessageStorageTitle(title: string, phone: string) {
+  const fallbackTitle = getGuestNameFallbackFromPhone(formatPhoneDigits(phone || ""));
+  const normalizedTitle = normalizeExtractedText(title || "");
+  if (fallbackTitle) return fallbackTitle;
+  if (isTechnicalChatMessageTitle(normalizedTitle)) return "";
+  return normalizedTitle;
+}
+
+function isTechnicalChatMessageTitle(title: string) {
+  return /^(аудиозвонок|видео|фото|медиа|вы удалили это сообщение|вы закрепили сообщение|facebook business)$/i.test(normalizeExtractedText(title));
 }
 
 function buildSavedChatDialogBody(dialog: ChatMessageDialog) {
@@ -19306,9 +19957,11 @@ function formatPhoneDigits(value: string) {
   const trimmed = value.trim();
   const digits = value.replace(/\D/g, "");
   if (!digits) return "";
-  if (/^70\d{9}$/.test(digits)) return `+7${digits.slice(0, 10)}`;
-  if (trimmed.startsWith("+") && digits.length >= 8 && digits.length <= 15) return `+${digits}`;
-  if (/^8\d{10}$/.test(digits)) return digits.replace(/^8/, "+7");
+  if (digits.startsWith("7") && digits.length > 11) return "";
+  if (trimmed.startsWith("+") && !digits.startsWith("7") && digits.length >= 8 && digits.length <= 15) return `+${digits}`;
+  if (/^8\d{10}$/.test(digits)) {
+    return `+7${digits.slice(1)}`;
+  }
   if (/^7\d{10}$/.test(digits)) return `+${digits}`;
   if (/^\d{10}$/.test(digits)) return `+7${digits}`;
   if (digits.length > 11) {
@@ -19320,11 +19973,22 @@ function formatPhoneDigits(value: string) {
   return `+${digits}`;
 }
 
+function formatStrictContactPhone(value: string) {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("7") && digits.length > 11) return "";
+  if (/^8\d{10}$/.test(digits)) {
+    return `+7${digits.slice(1)}`;
+  }
+  if (/^7\d{10}$/.test(digits)) return `+${digits}`;
+  if (/^\d{10}$/.test(digits)) return `+7${digits}`;
+  return "";
+}
+
 function isCompleteContactPhone(value: string) {
-  const digits = formatPhoneDigits(value).replace(/\D/g, "");
+  const digits = formatStrictContactPhone(value).replace(/\D/g, "");
   if (!digits) return false;
-  if (/^7\d{10}$/.test(digits)) return true;
-  return digits.length >= 10;
+  return /^7\d{10}$/.test(digits);
 }
 
 function buildPhoneWithPrefix(value: string, prefix: string) {
@@ -19334,7 +19998,6 @@ function buildPhoneWithPrefix(value: string, prefix: string) {
   const prefixDigits = prefix.replace(/\D/g, "");
   const valueDigits = trimmedValue.replace(/\D/g, "");
   if (!valueDigits) return "";
-  if (prefixDigits === "7" && /^70\d{9}$/.test(valueDigits)) return `+7${valueDigits.slice(0, 10)}`;
   if (valueDigits.length > 10) return formatPhoneDigits(trimmedValue);
   return `+${prefixDigits}${valueDigits}`;
 }
@@ -22032,7 +22695,10 @@ function getExtraInventoryPlacements(item?: ExtraInventoryItem): ExtraInventoryP
 
 function buildExtraInventoryCatalogItems(customFields: Record<string, string>): ExtraInventoryCatalogItem[] {
   const customItems = Object.entries(customFields)
-    .map(([id, value]) => ({ id, label: normalizeExtractedText(value || id) }))
+    .map(([id, value]) => {
+      const label = normalizeExtractedText(value || id);
+      return { id: normalizeExtraInventoryTypeId(id, label), label };
+    })
     .filter((item) => item.id && item.label);
   const byId = new Map<string, ExtraInventoryCatalogItem>();
   DEFAULT_EXTRA_INVENTORY_TYPES.concat(customItems).forEach((item) => byId.set(item.id, item));
@@ -22040,7 +22706,20 @@ function buildExtraInventoryCatalogItems(customFields: Record<string, string>): 
 }
 
 function getExtraInventoryTypeLabel(typeId: string) {
-  return DEFAULT_EXTRA_INVENTORY_TYPES.find((item) => item.id === typeId)?.label || "";
+  return DEFAULT_EXTRA_INVENTORY_TYPES.find((item) => item.id === typeId)?.label || getExtraInventoryAliasLabel(typeId);
+}
+
+function normalizeExtraInventoryTypeId(typeId = "", label = "") {
+  const text = normalizeExtractedText(`${typeId} ${label}`).toLowerCase();
+  if (/раскладуш/.test(text)) return "rollaway";
+  if (/надувн.*матрас|матрас/.test(text)) return "air-bed";
+  return String(typeId || createCustomSettingFieldId(label, {})).trim() || "custom";
+}
+
+function getExtraInventoryAliasLabel(typeId: string) {
+  if (typeId === "rollaway") return "Раскладушка";
+  if (typeId === "air-bed") return "Надувной матрас";
+  return "";
 }
 
 function getAvailableExtraGuestTypes(adults: number, teenagers: number, children: number): ExtraGuestType[] {
@@ -22118,9 +22797,10 @@ function normalizeExtraInventoryPlacement(placement: Partial<ExtraInventoryPlace
   const label = String(placement.label || getExtraInventoryTypeLabel(placement.typeId || "") || "Доп.место").trim();
   if (!label) return null;
   const guestType: ExtraGuestType = placement.guestType === "teen" || placement.guestType === "child" ? placement.guestType : "adult";
+  const typeId = normalizeExtraInventoryTypeId(placement.typeId || "", label);
   return {
     id: String(placement.id || `extra-${Date.now()}-${index}`).trim(),
-    typeId: String(placement.typeId || createCustomSettingFieldId(label, {})).trim() || "custom",
+    typeId,
     label,
     guestType
   };
@@ -22568,9 +23248,11 @@ function buildAnalyticsSnapshot(
 }
 
 function buildTodayPrepaymentSales(reservations: Reservation[], rooms: Room[], today: string) {
-  const items = reservations
+  const uniqueReservations = dedupeTodayPrepaymentReservations(reservations
     .filter((reservation) => reservation.status !== "cancelled" && !reservation.noShowAt)
-    .filter((reservation) => isSameLocalDate(reservation.prepaymentReceivedAt, today))
+    .filter((reservation) => isSameLocalDate(reservation.prepaymentReceivedAt, today)));
+
+  const items = uniqueReservations
     .map((reservation) => {
       const finance = getReservationFinance(reservation);
       const amount = finance.displayPrepayment;
@@ -22601,6 +23283,39 @@ function buildTodayPrepaymentSales(reservations: Reservation[], rooms: Room[], t
     stayDateRange: stayDates.length > 3 ? `${stayDates.slice(0, 3).join(", ")} +${stayDates.length - 3}` : stayDates.join(", "),
     total
   };
+}
+
+function dedupeTodayPrepaymentReservations(reservations: Reservation[]) {
+  const bySaleKey = new Map<string, Reservation>();
+  reservations.forEach((reservation) => {
+    const key = getTodayPrepaymentSaleKey(reservation);
+    const current = bySaleKey.get(key);
+    if (!current || compareTodayPrepaymentReservationPriority(reservation, current) > 0) {
+      bySaleKey.set(key, reservation);
+    }
+  });
+  return Array.from(bySaleKey.values());
+}
+
+function getTodayPrepaymentSaleKey(reservation: Reservation) {
+  const phoneKey = String(reservation.phone || "").replace(/\D/g, "") || reservation.guestFirstName || reservation.id;
+  const roomKey = [...reservation.roomIds].sort().join(",");
+  return [
+    phoneKey,
+    reservation.checkIn,
+    reservation.checkOut,
+    roomKey,
+    reservation.total,
+    reservation.prepayment
+  ].join("|");
+}
+
+function compareTodayPrepaymentReservationPriority(left: Reservation, right: Reservation) {
+  const leftStatusPriority = left.status === "booked" ? 2 : left.status === "pending" ? 1 : 0;
+  const rightStatusPriority = right.status === "booked" ? 2 : right.status === "pending" ? 1 : 0;
+  if (leftStatusPriority !== rightStatusPriority) return leftStatusPriority - rightStatusPriority;
+  return String(left.updatedAt || left.createdAt || left.prepaymentReceivedAt || "")
+    .localeCompare(String(right.updatedAt || right.createdAt || right.prepaymentReceivedAt || ""));
 }
 
 function buildAnalyticsPriceRecommendation({
@@ -22936,7 +23651,10 @@ function buildAdminBookingsExport(reservations: Reservation[], rooms: Room[], se
     formatAdminShortDate(date),
     ""
   ];
-  const extraInventoryLines = formatAdminExtraInventoryActionLines(entries);
+  const stayoverCleaningLines = formatAdminStayoverCleaningLines(lodging, date);
+  const extraInventoryToPlaceLines = formatAdminExtraInventoryActionLines(arrivals);
+  const extraInventoryToKeepLines = formatAdminExtraInventoryActionLines(lodging, { includeUntil: true });
+  const extraInventoryToRemoveLines = formatAdminExtraInventoryActionLines(departures);
   const balanceLines = formatAdminBalanceActionLines(arrivals);
 
   lines.push("ВЫЕЗДЫ:");
@@ -22947,8 +23665,20 @@ function buildAdminBookingsExport(reservations: Reservation[], rooms: Room[], se
   lines.push(formatAdminRoomNumbersLine(urgent) || "нет");
   lines.push("");
 
-  lines.push("ДОПМЕСТА:");
-  lines.push(...(extraInventoryLines.length ? extraInventoryLines : ["нет"]));
+  lines.push("УБОРКА ПРОЖИВАЮЩИХ:");
+  lines.push(...(stayoverCleaningLines.length ? stayoverCleaningLines : ["нет"]));
+  lines.push("");
+
+  lines.push("ДОПМЕСТА ПОСТАВИТЬ:");
+  lines.push(...(extraInventoryToPlaceLines.length ? extraInventoryToPlaceLines : ["нет"]));
+  lines.push("");
+
+  lines.push("ДОПМЕСТА ОСТАВИТЬ:");
+  lines.push(...(extraInventoryToKeepLines.length ? extraInventoryToKeepLines : ["нет"]));
+  lines.push("");
+
+  lines.push("ДОПМЕСТА УБРАТЬ:");
+  lines.push(...(extraInventoryToRemoveLines.length ? extraInventoryToRemoveLines : ["нет"]));
   lines.push("");
 
   lines.push("ПРИНЯТЬ ДОПЛАТУ:");
@@ -22960,6 +23690,47 @@ function buildAdminBookingsExport(reservations: Reservation[], rooms: Room[], se
   lines.push(...formatAdminActionSection("ПРОЖИВАЮТ:", lodging, formatAdminLodgingActionLine, "нет"));
   lines.push("");
   lines.push(`ИТОГО: выезды ${departureRoomIds.size}, срочная уборка ${urgentRoomIds.size}, заезды ${groupAdminDayEntries(arrivals).length}, проживают ${groupAdminDayEntries(lodging).length}`);
+
+  return lines.join("\n").trim();
+}
+
+function buildStaffBookingsExport(reservations: Reservation[], rooms: Room[], selectedDate = "", allReservations: Reservation[] = reservations) {
+  const date = selectedDate || formatDateInput(new Date());
+  const dayReservations = allReservations
+    .filter((reservation) => reservation.status === "booked")
+    .filter((reservation) => isReservationRelevantForCalendarDate(reservation, date));
+  const entries = dayReservations.flatMap((reservation) => getAdminDayRoomEntries(reservation, date, rooms));
+  const arrivals = entries.filter((entry) => entry.status === "check-in");
+  const departures = entries.filter((entry) => entry.status === "check-out");
+  const lodging = entries.filter((entry) => entry.status === "lodging");
+  const departureRoomIds = new Set(departures.map((entry) => entry.room.id));
+  const urgentRoomIds = new Set(arrivals.filter((entry) => departureRoomIds.has(entry.room.id)).map((entry) => entry.room.id));
+  const urgent = departures.filter((entry) => urgentRoomIds.has(entry.room.id));
+  const stayoverCleaningLines = formatAdminStayoverCleaningLines(lodging, date);
+  const extraInventoryToPlaceLines = formatAdminExtraInventoryActionLines(arrivals);
+  const extraInventoryToKeepLines = formatAdminExtraInventoryActionLines(lodging, { includeUntil: true });
+  const extraInventoryToRemoveLines = formatAdminExtraInventoryActionLines(departures);
+  const lines = [
+    formatAdminShortDate(date),
+    "",
+    "ВЫЕЗДЫ:",
+    formatAdminRoomNumbersLine(departures) || "нет",
+    "",
+    "ЗАЕЗДЫ/СРОЧНАЯ УБОРКА:",
+    formatAdminRoomNumbersLine(urgent) || "нет",
+    "",
+    "УБОРКА ПРОЖИВАЮЩИХ:",
+    ...(stayoverCleaningLines.length ? stayoverCleaningLines : ["нет"]),
+    "",
+    "ДОПМЕСТА ПОСТАВИТЬ:",
+    ...(extraInventoryToPlaceLines.length ? extraInventoryToPlaceLines : ["нет"]),
+    "",
+    "ДОПМЕСТА ОСТАВИТЬ:",
+    ...(extraInventoryToKeepLines.length ? extraInventoryToKeepLines : ["нет"]),
+    "",
+    "ДОПМЕСТА УБРАТЬ:",
+    ...(extraInventoryToRemoveLines.length ? extraInventoryToRemoveLines : ["нет"])
+  ];
 
   return lines.join("\n").trim();
 }
@@ -23009,23 +23780,45 @@ function formatAdminBalanceActionLines(entries: AdminDayRoomEntry[]) {
     .filter(Boolean);
 }
 
-function formatAdminExtraInventoryActionLines(entries: AdminDayRoomEntry[]) {
-  const byRoom = new Map<string, { room: Room; labels: string[] }>();
+function formatAdminExtraInventoryActionLines(entries: AdminDayRoomEntry[], options: { includeUntil?: boolean } = {}) {
+  const byRoomAndReservation = new Map<string, { entry: AdminDayRoomEntry; labels: string[] }>();
   entries.forEach((entry) => {
     const inventoryByRoomId = entry.reservation.extraInventoryByRoomId ?? buildExtraInventoryMapFromReservation(entry.reservation);
     const placements = getExtraInventoryPlacements(inventoryByRoomId[entry.room.id]);
     if (!placements.length) return;
-    const current = byRoom.get(entry.room.id) ?? { room: entry.room, labels: [] };
+    const key = `${entry.room.id}|${entry.reservation.id}`;
+    const current = byRoomAndReservation.get(key) ?? { entry, labels: [] };
     placements.forEach((placement) => current.labels.push(formatAdminExtraInventoryShortLabel(placement.label)));
-    byRoom.set(entry.room.id, current);
+    byRoomAndReservation.set(key, current);
   });
 
-  return Array.from(byRoom.values())
-    .sort((left, right) => String(left.room.number || "").localeCompare(String(right.room.number || ""), "ru", { numeric: true }))
-    .map(({ room, labels }) => {
-      const uniqueLabels = Array.from(new Set(labels)).join(", ");
-      return `${room.number || formatAdminBookingObject(room)} - ${uniqueLabels}`;
+  return Array.from(byRoomAndReservation.values())
+    .sort((left, right) =>
+      String(left.entry.room.number || "").localeCompare(String(right.entry.room.number || ""), "ru", { numeric: true }) ||
+      String(left.entry.reservation.guestFirstName || "").localeCompare(String(right.entry.reservation.guestFirstName || ""), "ru")
+    )
+    .map(({ entry, labels }) => {
+      const labelsText = formatAdminExtraInventoryLabels(labels);
+      const untilText = options.includeUntil ? ` до ${formatAdminShortDate(entry.item.checkOut)}` : "";
+      return `${entry.room.number || formatAdminBookingObject(entry.room)} - ${labelsText} | ${entry.reservation.guestFirstName || "Гость"}${untilText}`;
     });
+}
+
+function formatAdminExtraInventoryLabels(labels: string[]) {
+  const counts = labels.reduce((acc, label) => {
+    acc.set(label, (acc.get(label) || 0) + 1);
+    return acc;
+  }, new Map<string, number>());
+  return Array.from(counts.entries())
+    .map(([label, count]) => `${count} ${formatAdminExtraInventoryCountLabel(label, count)}`)
+    .join(", ");
+}
+
+function formatAdminExtraInventoryCountLabel(label: string, count: number) {
+  if (label === "матрас") return count === 1 ? "матрас" : count < 5 ? "матраса" : "матрасов";
+  if (label === "диван") return count === 1 ? "диван" : count < 5 ? "дивана" : "диванов";
+  if (label === "раскладушка") return count === 1 ? "раскладушка" : count < 5 ? "раскладушки" : "раскладушек";
+  return count === 1 ? label : `${label} x${count}`;
 }
 
 function formatAdminExtraInventoryShortLabel(label = "") {
@@ -23034,6 +23827,20 @@ function formatAdminExtraInventoryShortLabel(label = "") {
   if (/матрас/.test(normalized)) return "матрас";
   if (/расклад/.test(normalized)) return "раскладушка";
   return normalized || "допместо";
+}
+
+function formatAdminStayoverCleaningLines(entries: AdminDayRoomEntry[], date: string) {
+  const dueEntries = entries.filter((entry) => {
+    const daysSinceCheckIn = Math.floor((parseDateInput(date).getTime() - parseDateInput(entry.item.checkIn).getTime()) / DAY_MS);
+    return daysSinceCheckIn > 0 && daysSinceCheckIn % 3 === 0;
+  });
+
+  return groupAdminDayEntries(dueEntries)
+    .map((group) => {
+      const roomsText = formatAdminRoomsShort(group.entries.map((entry) => entry.room));
+      return `${roomsText} | ${group.reservation.guestFirstName || "Гость"}`;
+    })
+    .filter(Boolean);
 }
 
 type AdminDayRoomEntry = {
@@ -23614,8 +24421,9 @@ function formatReservationPhone(phone: string) {
 function formatReservationRowRooms(rooms: Room[]) {
   if (!rooms.length) return "номер не указан";
   const numbers = rooms.map((room) => formatBookingPickerObjectLabel(room));
-  if (numbers.length <= 2) return numbers.join(", ");
-  return `${numbers.slice(0, 2).join(", ")} +${numbers.length - 2}`;
+  const visibleLimit = 6;
+  if (numbers.length <= visibleLimit) return numbers.join(", ");
+  return `${numbers.slice(0, visibleLimit).join(", ")} +${numbers.length - visibleLimit}`;
 }
 
 function formatRoomNumberLabel(room: Room) {
@@ -23882,7 +24690,11 @@ function filterAnalyticsExpenseEntries(entries: ExpenseEntry[], filters: { dateF
 function normalizePhoneSearch(value: string) {
   const digits = value.replace(/\D/g, "");
   if (!digits) return "";
-  if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
+  if (digits.startsWith("7") && digits.length > 11) return "";
+  if (digits.length === 11 && digits.startsWith("8")) {
+    return `7${digits.slice(1)}`;
+  }
+  if (digits.length === 11 && digits.startsWith("7")) return digits;
   if (digits.length === 10) return `7${digits}`;
   return digits;
 }
@@ -24946,7 +25758,8 @@ function getAvailableExtraInventory(
   inventoryAirBeds: number,
   inventoryRollaways: number,
   rooms: Room[] = [],
-  inventoryCustomCounts: Record<string, number> = {}
+  inventoryCustomCounts: Record<string, number> = {},
+  inventoryCustomCapacities: Record<string, number> = {}
 ) {
   const configured = getConfiguredRoomInventoryCounts(rooms);
   const used = reservations
@@ -24967,16 +25780,30 @@ function getAvailableExtraInventory(
       dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
     )
     .reduce((sum, reservation) => mergeExtraInventoryPlacementCounts(sum, getReservationExtraInventoryPlacementCounts(reservation)), {} as Record<string, number>);
-  const custom = Object.fromEntries(Object.entries(inventoryCustomCounts).map(([typeId, count]) => [
-    typeId,
-    Math.max(0, Math.round(count || 0) - (usedCustomCounts[typeId] || 0))
-  ]));
+  const custom = Object.fromEntries(Object.entries(inventoryCustomCounts).map(([typeId, count]) => {
+    const itemCount = Math.max(0, Math.round(count || 0));
+    const itemCapacity = getExtraInventoryUnitCapacity(typeId, inventoryCustomCapacities[typeId]);
+    return [
+      typeId,
+      Math.max(0, itemCount * itemCapacity - (usedCustomCounts[typeId] || 0))
+    ];
+  }));
 
   return {
     airBeds: Math.max(0, inventoryAirBeds - configured.airBeds - used.airBeds),
     rollaways: Math.max(0, inventoryRollaways - configured.rollaways - used.rollaways),
     custom
   };
+}
+
+function getDefaultExtraInventoryUnitCapacity(typeId: string, label = "") {
+  return /диван|софа/i.test(`${typeId} ${label}`) ? 2 : 1;
+}
+
+function getExtraInventoryUnitCapacity(typeId: string, value: unknown) {
+  const parsedValue = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  if (Number.isFinite(parsedValue) && parsedValue >= 1) return Math.max(1, Math.round(parsedValue));
+  return getDefaultExtraInventoryUnitCapacity(typeId);
 }
 
 function getAvailableExtraInventoryCount(available: { airBeds: number; rollaways: number; custom?: Record<string, number> }, typeId: string) {
@@ -25187,12 +26014,14 @@ function buildMenuItemPhotoCaption(item: MenuItem) {
 function buildMenuOrderCookText(order: MenuOrder) {
   return [
     "Новый заказ",
+    `Получен: ${formatAnalyticsTime(order.createdAt)}`,
+    order.kitchenSentAt ? `Передан повару: ${formatAnalyticsTime(order.kitchenSentAt)}` : "",
     `Время: ${formatMenuOrderReadyTime(order)}`,
     order.roomNumbers.length ? `Номер: ${order.roomNumbers.join(", ")}` : "",
     `Гость: ${order.guestName}`,
     `Подача: ${getMenuOrderServingModeLabel(order.servingMode)}`,
     "",
-    ...order.items.map((item, index) => `${index + 1}. ${item.title} x${item.quantity}`),
+    ...order.items.map(formatMenuOrderItemLine),
     order.comment.trim() ? `\nКомментарий: ${order.comment.trim()}` : "",
     `Итого: ${formatPrice(order.total)}`
   ].filter(Boolean).join("\n");
@@ -25204,10 +26033,13 @@ function buildMenuOrderAdminText(order: MenuOrder) {
     "",
     `${order.guestName}${order.roomNumbers.length ? ` | Номер ${order.roomNumbers.join(", ")}` : ""}`,
     order.phone ? `Телефон: ${formatReservationPhone(order.phone)}` : "",
+    `Получен: ${formatAnalyticsTime(order.createdAt)}`,
+    order.kitchenSentAt ? `Передан повару: ${formatAnalyticsTime(order.kitchenSentAt)}` : "",
+    order.doneAt ? `Выдан: ${formatAnalyticsTime(order.doneAt)}` : "",
     `Время: ${formatMenuOrderReadyTime(order)}`,
     `Подача: ${getMenuOrderServingModeLabel(order.servingMode)}`,
     "",
-    ...order.items.map((item, index) => `${index + 1}. ${item.title} x${item.quantity} = ${formatPrice(item.total)}`),
+    ...order.items.map(formatMenuOrderItemLine),
     order.comment.trim() ? `\nКомментарий: ${order.comment.trim()}` : "",
     `Итого: ${formatPrice(order.total)}`,
     `Оплата: ${getMenuOrderPaymentStatusLabel(order.paymentStatus)}`
@@ -25219,12 +26051,22 @@ function buildMenuOrderCardText(order: MenuOrder) {
     "Заказ по меню",
     order.guestName,
     order.phone ? `Телефон: ${formatReservationPhone(order.phone)}` : "Телефон: не указан",
+    `Получен: ${formatAnalyticsTime(order.createdAt)}`,
+    order.kitchenSentAt ? `Передан повару: ${formatAnalyticsTime(order.kitchenSentAt)}` : "",
+    order.doneAt ? `Выдан: ${formatAnalyticsTime(order.doneAt)}` : "",
     `Время: ${formatMenuOrderReadyTime(order)}`,
     `Подача: ${getMenuOrderServingModeLabel(order.servingMode)}`,
-    ...order.items.map((item, index) => `${index + 1}. ${item.title} x${item.quantity} = ${formatPrice(item.total)}`),
+    ...order.items.map(formatMenuOrderItemLine),
     `Итого: ${formatPrice(order.total)}`,
     `Оплата: ${getMenuOrderPaymentStatusLabel(order.paymentStatus)}`
   ].filter(Boolean).join("\n");
+}
+
+function formatMenuOrderItemLine(item: MenuOrderItem, index: number) {
+  const quantity = Math.max(1, Math.round(item.quantity || 1));
+  const lineTotal = Math.max(0, item.total || item.price * quantity);
+  const unitPrice = Math.max(0, item.price || (quantity ? Math.round(lineTotal / quantity) : 0));
+  return `${index + 1}. ${item.title} x${quantity} | ${formatPrice(unitPrice)} / порц. = ${formatPrice(lineTotal)}`;
 }
 
 function formatMenuOrderReadyTime(order: MenuOrder) {
@@ -25696,7 +26538,7 @@ function buildWhatsAppPreview(room: Room, checkInTime = DEFAULT_CHECK_IN_TIME, c
   const amenitiesText = [bathroomDescription, amenities.join(", ")].filter(Boolean).join(" ");
   const amenitiesLine = amenitiesText ? `\nУдобства: ${amenitiesText}` : "";
   const minimumDuration = room.objectType === "sauna" ? "\nМинимум 2 часа" : "";
-  const times = shouldShowStayTimes(room) ? `\nЗаезд ${checkInTime}, выезд ${checkOutTime}` : "";
+  const times = shouldShowStayTimes(room) ? `\nЗаезд с ${checkInTime}, выезд до ${checkOutTime}` : "";
   const titleLine = getCatalogCardTitle(room);
   return `${titleLine}${capacityLine}${sleepingLine}${extraSleepingLine}${foodLine}${amenitiesLine}${minimumDuration}${times}\n${price}`;
 }
@@ -26402,67 +27244,319 @@ async function createIncludedCardImageBlob(page: IncludedCardPage) {
 }
 
 async function createAvailableRoomsSnapshotBlob(datesNode: HTMLElement, catalogNode: HTMLElement) {
-  try {
-    return await createAvailableRoomsDomSnapshotBlob(datesNode, catalogNode);
-  } catch (error) {
-    console.warn("[GPB] DOM available rooms snapshot failed, falling back to tab capture", error);
+  return createAvailableRoomsVisibleTabSnapshotBlob(datesNode, catalogNode);
+}
+
+async function createAvailableRoomsCanvasSnapshotBlob(rooms: Room[], summary: CatalogAvailabilitySummary, checkIn: string, checkOut: string) {
+  const columns = 4;
+  const gap = 14;
+  const padding = 22;
+  const width = 1500;
+  const cardWidth = Math.floor((width - padding * 2 - gap * (columns - 1)) / columns);
+  const cardHeight = 425;
+  const dateHeight = 124;
+  const chipsHeight = 62;
+  const rowCount = Math.max(1, Math.ceil(rooms.length / columns));
+  const height = padding + dateHeight + 18 + chipsHeight + 18 + rowCount * cardHeight + Math.max(0, rowCount - 1) * gap + padding;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Available rooms export failed");
+
+  context.fillStyle = "#f4f7f4";
+  context.fillRect(0, 0, width, height);
+
+  drawAvailableRoomsSnapshotDates(context, padding, padding, width - padding * 2, dateHeight, checkIn, checkOut);
+  drawAvailableRoomsSnapshotChips(context, padding, padding + dateHeight + 18, summary);
+
+  const cardsTop = padding + dateHeight + 18 + chipsHeight + 18;
+  for (const [index, room] of rooms.entries()) {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const x = padding + column * (cardWidth + gap);
+    const y = cardsTop + row * (cardHeight + gap);
+    await drawAvailableRoomsSnapshotCard(context, room, x, y, cardWidth, cardHeight, checkIn);
   }
 
-  return createAvailableRoomsVisibleTabSnapshotBlob(datesNode, catalogNode);
+  return await canvasToJpegBlobUnderLimit(canvas, 15 * 1024 * 1024, "Available rooms export failed");
+}
+
+function drawAvailableRoomsSnapshotDates(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, checkIn: string, checkOut: string) {
+  const gap = 22;
+  const itemWidth = (width - gap) / 2;
+  const items = [
+    { label: `Заезд ${formatSnapshotWeekdayShort(checkIn)}`, value: formatShortDayMonth(checkIn) },
+    { label: `Выезд ${formatSnapshotWeekdayShort(checkOut)}`, value: formatShortDayMonth(checkOut) }
+  ];
+
+  items.forEach((item, index) => {
+    const itemX = x + index * (itemWidth + gap);
+    context.fillStyle = "#0f765f";
+    context.font = "800 25px Arial, sans-serif";
+    context.fillText(item.label, itemX, y + 26);
+    drawRoundRect(context, itemX, y + 42, itemWidth, height - 42, 8, "#eaf6f1");
+    context.lineWidth = 4;
+    context.strokeStyle = "#0f6b57";
+    context.stroke();
+    context.fillStyle = "#16202a";
+    context.font = "900 34px Arial, sans-serif";
+    context.fillText(item.value, itemX + 24, y + 98);
+  });
+}
+
+function formatSnapshotWeekdayShort(date: string) {
+  if (!date) return "";
+  return new Intl.DateTimeFormat("ru-RU", { weekday: "short" }).format(parseDateInput(date));
+}
+
+function drawAvailableRoomsSnapshotChips(context: CanvasRenderingContext2D, x: number, y: number, summary: CatalogAvailabilitySummary) {
+  const items = summary.mode === "booked"
+    ? [
+      ["Забронировано номера", summary.rooms],
+      ["Сауна", summary.saunas],
+      ["Беседка", summary.gazebos],
+      ["Матрасы", summary.airBeds],
+      ["Раскладушки", summary.rollaways]
+    ] as const
+    : [
+      ["Доступные номера", summary.rooms],
+      ["Сауна", summary.saunas],
+      ["Беседка", summary.gazebos],
+      ["Надувные матрасы", summary.airBeds],
+      ["Раскладушки", summary.rollaways]
+    ] as const;
+  let cursorX = x;
+  for (const [label, value] of items.filter(([, value]) => summary.mode !== "booked" || value > 0)) {
+    const text = `${label}: ${value}`;
+    context.font = "800 22px Arial, sans-serif";
+    const chipWidth = Math.ceil(context.measureText(text).width) + 32;
+    drawRoundRect(context, cursorX, y, chipWidth, 48, 24, "#e5f3ee");
+    context.fillStyle = "#0f6b57";
+    context.fillText(text, cursorX + 16, y + 31);
+    cursorX += chipWidth + 10;
+  }
+}
+
+async function drawAvailableRoomsSnapshotCard(context: CanvasRenderingContext2D, room: Room, x: number, y: number, width: number, height: number, date: string) {
+  drawRoundRect(context, x, y, width, height, 9, "#fffdf9");
+  context.lineWidth = 2;
+  context.strokeStyle = "#e3c9b5";
+  context.stroke();
+
+  const photoX = x + 12;
+  const photoY = y + 12;
+  const photoWidth = width - 24;
+  const photoHeight = 142;
+  const mainPhotoPath = getMainPhotoPath(room);
+  if (mainPhotoPath) {
+    await drawPdfImage(context, mainPhotoPath, photoX, photoY, photoWidth, photoHeight, 8, "cover");
+  } else {
+    drawRoundRect(context, photoX, photoY, photoWidth, photoHeight, 8, "#eef3f5");
+    context.fillStyle = "#64707d";
+    context.font = "700 20px Arial, sans-serif";
+    context.fillText("Нет превью", photoX + 22, photoY + 78);
+  }
+
+  context.fillStyle = "#25313d";
+  context.font = "900 25px Arial, sans-serif";
+  context.fillText(fitCanvasText(context, getPanelObjectCapacityTitle(room), width - 28), x + 14, y + 194);
+
+  context.fillStyle = "#8a96a3";
+  context.font = "800 18px Arial, sans-serif";
+  context.fillText(fitCanvasText(context, getPanelObjectMetaLine(room), width - 28), x + 14, y + 222);
+
+  drawAvailableRoomsSnapshotPriceGrid(context, room, date, x + 14, y + 242, width - 28, 66);
+}
+
+function drawAvailableRoomsSnapshotPriceGrid(context: CanvasRenderingContext2D, room: Room, date: string, x: number, y: number, width: number, height: number) {
+  const activeType = getPriceTypeForDate(date);
+  const weekdayPrice = room.weekdayPrice || room.basePrice || 0;
+  const weekendPrice = room.weekendPrice || weekdayPrice;
+  const holidayPrice = room.holidayPrice || weekendPrice;
+  const prices = [
+    { label: "Будни.", type: "weekday", value: weekdayPrice },
+    { label: "Вых.", type: "weekend", value: weekendPrice },
+    { label: "Празд", type: "holiday", value: holidayPrice }
+  ] as const;
+  const itemWidth = width / prices.length;
+  drawRoundRect(context, x, y, width, height, 9, "#f8fbfc");
+  context.lineWidth = 1;
+  context.strokeStyle = "#d8e2ea";
+  context.stroke();
+
+  prices.forEach((price, index) => {
+    const itemX = x + index * itemWidth;
+    if (activeType === price.type) {
+      context.fillStyle = "#0f765f";
+      context.fillRect(itemX, y, itemWidth, height);
+    }
+    context.fillStyle = activeType === price.type ? "#ffffff" : "#8a96a3";
+    context.font = "800 16px Arial, sans-serif";
+    context.textAlign = "center";
+    context.fillText(price.label, itemX + itemWidth / 2, y + 25);
+    context.font = "900 18px Arial, sans-serif";
+    context.fillText(formatCardPrice(price.value), itemX + itemWidth / 2, y + 51);
+    context.textAlign = "left";
+  });
 }
 
 async function createAvailableRoomsDomSnapshotBlob(datesNode: HTMLElement, catalogNode: HTMLElement) {
   if (document.fonts?.ready) await document.fonts.ready;
 
-  const restoreScroll = prepareAvailableRoomsSnapshotViewport(datesNode, catalogNode);
+  const snapshotStage = createAvailableRoomsSnapshotStage(datesNode, catalogNode);
   try {
+    await waitForAvailableRoomsSnapshotImages(snapshotStage);
     await waitForNextPaint();
     await waitForNextPaint();
     const { default: html2canvas } = await import("html2canvas");
-    const screenshot = await html2canvas(document.body, {
+    const screenshot = await html2canvas(snapshotStage, {
       backgroundColor: "#f4f7f4",
-      height: window.innerHeight,
+      height: Math.ceil(snapshotStage.scrollHeight),
+      ignoreElements: (element) => shouldIgnoreAvailableRoomsSnapshotElement(element),
       logging: false,
+      onclone: (clonedDocument) => sanitizeAvailableRoomsSnapshotClone(clonedDocument),
       scale: Math.min(2, Math.max(1, window.devicePixelRatio || 1)),
-      scrollX: -window.scrollX,
-      scrollY: -window.scrollY,
+      scrollX: 0,
+      scrollY: 0,
       useCORS: true,
-      width: window.innerWidth,
-      windowHeight: window.innerHeight,
-      windowWidth: window.innerWidth
+      width: Math.ceil(snapshotStage.scrollWidth),
+      windowHeight: Math.ceil(snapshotStage.scrollHeight),
+      windowWidth: Math.ceil(snapshotStage.scrollWidth)
     });
-    const scaleX = screenshot.width / Math.max(1, window.innerWidth);
-    const scaleY = screenshot.height / Math.max(1, window.innerHeight);
-    const capture = getAvailableRoomsCaptureRect(datesNode, catalogNode, scaleX, scaleY);
-    if (!capture) throw new Error("Не видно блока витрины для скриншота");
-    return createAvailableRoomsCroppedSnapshotBlob(screenshot, capture);
+    return await canvasToJpegBlobUnderLimit(screenshot, 15 * 1024 * 1024, "Available rooms export failed");
   } finally {
-    restoreScroll();
+    snapshotStage.remove();
   }
+}
+
+function createAvailableRoomsSnapshotStage(datesNode: HTMLElement, catalogNode: HTMLElement) {
+  const stage = document.createElement("div");
+  stage.className = "gpb-available-rooms-snapshot-stage";
+  const datesSection = datesNode.closest<HTMLElement>(".gpb-top-date-section");
+  const datesSource = datesSection ?? datesNode;
+  const datesClone = datesSource.cloneNode(true) as HTMLElement;
+  const catalogClone = catalogNode.cloneNode(true) as HTMLElement;
+
+  sanitizeAvailableRoomsSnapshotNode(datesClone);
+  sanitizeAvailableRoomsSnapshotNode(catalogClone);
+  trimAvailableRoomsSnapshotCatalog(catalogClone);
+
+  const snapshotWidth = Math.ceil(Math.max(
+    datesSource.getBoundingClientRect().width,
+    catalogNode.getBoundingClientRect().width,
+    560
+  ));
+  stage.style.cssText = [
+    "position: fixed",
+    "left: -100000px",
+    "top: 0",
+    "z-index: 2147483647",
+    "width: " + snapshotWidth + "px",
+    "max-width: none",
+    "height: auto",
+    "max-height: none",
+    "overflow: visible",
+    "pointer-events: none",
+    "background: #f4f7f4",
+    "padding: 0",
+    "box-sizing: border-box"
+  ].join(";");
+  datesClone.style.margin = "0 0 10px 0";
+  catalogClone.style.margin = "0";
+  applyAvailableRoomsSnapshotLayout(stage, datesClone, catalogClone);
+  stage.append(datesClone, catalogClone);
+  document.body.append(stage);
+  return stage;
+}
+
+function applyAvailableRoomsSnapshotLayout(stage: HTMLElement, datesClone: HTMLElement, catalogClone: HTMLElement) {
+  [stage, datesClone, catalogClone, ...Array.from(catalogClone.querySelectorAll<HTMLElement>("*"))].forEach((element) => {
+    element.style.maxHeight = "none";
+    element.style.overflow = "visible";
+  });
+
+  const list = catalogClone.querySelector<HTMLElement>(".gpb-panel-object-list");
+  if (list) {
+    list.style.display = "grid";
+    list.style.gridTemplateColumns = "repeat(4, minmax(0, 1fr))";
+    list.style.gap = "7px";
+    list.style.height = "auto";
+    list.style.maxHeight = "none";
+    list.style.overflow = "visible";
+  }
+
+  catalogClone.querySelectorAll<HTMLElement>(".gpb-flat-section-body, .gpb-panel-catalog").forEach((element) => {
+    element.style.height = "auto";
+    element.style.maxHeight = "none";
+    element.style.overflow = "visible";
+  });
+}
+
+async function waitForAvailableRoomsSnapshotImages(root: HTMLElement) {
+  const images = Array.from(root.querySelectorAll<HTMLImageElement>("img"));
+  if (!images.length) return;
+  await Promise.all(
+    images.map((image) => {
+      if (image.complete && image.naturalWidth > 0) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        const done = () => resolve();
+        image.addEventListener("load", done, { once: true });
+        image.addEventListener("error", done, { once: true });
+        window.setTimeout(done, 1500);
+      });
+    })
+  );
+}
+
+function sanitizeAvailableRoomsSnapshotNode(root: HTMLElement) {
+  root
+    .querySelectorAll("script, iframe, noscript, link[rel='preload'], link[rel='modulepreload'], link[rel='stylesheet']")
+    .forEach((element) => element.remove());
+  root.querySelectorAll<HTMLElement>("[id]").forEach((element) => element.removeAttribute("id"));
+}
+
+function trimAvailableRoomsSnapshotCatalog(catalogClone: HTMLElement) {
+  catalogClone
+    .querySelectorAll(".gpb-send-object-actions, .gpb-send-error, .gpb-card-extra-menu, .gpb-room-hold-tooltip, .gpb-room-hold-button, .gpb-card-actions")
+    .forEach((element) => element.remove());
+  catalogClone.querySelectorAll<HTMLElement>("button").forEach((button) => {
+    button.disabled = false;
+    button.removeAttribute("disabled");
+    button.removeAttribute("type");
+  });
+}
+
+function shouldIgnoreAvailableRoomsSnapshotElement(element: Element) {
+  const tagName = element.tagName.toLowerCase();
+  if (tagName === "script" || tagName === "iframe" || tagName === "noscript") return true;
+  if (tagName === "link") {
+    const rel = element.getAttribute("rel")?.toLowerCase() ?? "";
+    return rel.includes("preload") || rel.includes("modulepreload") || rel.includes("stylesheet");
+  }
+  return false;
+}
+
+function sanitizeAvailableRoomsSnapshotClone(clonedDocument: Document) {
+  clonedDocument
+    .querySelectorAll("script, iframe, noscript, link[rel='preload'], link[rel='modulepreload'], link[rel='stylesheet']")
+    .forEach((element) => element.remove());
 }
 
 async function createAvailableRoomsVisibleTabSnapshotBlob(datesNode: HTMLElement, catalogNode: HTMLElement) {
   if (document.fonts?.ready) await document.fonts.ready;
 
+  const restoreCaptureStyle = installAvailableRoomsSnapshotCaptureStyle();
   const restoreScroll = prepareAvailableRoomsSnapshotViewport(datesNode, catalogNode);
-  let screenshot: HTMLImageElement | null = null;
-  let capture: CaptureRect | null = null;
   try {
+    await waitForAvailableRoomsSnapshotImages(catalogNode);
     await waitForNextPaint();
     await waitForNextPaint();
-    const screenshotDataUrl = await captureVisibleTabDataUrl();
-    screenshot = await loadImageFromDataUrl(screenshotDataUrl);
-    const viewportWidth = Math.max(1, window.innerWidth);
-    const viewportHeight = Math.max(1, window.innerHeight);
-    const scaleX = screenshot.naturalWidth / viewportWidth;
-    const scaleY = screenshot.naturalHeight / viewportHeight;
-    capture = getAvailableRoomsCaptureRect(datesNode, catalogNode, scaleX, scaleY);
+    return await createAvailableRoomsStitchedVisibleTabSnapshotBlob(datesNode, catalogNode);
   } finally {
     restoreScroll();
+    restoreCaptureStyle();
   }
-
-  if (!screenshot || !capture) throw new Error("Не видно блока витрины для скриншота");
-  return createAvailableRoomsCroppedSnapshotBlob(screenshot, capture);
 }
 
 async function createAvailableRoomsCroppedSnapshotBlob(screenshot: CanvasImageSource, capture: CaptureRect) {
@@ -26510,6 +27604,152 @@ function prepareAvailableRoomsSnapshotViewport(datesNode: HTMLElement, catalogNo
   fitFirstCatalogRowIntoSnapshotViewport(catalogNode, panel);
   return () => {
     panel.scrollTo({ top: initialScrollTop, behavior: "auto" });
+  };
+}
+
+function installAvailableRoomsSnapshotCaptureStyle() {
+  const style = document.createElement("style");
+  style.textContent = [
+    ".gpb-available-rooms-snapshot-capture .gpb-panel-header,",
+    ".gpb-available-rooms-snapshot-capture .gpb-send-object-actions,",
+    ".gpb-available-rooms-snapshot-capture .gpb-send-error,",
+    ".gpb-available-rooms-snapshot-capture .gpb-card-extra-menu,",
+    ".gpb-available-rooms-snapshot-capture .gpb-room-hold-tooltip {",
+    "  display: none !important;",
+    "}",
+    ".gpb-available-rooms-snapshot-capture .gpb-top-date-section {",
+    "  position: relative !important;",
+    "  top: auto !important;",
+    "  z-index: auto !important;",
+    "  box-shadow: none !important;",
+    "}"
+  ].join("\n");
+  document.head.append(style);
+  document.documentElement.classList.add("gpb-available-rooms-snapshot-capture");
+  return () => {
+    document.documentElement.classList.remove("gpb-available-rooms-snapshot-capture");
+    style.remove();
+  };
+}
+
+async function createAvailableRoomsStitchedVisibleTabSnapshotBlob(datesNode: HTMLElement, catalogNode: HTMLElement) {
+  const panel = catalogNode.closest<HTMLElement>(".gpb-panel");
+  if (!panel) throw new Error("Не найден блок панели для скриншота витрины");
+
+  const initialScrollTop = panel.scrollTop;
+  const firstScreenshotDataUrl = await captureVisibleTabDataUrl();
+  const firstScreenshot = await loadImageFromDataUrl(firstScreenshotDataUrl);
+  const scaleX = firstScreenshot.naturalWidth / Math.max(1, window.innerWidth);
+  const scaleY = firstScreenshot.naturalHeight / Math.max(1, window.innerHeight);
+  const bounds = getAvailableRoomsSnapshotScrollBounds(datesNode, catalogNode, panel, scaleX, scaleY);
+  if (!bounds) throw new Error("Не видно блока витрины для скриншота");
+
+  const canvas = document.createElement("canvas");
+  canvas.width = bounds.width;
+  canvas.height = bounds.height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Available rooms export failed");
+  context.fillStyle = "#f4f7f4";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  let coveredCssBottom = 0;
+  let previousCoveredCssBottom = -1;
+  const maxScrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
+
+  for (let guard = 0; guard < 12 && coveredCssBottom < bounds.heightCss - 1; guard += 1) {
+    const desiredScrollTop = clampNumber(
+      bounds.topScroll + coveredCssBottom - bounds.visibleTopOffset,
+      0,
+      maxScrollTop
+    );
+    panel.scrollTo({ top: desiredScrollTop, behavior: "auto" });
+    await waitForNextPaint();
+    await waitForNextPaint();
+    await waitForAvailableRoomsSnapshotImages(catalogNode);
+
+    const segment = getAvailableRoomsVisibleSegment(bounds, panel, scaleX, scaleY);
+    if (!segment || segment.height <= 1) break;
+
+    const screenshotDataUrl = guard === 0 && Math.abs(desiredScrollTop - initialScrollTop) < 1
+      ? firstScreenshotDataUrl
+      : await captureVisibleTabDataUrl();
+    const screenshot = guard === 0 && Math.abs(desiredScrollTop - initialScrollTop) < 1
+      ? firstScreenshot
+      : await loadImageFromDataUrl(screenshotDataUrl);
+
+    context.drawImage(
+      screenshot,
+      segment.sourceX,
+      segment.sourceY,
+      segment.width,
+      segment.height,
+      0,
+      segment.targetY,
+      bounds.width,
+      segment.height
+    );
+
+    coveredCssBottom = Math.max(coveredCssBottom, segment.cssBottom);
+    if (coveredCssBottom <= previousCoveredCssBottom + 1) break;
+    previousCoveredCssBottom = coveredCssBottom;
+  }
+
+  return await canvasToJpegBlobUnderLimit(canvas, 15 * 1024 * 1024, "Available rooms export failed");
+}
+
+type AvailableRoomsSnapshotBounds = {
+  height: number;
+  heightCss: number;
+  left: number;
+  topScroll: number;
+  bottomScroll: number;
+  visibleTopOffset: number;
+  visibleBottomOffset: number;
+  width: number;
+};
+
+function getAvailableRoomsSnapshotScrollBounds(datesNode: HTMLElement, catalogNode: HTMLElement, panel: HTMLElement, scaleX: number, scaleY: number): AvailableRoomsSnapshotBounds | null {
+  const dateSection = datesNode.closest<HTMLElement>(".gpb-top-date-section") ?? datesNode;
+  const panelRect = panel.getBoundingClientRect();
+  const datesRect = dateSection.getBoundingClientRect();
+  const catalogRect = catalogNode.getBoundingClientRect();
+  const leftCss = clampNumber(Math.min(datesRect.left, catalogRect.left), 0, window.innerWidth);
+  const rightCss = clampNumber(Math.max(datesRect.right, catalogRect.right), 0, window.innerWidth);
+  const topScroll = Math.min(datesRect.top, catalogRect.top) - panelRect.top + panel.scrollTop;
+  const bottomScroll = Math.max(datesRect.bottom, catalogRect.bottom) - panelRect.top + panel.scrollTop;
+  const widthCss = rightCss - leftCss;
+  const heightCss = bottomScroll - topScroll;
+  if (widthCss <= 1 || heightCss <= 1) return null;
+
+  return {
+    height: Math.max(1, Math.round(heightCss * scaleY)),
+    heightCss,
+    left: Math.round(leftCss * scaleX),
+    topScroll,
+    bottomScroll,
+    visibleTopOffset: clampNumber(Math.max(0, panelRect.top), 0, window.innerHeight) - panelRect.top,
+    visibleBottomOffset: clampNumber(Math.min(window.innerHeight, panelRect.bottom), 0, window.innerHeight) - panelRect.top,
+    width: Math.max(1, Math.round(widthCss * scaleX))
+  };
+}
+
+function getAvailableRoomsVisibleSegment(bounds: AvailableRoomsSnapshotBounds, panel: HTMLElement, scaleX: number, scaleY: number) {
+  const panelRect = panel.getBoundingClientRect();
+  const visibleTopScroll = panel.scrollTop + bounds.visibleTopOffset;
+  const visibleBottomScroll = panel.scrollTop + bounds.visibleBottomOffset;
+  const segmentTopScroll = Math.max(bounds.topScroll, visibleTopScroll);
+  const segmentBottomScroll = Math.min(bounds.bottomScroll, visibleBottomScroll);
+  const heightCss = segmentBottomScroll - segmentTopScroll;
+  if (heightCss <= 1) return null;
+
+  const cssTop = segmentTopScroll - bounds.topScroll;
+  return {
+    cssBottom: cssTop + heightCss,
+    height: Math.max(1, Math.round(heightCss * scaleY)),
+    sourceX: bounds.left,
+    sourceY: Math.round((panelRect.top + segmentTopScroll - panel.scrollTop) * scaleY),
+    targetY: Math.round(cssTop * scaleY),
+    width: bounds.width
   };
 }
 

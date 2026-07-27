@@ -50,10 +50,78 @@ body.gpb-booking-panel-open #app {
   font-weight: 900;
   line-height: 1;
   padding: 3px 5px;
-  pointer-events: none;
+  cursor: pointer;
+  pointer-events: auto;
   text-overflow: ellipsis;
   white-space: nowrap;
   z-index: 6;
+}
+
+.gpb-wa-chat-status-badge:hover {
+  filter: brightness(0.94);
+}
+
+.gpb-wa-chat-status-menu {
+  position: fixed;
+  z-index: 1000002;
+  display: grid;
+  width: 190px;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 36px rgb(15 23 42 / 22%);
+  font: 13px/1.2 Arial, sans-serif;
+}
+
+.gpb-wa-chat-status-menu button {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px solid #e2e8f0;
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #16202a;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+}
+
+.gpb-wa-chat-status-menu button:hover:not(:disabled) {
+  background: #f8fafc;
+}
+
+.gpb-wa-chat-status-menu button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.gpb-wa-chat-status-menu button.is-info {
+  border-left-color: #2563eb;
+}
+
+.gpb-wa-chat-status-menu button.is-pending {
+  border-left-color: #b45309;
+}
+
+.gpb-wa-chat-status-menu button.is-success {
+  border-left-color: #15803d;
+}
+
+.gpb-wa-chat-status-menu button.is-extended {
+  border-left-color: #7c3aed;
+}
+
+.gpb-wa-chat-status-menu button.is-muted {
+  border-left-color: #64748b;
+}
+
+.gpb-wa-chat-status-menu button.is-danger {
+  border-left-color: #b42318;
 }
 
 .gpb-wa-chat-status-info::before,
@@ -2870,6 +2938,22 @@ body.gpb-booking-panel-open #app {
 .gpb-contact-database-status strong::before {
   content: "· ";
   color: currentColor;
+}
+
+.gpb-contact-status-spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(15, 107, 87, 0.22);
+  border-top-color: currentColor;
+  border-radius: 999px;
+  animation: gpb-contact-status-spin 0.75s linear infinite;
+}
+
+@keyframes gpb-contact-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .gpb-contact-database-status.is-saved {
@@ -7062,6 +7146,10 @@ body.gpb-reservation-split-resizing {
   grid-template-columns: minmax(0, 1.35fr) minmax(92px, 0.65fr) 38px;
 }
 
+.gpb-payment-method-row.has-actions.has-count.has-capacity {
+  grid-template-columns: minmax(0, 1.25fr) minmax(82px, 0.55fr) minmax(82px, 0.55fr) 38px;
+}
+
 .gpb-payment-method-row span {
   grid-column: 1 / -1;
   color: #25313d;
@@ -7624,6 +7712,17 @@ body.gpb-reservation-split-resizing {
   border-radius: 8px;
   background: #f9fbfc;
   padding: 10px;
+  cursor: grab;
+}
+
+.gpb-menu-settings-card:active {
+  cursor: grabbing;
+}
+
+.gpb-menu-settings-card.is-dragging {
+  border-color: #0f6b57;
+  background: #eef8f4;
+  opacity: .72;
 }
 
 .gpb-menu-settings-card label {

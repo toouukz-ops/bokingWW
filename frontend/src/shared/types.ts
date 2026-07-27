@@ -148,6 +148,16 @@ export interface ActiveDialog {
   expiresAt: string;
 }
 
+export interface ContactLock {
+  phone: string;
+  clientId: string;
+  operatorName: string;
+  status: "matching" | "checking" | "saving";
+  startedAt: string;
+  updatedAt: string;
+  expiresAt: string;
+}
+
 export interface ChatMessageLogItem {
   author: string;
   chatKey?: string;
@@ -222,6 +232,7 @@ export interface PaymentSettings {
   inventoryExtraPlaceChildPercent: number;
   inventoryCustomFields: Record<string, string>;
   inventoryCustomCounts: Record<string, number>;
+  inventoryCustomCapacities: Record<string, number>;
   packageDiscountPercent: number;
   packagePeriodDiscountPercent: number;
   packagePeriodDiscountFrom: string;
@@ -297,6 +308,7 @@ export interface MenuOrder {
   status: MenuOrderStatus;
   paymentStatus: MenuOrderPaymentStatus;
   kitchenSentAt?: string;
+  doneAt?: string;
   archivedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -306,7 +318,20 @@ export interface ActiveChat {
   id: string;
   title: string;
   phone?: string;
+  waChatId?: string;
 }
+
+export type ManualChatStatus =
+  | "none"
+  | "chat-started"
+  | "room-sent"
+  | "price-sent"
+  | "agreement"
+  | "prepayment"
+  | "booked"
+  | "checked-in"
+  | "checked-out"
+  | "cancelled";
 
 export interface GuestContact {
   phone: string;
@@ -335,6 +360,9 @@ export interface ExpenseEntry {
 }
 
 export interface ChatBookingDraft {
+  waChatId?: string;
+  manualStatus?: ManualChatStatus;
+  manualStatusAt?: string;
   selectedRoomId: string;
   selectedBookingRoomIds: string[];
   roomDateOverrides?: Record<string, { checkIn: string; checkOut: string }>;

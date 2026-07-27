@@ -1,4 +1,4 @@
-import type { ActiveDialog, AiReplySuggestions, BookingDraft, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, MenuOrder, PaymentSettings, Reservation, Room, RoomHold } from "./types";
+import type { ActiveDialog, AiReplySuggestions, BookingDraft, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ContactLock, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, MenuOrder, PaymentSettings, Reservation, Room, RoomHold } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://bokingww.onrender.com";
 const LOCAL_ROOMS_STORAGE_KEY = "gpb-booking-rooms";
@@ -72,6 +72,36 @@ export async function releaseActiveDialog(chatKey: string, clientId: string): Pr
   }
 }
 
+export async function getContactLocks(): Promise<ContactLock[]> {
+  const response = await fetch(`${API_BASE_URL}/api/contact-locks`);
+  if (!response.ok) {
+    throw new Error(`Contact locks request failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function claimContactLock(lock: Pick<ContactLock, "phone" | "clientId" | "operatorName" | "status"> & { force?: boolean }): Promise<ContactLock> {
+  const response = await fetch(`${API_BASE_URL}/api/contact-locks/${encodeURIComponent(lock.phone)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(lock)
+  });
+  if (!response.ok) {
+    throw new Error(`Contact lock claim failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function releaseContactLock(phone: string, clientId: string): Promise<void> {
+  const params = new URLSearchParams({ clientId });
+  const response = await fetch(`${API_BASE_URL}/api/contact-locks/${encodeURIComponent(phone)}?${params.toString()}`, {
+    method: "DELETE"
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Contact lock release failed: ${response.status}`);
+  }
+}
+
 export async function getChatMessageDialogs(): Promise<ChatMessageDialog[]> {
   try {
     const response = await fetch(`${API_BASE_URL}/api/chat-messages`);
@@ -97,7 +127,9 @@ export async function saveChatMessages(chatKey: string, payload: {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    return response.ok;
+    if (!response.ok) return false;
+    const result = await response.json().catch(() => null) as { saved?: unknown } | null;
+    return typeof result?.saved === "number" ? result.saved > 0 : true;
   } catch {
     return false;
   }
@@ -144,36 +176,42 @@ export async function getAiReplySuggestions(payload: {
 
 export async function getGuestContacts(): Promise<GuestContact[]> {
   const localContacts = await getLocalGuestContacts();
-  if (localContacts.length) {
-    void refreshGuestContactsFromServer(localContacts);
-    return localContacts;
+  try {
+    return await refreshGuestContactsFromServer([]);
+  } catch (error) {
+    if (localContacts.length) return localContacts;
+    throw error;
   }
-
-  return refreshGuestContactsFromServer(localContacts);
 }
 
 export async function getGuestContact(phone: string): Promise<GuestContact | null> {
   const localContacts = await getLocalGuestContacts();
   const phoneKey = normalizeGuestPhoneForLookup(phone);
-  const localContact = localContacts.find((contact) => normalizeGuestPhoneForLookup(contact.phone) === phoneKey);
-  if (localContact) return localContact;
 
-  const response = await fetch(`${API_BASE_URL}/api/guest-contacts/${encodeURIComponent(phone)}`);
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(`Guest contact lookup failed: ${response.status}`);
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/guest-contacts/${encodeURIComponent(phone)}`);
+    if (response.status === 404) {
+      await deleteLocalGuestContact(phone);
+      return null;
+    }
+    if (!response.ok) {
+      throw new Error(`Guest contact lookup failed: ${response.status}`);
+    }
+
+    const contact = normalizeGuestContact(await response.json());
+    await upsertLocalGuestContact(contact);
+    return contact;
+  } catch (error) {
+    const localContact = localContacts.find((contact) => normalizeGuestPhoneForLookup(contact.phone) === phoneKey);
+    if (localContact) return localContact;
+    throw error;
   }
-
-  const contact = normalizeGuestContact(await response.json());
-  await upsertLocalGuestContact(contact);
-  return contact;
 }
 
 export async function saveGuestContact(contact: GuestContact): Promise<GuestContact> {
   const normalizedContact = normalizeGuestContact(contact);
-  await upsertLocalGuestContact(normalizedContact);
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
+  const timeoutId = window.setTimeout(() => controller.abort(), 8_000);
   const response = await fetch(`${API_BASE_URL}/api/guest-contacts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -613,6 +651,16 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
             .filter((entry): entry is [string, number] => typeof entry[0] === "string" && Number.isFinite(entry[1]) && entry[1] >= 0)
         )
         : {};
+      const rawInventoryCustomCapacities = settings?.inventoryCustomCapacities && typeof settings.inventoryCustomCapacities === "object" && !Array.isArray(settings.inventoryCustomCapacities)
+        ? settings.inventoryCustomCapacities
+        : {};
+      const inventoryCustomCapacityIds = Array.from(new Set([...Object.keys(inventoryCustomFields), ...Object.keys(rawInventoryCustomCapacities)]));
+      const inventoryCustomCapacities = Object.fromEntries(
+        inventoryCustomCapacityIds.map((key) => [
+          key,
+          normalizeInventoryCustomCapacity(rawInventoryCustomCapacities[key], key, inventoryCustomFields[key])
+        ])
+      );
       const packageCustomFields = settings?.packageCustomFields && typeof settings.packageCustomFields === "object" && !Array.isArray(settings.packageCustomFields)
         ? settings.packageCustomFields
         : {};
@@ -714,6 +762,7 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
         inventoryExtraPlaceChildPercent: typeof settings?.inventoryExtraPlaceChildPercent === "number" ? settings.inventoryExtraPlaceChildPercent : 0,
         inventoryCustomFields,
         inventoryCustomCounts,
+        inventoryCustomCapacities,
         packageDiscountPercent: typeof settings?.packageDiscountPercent === "number" ? settings.packageDiscountPercent : 0,
         packagePeriodDiscountPercent: typeof settings?.packagePeriodDiscountPercent === "number" ? settings.packagePeriodDiscountPercent : 0,
         packagePeriodDiscountFrom: typeof settings?.packagePeriodDiscountFrom === "string" ? settings.packagePeriodDiscountFrom : "",
@@ -1124,8 +1173,10 @@ function normalizeGuestContact(contact: GuestContact): GuestContact {
 function normalizeGuestPhone(value: string) {
   const digits = value.replace(/\D/g, "");
   if (!digits) return value.trim();
-  if (/^70\d{9}$/.test(digits)) return `+7${digits.slice(0, 10)}`;
-  if (/^8\d{10}$/.test(digits)) return `+7${digits.slice(1)}`;
+  if (digits.startsWith("7") && digits.length > 11) return "";
+  if (/^8\d{10}$/.test(digits)) {
+    return `+7${digits.slice(1)}`;
+  }
   if (/^7\d{10}$/.test(digits)) return `+${digits}`;
   if (/^\d{10}$/.test(digits)) return `+7${digits}`;
   return `+${digits}`;
@@ -1168,6 +1219,7 @@ function mergeSettings(currentValue: unknown, incomingValue: unknown) {
     customSleepingPlaceOptions: mergeStringArrays(currentValue.customSleepingPlaceOptions, incomingValue.customSleepingPlaceOptions),
     inventoryCustomFields: mergeRecords(currentValue.inventoryCustomFields, incomingValue.inventoryCustomFields),
     inventoryCustomCounts: mergeRecords(currentValue.inventoryCustomCounts, incomingValue.inventoryCustomCounts),
+    inventoryCustomCapacities: mergeRecords(currentValue.inventoryCustomCapacities, incomingValue.inventoryCustomCapacities),
     linkMethods: mergeRecords(currentValue.linkMethods, incomingValue.linkMethods),
     objectGalleryPhotoDescriptions: mergeRecords(currentValue.objectGalleryPhotoDescriptions, incomingValue.objectGalleryPhotoDescriptions),
     objectGalleryPhotoPaths: mergeStringArrays(currentValue.objectGalleryPhotoPaths, incomingValue.objectGalleryPhotoPaths),
@@ -1183,6 +1235,16 @@ function mergeSettings(currentValue: unknown, incomingValue: unknown) {
     quickReplyButtons: mergeById(currentValue.quickReplyButtons, incomingValue.quickReplyButtons),
     quickPhrases: Array.isArray(currentValue.quickPhrases) ? currentValue.quickPhrases : incomingValue.quickPhrases
   };
+}
+
+function getDefaultInventoryCustomCapacity(fieldId: string, value = "") {
+  return /диван|софа/i.test(`${fieldId} ${value}`) ? 2 : 1;
+}
+
+function normalizeInventoryCustomCapacity(value: unknown, fieldId: string, fieldValue = "") {
+  const parsedValue = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  if (Number.isFinite(parsedValue) && parsedValue >= 1) return Math.max(1, Math.round(parsedValue));
+  return getDefaultInventoryCustomCapacity(fieldId, fieldValue);
 }
 
 function normalizeQuickReplyButton(item: unknown): PaymentSettings["quickReplyButtons"][number] | null {

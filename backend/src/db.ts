@@ -15,18 +15,25 @@ export async function connectDatabase() {
   await ensureCollection("chatDrafts");
   await ensureCollection("roomHolds");
   await ensureCollection("activeDialogs");
+  await ensureCollection("contactLocks");
   await dropLegacyNumberIndex();
   await migrateLegacyRooms();
   await migrateLegacyGuestContacts();
   await db.collection("rooms").createIndex({ id: 1 }, { unique: true });
   await db.collection("guestContacts").createIndex({ phone: 1 }, { unique: true });
   await db.collection("guestContacts").createIndex({ inquiryDate: -1 });
+  await db.collection("reservations").createIndex({ id: 1 }, { unique: true, sparse: true });
+  await db.collection("reservations").createIndex({ roomIds: 1 });
+  await db.collection("reservations").createIndex({ "items.roomId": 1 });
   await db.collection("roomHolds").createIndex({ id: 1 }, { unique: true });
   await db.collection("roomHolds").createIndex({ expiresAt: 1 });
   await db.collection("roomHolds").createIndex({ roomId: 1, checkIn: 1, checkOut: 1 });
   await db.collection("activeDialogs").createIndex({ chatKey: 1 }, { unique: true });
   await db.collection("activeDialogs").createIndex({ expiresAt: 1 });
   await db.collection("activeDialogs").createIndex({ clientId: 1 });
+  await db.collection("contactLocks").createIndex({ phone: 1 }, { unique: true });
+  await db.collection("contactLocks").createIndex({ expiresAt: 1 });
+  await db.collection("contactLocks").createIndex({ clientId: 1 });
 }
 
 export async function closeDatabase() {
@@ -153,8 +160,10 @@ async function repairMalformedKazakhstanGuestContacts() {
 function normalizeGuestPhone(value: string) {
   const digits = value.replace(/\D/g, "");
   if (!digits) return value.trim();
-  if (/^70\d{9}$/.test(digits)) return `+7${digits.slice(0, 10)}`;
-  if (/^8\d{10}$/.test(digits)) return `+7${digits.slice(1)}`;
+  if (digits.startsWith("7") && digits.length > 11) return "";
+  if (/^8\d{10}$/.test(digits)) {
+    return `+7${digits.slice(1)}`;
+  }
   if (/^7\d{10}$/.test(digits)) return `+${digits}`;
   if (/^\d{10}$/.test(digits)) return `+7${digits}`;
   return `+${digits}`;

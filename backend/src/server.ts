@@ -8,23 +8,29 @@ import { dirname } from "node:path";
 import sharp from "sharp";
 import {
   claimActiveDialogData,
+  claimContactLockData,
   deleteMenuOrderData,
   deleteReservationData,
   deleteChatDraftData,
+  deleteExpiredContactLocks,
   deleteRoomHoldData,
   getChatDraftById,
   getChatDraftData,
+  getChatStatusSourcesData,
   listChatMessageDialogs,
   listChatMessages,
   listAiReplyLogs,
   getPaymentSettingsData,
   listActiveDialogs,
+  listContactLocks,
   listExpenseCategories,
   listExpenseEntries,
   listMenuOrders,
+  listReservationConflictCandidates,
   listReservations,
   listRoomHolds,
   releaseActiveDialogData,
+  releaseContactLockData,
   replaceChatDraftData,
   replaceExpenseCategories,
   replaceExpenseEntries,
@@ -260,15 +266,41 @@ function reservationBlockingItemsEqual(
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
+const PENDING_RESERVATION_BLOCK_MS = 15 * 60 * 1000;
+
+function getReservationTimestampMs(reservation: Record<string, unknown>) {
+  const updatedAt = Date.parse(toReservationText(reservation.updatedAt));
+  if (Number.isFinite(updatedAt)) return updatedAt;
+  const createdAt = Date.parse(toReservationText(reservation.createdAt));
+  return Number.isFinite(createdAt) ? createdAt : 0;
+}
+
+function hasReservationPaymentSignal(reservation: Record<string, unknown>) {
+  const paidAmount = Number(reservation.paidAmount ?? 0);
+  const payments = Array.isArray(reservation.payments) ? reservation.payments : [];
+  return Boolean(
+    toReservationText(reservation.prepaymentReceivedAt) ||
+    toReservationText(reservation.balancePaidAt) ||
+    paidAmount > 0 ||
+    payments.length > 0
+  );
+}
+
 function isServerBlockingReservation(reservation: Record<string, unknown>) {
   const status = toReservationText(reservation.status);
-  return !reservation.isAddOnSale && !reservation.noShowAt && (status === "pending" || status === "booked");
+  if (reservation.isAddOnSale || reservation.noShowAt) return false;
+  if (status === "booked") return true;
+  if (status !== "pending") return false;
+  if (hasReservationPaymentSignal(reservation)) return true;
+  const timestampMs = getReservationTimestampMs(reservation);
+  return Boolean(timestampMs && Date.now() - timestampMs <= PENDING_RESERVATION_BLOCK_MS);
 }
 
 async function validateReservationBeforeSave(id: string, reservation: Record<string, unknown>) {
   if (!isServerBlockingReservation(reservation)) return { ok: true as const };
 
-  if (!normalizeReservationPhone(reservation.phone)) {
+  const normalizedReservationPhone = normalizeReservationPhone(reservation.phone);
+  if (!normalizedReservationPhone) {
     return {
       error: "Reservation phone is required",
       ok: false as const,
@@ -276,10 +308,19 @@ async function validateReservationBeforeSave(id: string, reservation: Record<str
     };
   }
 
+  const contact = await getGuestContact(normalizedReservationPhone);
+  if (!contact) {
+    return {
+      error: "Guest contact must be saved before reservation",
+      ok: false as const,
+      status: 409
+    };
+  }
+
   const nextItems = getReservationBlockingItemsForServer({ ...reservation, id });
   if (!nextItems.length) return { ok: true as const };
 
-  const reservations = await listReservations();
+  const reservations = await listReservationConflictCandidates(id, nextItems.map((item) => item.roomId));
   const existingReservation = reservations.find((candidate) => candidate.id === id);
   if (
     existingReservation &&
@@ -337,6 +378,15 @@ function getPublicMenuIntroText(settings: unknown) {
   return "Не тратьте время на поиск еды. Оформите заказ заранее, и к вашему приезду в Green Pine Burabay еда будет готова.";
 }
 
+function normalizeMenuOrderPhone(value: unknown) {
+  const digits = toSafeString(value).replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.length === 10) return `+7${digits}`;
+  if (digits.length === 11 && digits.startsWith("8")) return `+7${digits.slice(1)}`;
+  if (digits.length === 11 && digits.startsWith("7")) return `+${digits}`;
+  return "";
+}
+
 function normalizeMenuOrderPayload(payload: Record<string, unknown>) {
   const now = new Date().toISOString();
   const items = Array.isArray(payload.items)
@@ -372,7 +422,7 @@ function normalizeMenuOrderPayload(payload: Record<string, unknown>) {
     source: toSafeString(payload.source) === "qr" ? "qr" : "reservation-link",
     reservationId: toSafeString(payload.reservationId),
     guestName: toSafeString(payload.guestName) || "Гость",
-    phone: toSafeString(payload.phone),
+    phone: normalizeMenuOrderPhone(payload.phone),
     roomNumbers,
     checkIn: toSafeString(payload.checkIn),
     readyDate: toDateInput(payload.readyDate) || new Date().toISOString().slice(0, 10),
@@ -384,9 +434,49 @@ function normalizeMenuOrderPayload(payload: Record<string, unknown>) {
     status: validStatuses.has(statusText) ? statusText : "new",
     paymentStatus,
     kitchenSentAt: toSafeString(payload.kitchenSentAt),
+    doneAt: toSafeString(payload.doneAt),
     archivedAt: toSafeString(payload.archivedAt),
     createdAt: toSafeString(payload.createdAt) || now,
     updatedAt: now
+  };
+}
+
+async function enrichMenuOrderPayloadFromReservation(payload: Record<string, unknown>) {
+  const reservationId = toSafeString(payload.reservationId);
+  if (!reservationId) return payload;
+
+  const reservations = await listReservations();
+  const reservation = reservations.find((item) => toSafeString(item.id) === reservationId);
+  if (!reservation) return payload;
+
+  const roomIdSet = new Set<string>();
+  if (Array.isArray(reservation.roomIds)) {
+    reservation.roomIds.forEach((roomId) => {
+      const value = toSafeString(roomId);
+      if (value) roomIdSet.add(value);
+    });
+  }
+  if (Array.isArray(reservation.items)) {
+    reservation.items
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+      .forEach((item) => {
+        const roomId = toSafeString(item.roomId);
+        if (roomId) roomIdSet.add(roomId);
+      });
+  }
+
+  const rooms = roomIdSet.size ? await listRooms() : [];
+  const roomNumbers = rooms
+    .filter((room) => roomIdSet.has(room.id))
+    .map((room) => toSafeString(room.number) || toSafeString(room.title))
+    .filter(Boolean);
+
+  return {
+    ...payload,
+    guestName: toSafeString(payload.guestName) || toSafeString(reservation.guestFirstName) || toSafeString(reservation.guestName) || "Гость",
+    phone: normalizeMenuOrderPhone(payload.phone) || normalizeMenuOrderPhone(reservation.phone),
+    roomNumbers: Array.isArray(payload.roomNumbers) && payload.roomNumbers.length ? payload.roomNumbers : roomNumbers,
+    checkIn: toSafeString(payload.checkIn) || toSafeString(reservation.checkIn)
   };
 }
 
@@ -414,6 +504,7 @@ function buildPublicMenuPage(reservationId: string) {
     .hero { background: #0f6b57; color: white; border-radius: 8px; padding: 22px; margin-bottom: 16px; }
     .hero h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.1; }
     .hero p { margin: 0; font-size: 16px; line-height: 1.45; max-width: 720px; }
+    .order-hours { margin: 14px 0 0; display: inline-flex; align-items: center; border-radius: 8px; background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.28); padding: 10px 12px; font-size: 21px; line-height: 1.2; font-weight: 900; }
     .guest { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; font-weight: 700; }
     .guest span { background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.22); border-radius: 999px; padding: 7px 10px; }
     .layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
@@ -435,6 +526,7 @@ function buildPublicMenuPage(reservationId: string) {
     .cart-line { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 9px 0; border-bottom: 1px solid #eef1f3; }
     .cart-line small { color: #637080; }
     .form { display: grid; gap: 10px; margin-top: 12px; }
+    .phone-field[hidden] { display: none; }
     label { display: grid; gap: 5px; font-size: 13px; font-weight: 800; color: #495667; }
     input, textarea, select { width: 100%; border: 1px solid #cfd8df; border-radius: 7px; min-height: 42px; padding: 9px 10px; font: inherit; background: white; }
     textarea { min-height: 74px; resize: vertical; }
@@ -473,7 +565,7 @@ function buildPublicMenuPage(reservationId: string) {
     .confirm-actions button { border-radius: 7px; min-height: 42px; font-weight: 900; cursor: pointer; }
     .confirm-actions .cancel { border: 1px solid #cfd8df; background: white; color: #17212b; }
     .confirm-actions .confirm { border: 0; background: #0f6b57; color: white; }
-    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } .cart { position: static; } .page { padding: 10px; } .schedule-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; } .schedule-card { padding: 9px; } .schedule-label { font-size: 14px; } .schedule-card input { font-size: 16px; } }
+    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } .cart { position: static; } .page { padding: 10px; } .order-hours { display: flex; font-size: 18px; } .schedule-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; } .schedule-card { padding: 9px; } .schedule-label { font-size: 14px; } .schedule-card input { font-size: 16px; } }
   </style>
 </head>
 <body>
@@ -481,6 +573,7 @@ function buildPublicMenuPage(reservationId: string) {
     <section class="hero">
       <h1>Меню Green Pine Burabay</h1>
       <p id="intro">Не тратьте время на поиск еды. Оформите заказ заранее, и к вашему приезду в Green Pine Burabay еда будет готова.</p>
+      <div class="order-hours">Заказы принимаются до 17:00 и выдаются до 18:00</div>
       <div class="guest" id="guest"></div>
     </section>
     <main class="layout">
@@ -495,6 +588,7 @@ function buildPublicMenuPage(reservationId: string) {
             <button type="button" id="takeaway">Упаковать с собой</button>
             <button type="button" id="arrival">Подготовить к приезду</button>
           </div>
+          <label class="phone-field" id="phoneField" hidden>Телефон для связи<input id="customerPhone" type="tel" inputmode="tel" placeholder="+7 700 123 55 66"></label>
           <div class="schedule-fields" id="scheduleFields" hidden>
             <label class="schedule-card">
               <span class="schedule-label">
@@ -559,6 +653,34 @@ function buildPublicMenuPage(reservationId: string) {
       if (!path) return "";
       return path.startsWith("/uploads/") ? "/uploads/thumb/" + path.replace(/^\\/uploads\\//, "") + ".webp" : path;
     }
+    function normalizePhone(value) {
+      const digits = String(value || "").replace(/\\D/g, "");
+      if (!digits) return "";
+      if (digits.length === 10) return "+7" + digits;
+      if (digits.length === 11 && digits.startsWith("8")) return "+7" + digits.slice(1);
+      if (digits.length === 11 && digits.startsWith("7")) return "+" + digits;
+      return "";
+    }
+    function getKnownPhone() {
+      const r = state.reservation || {};
+      return normalizePhone(r.phone || menuGuestPhone);
+    }
+    function getGuestName(phone) {
+      const r = state.reservation || {};
+      const name = r.guestName || menuGuestName || "";
+      if (name && name !== "Гость") return name;
+      const digits = String(phone || "").replace(/\\D/g, "");
+      return digits.length >= 4 ? "Гость " + digits.slice(-4) : "Гость";
+    }
+    function extractTimeFromComment(value) {
+      const match = String(value || "").match(/(?:^|\\D)([01]?\\d|2[0-3])[:.]([0-5]\\d)(?:\\D|$)/);
+      if (!match) return "";
+      return String(match[1]).padStart(2, "0") + ":" + match[2];
+    }
+    function isKitchenReadyTimeAllowed(value) {
+      if (!value) return true;
+      return value <= "18:00";
+    }
     function setStatus(text, tone) {
       const node = document.getElementById("status");
       node.textContent = text || "";
@@ -567,12 +689,18 @@ function buildPublicMenuPage(reservationId: string) {
     function renderGuest() {
       const guest = document.getElementById("guest");
       const r = state.reservation || {};
+      const phone = getKnownPhone();
       const tags = [
         r.guestName || menuGuestName || "",
+        phone,
         (r.roomNumbers || []).length ? "Номер " + r.roomNumbers.join(", ") : "",
         r.checkIn ? "Заезд " + r.checkIn : ""
       ].filter(Boolean);
       guest.innerHTML = (tags.length ? tags : ["Гость кафе"]).map((item) => "<span>" + item + "</span>").join("");
+      const phoneField = document.getElementById("phoneField");
+      const phoneInput = document.getElementById("customerPhone");
+      phoneField.hidden = Boolean(phone);
+      if (phone && !phoneInput.value) phoneInput.value = phone;
     }
     function renderMenu() {
       const menu = document.getElementById("menu");
@@ -613,7 +741,7 @@ function buildPublicMenuPage(reservationId: string) {
       return "подать по готовности";
     }
     function buildOrderSummaryText(order) {
-      const itemLines = order.items.map((line, index) => (index + 1) + ". " + line.title + " x" + line.quantity + " = " + money(line.price * line.quantity));
+      const itemLines = order.items.map((line, index) => (index + 1) + ". " + line.title + " x" + line.quantity + " | " + money(line.price) + " = " + money(line.price * line.quantity));
       return [
         "Заказ по меню",
         "Гость: " + (order.guestName || "Гость"),
@@ -716,13 +844,33 @@ function buildPublicMenuPage(reservationId: string) {
       }
       const readyDate = document.getElementById("readyDate").value || "";
       const readyTime = document.getElementById("readyTime").value || "";
+      const comment = document.getElementById("comment").value || "";
+      const commentTime = extractTimeFromComment(comment);
+      const finalServingMode = state.servingMode === "arrival" || commentTime ? "arrival" : state.servingMode;
+      const finalReadyDate = finalServingMode === "arrival" ? (readyDate || today()) : today();
+      const finalReadyTime = state.servingMode === "arrival" ? readyTime : commentTime;
       if (state.servingMode === "arrival" && (!readyDate || !readyTime)) {
         setStatus("Укажите дату и время готовности.", "error");
         return;
       }
+      if (!isKitchenReadyTimeAllowed(finalReadyTime)) {
+        setStatus("Кухня выдает заказы до 18:00. Выберите время не позже 18:00.", "error");
+        if (finalServingMode === "arrival") {
+          setServingMode("arrival");
+          document.getElementById("readyTime").focus();
+        }
+        return;
+      }
       const r = state.reservation || {};
-      const guestName = r.guestName || menuGuestName || "Гость";
-      const phone = r.phone || menuGuestPhone;
+      const customerPhoneInput = document.getElementById("customerPhone");
+      const phone = getKnownPhone() || normalizePhone(customerPhoneInput.value);
+      if (!phone) {
+        document.getElementById("phoneField").hidden = false;
+        customerPhoneInput.focus();
+        setStatus("Укажите номер телефона, чтобы администратор мог уточнить заказ.", "error");
+        return;
+      }
+      const guestName = getGuestName(phone);
       const roomNumbers = r.roomNumbers || [];
       const total = getOrderTotal();
       const order = {
@@ -732,10 +880,10 @@ function buildPublicMenuPage(reservationId: string) {
         phone,
         roomNumbers,
         checkIn: r.checkIn || "",
-        readyDate: state.servingMode === "arrival" ? readyDate : today(),
-        readyTime: state.servingMode === "arrival" ? readyTime : "",
-        servingMode: state.servingMode,
-        comment: document.getElementById("comment").value || "",
+        readyDate: finalReadyDate,
+        readyTime: finalReadyTime,
+        servingMode: finalServingMode,
+        comment,
         items: lines.map((line) => ({ ...line, id: "item-" + line.menuItemId, total: line.price * line.quantity })),
         status: "new",
         paymentStatus: "unpaid"
@@ -749,13 +897,23 @@ function buildPublicMenuPage(reservationId: string) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(order)
         });
-        if (!response.ok) throw new Error("request failed");
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          throw new Error(errorBody.error || "request failed");
+        }
         const savedOrder = await response.json();
         const acceptedOrder = { ...order, ...savedOrder };
         showOrderSummary(acceptedOrder);
         setStatus("Заказ принят.", "success");
-      } catch {
-        setStatus("Не удалось отправить заказ. Попробуйте еще раз.", "error");
+      } catch (error) {
+        const message = error && error.message === "Phone is required"
+          ? "Укажите номер телефона, чтобы администратор мог уточнить заказ."
+          : "Не удалось отправить заказ. Попробуйте еще раз.";
+        setStatus(message, "error");
+        if (error && error.message === "Phone is required") {
+          document.getElementById("phoneField").hidden = false;
+          document.getElementById("customerPhone").focus();
+        }
         document.getElementById("submit").disabled = false;
       }
     }
@@ -899,8 +1057,8 @@ app.get("/api/public/menu/:reservationId", async (request, reply) => {
     menuItems,
     reservation: {
       id: reservation.id,
-      guestName: toSafeString(reservation.guestFirstName) || "Гость",
-      phone: toSafeString(reservation.phone),
+      guestName: toSafeString(reservation.guestFirstName) || toSafeString(reservation.guestName) || "Гость",
+      phone: normalizeMenuOrderPhone(reservation.phone),
       checkIn: toSafeString(reservation.checkIn),
       roomNumbers: reservationRooms.map((room) => toSafeString(room.number) || toSafeString(room.title)).filter(Boolean)
     }
@@ -911,8 +1069,10 @@ app.post("/api/public/menu-orders", async (request, reply) => {
   const body = request.body as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object") return reply.status(400).send({ error: "Invalid menu order" });
 
-  const order = normalizeMenuOrderPayload(body);
+  const enrichedBody = await enrichMenuOrderPayloadFromReservation(body);
+  const order = normalizeMenuOrderPayload(enrichedBody);
   if (!order.items.length) return reply.status(400).send({ error: "Order items are required" });
+  if (!order.phone) return reply.status(400).send({ error: "Phone is required" });
 
   const savedOrder = await saveMenuOrderData(order.id, order);
   broadcastRealtime("menu-orders.changed", { action: "upsert", order: savedOrder });
@@ -1015,6 +1175,33 @@ app.delete("/api/active-dialogs/:chatKey", async (request, reply) => {
   const query = request.query as { clientId?: string };
   await releaseActiveDialogData(decodeURIComponent(chatKey), query.clientId ?? "");
   broadcastRealtime("active-dialogs.changed", { action: "delete", chatKey: decodeURIComponent(chatKey), clientId: query.clientId ?? "" }, query.clientId ?? "");
+  return reply.status(204).send();
+});
+
+app.get("/api/contact-locks", async () => {
+  return listContactLocks();
+});
+
+app.put("/api/contact-locks/:phone", async (request, reply) => {
+  const { phone } = request.params as { phone: string };
+  const body = request.body as Record<string, unknown> | undefined;
+  if (!body || typeof body !== "object") {
+    return reply.status(400).send({ error: "Invalid contact lock" });
+  }
+  const normalizedPhone = normalizeReservationPhone(decodeURIComponent(phone));
+  if (!normalizedPhone) return reply.status(400).send({ error: "Contact lock phone is required" });
+  const lock = await claimContactLockData(normalizedPhone, body);
+  broadcastRealtime("contact-locks.changed", { action: "upsert", lock }, String(body.clientId ?? ""));
+  return lock;
+});
+
+app.delete("/api/contact-locks/:phone", async (request, reply) => {
+  const { phone } = request.params as { phone: string };
+  const query = request.query as { clientId?: string };
+  const normalizedPhone = normalizeReservationPhone(decodeURIComponent(phone));
+  if (!normalizedPhone) return reply.status(204).send();
+  await releaseContactLockData(normalizedPhone, query.clientId ?? "");
+  broadcastRealtime("contact-locks.changed", { action: "delete", phone: normalizedPhone, clientId: query.clientId ?? "" }, query.clientId ?? "");
   return reply.status(204).send();
 });
 
@@ -1666,7 +1853,10 @@ app.post("/api/guest-contacts", async (request, reply) => {
   }
 
   try {
-    return await withTimeout(saveGuestContact(result.data), 6000, "Guest contact save timeout");
+    const contact = await withTimeout(saveGuestContact(result.data), 6000, "Guest contact save timeout");
+    broadcastRealtime("guest-contacts.changed", { action: "upsert", contact });
+    await deleteExpiredContactLocks();
+    return contact;
   } catch (error) {
     return reply.status(503).send({
       error: "Guest contact save unavailable",
@@ -1678,7 +1868,9 @@ app.post("/api/guest-contacts", async (request, reply) => {
 app.delete("/api/guest-contacts/:phone", async (request, reply) => {
   const { phone } = request.params as { phone: string };
   try {
-    await withTimeout(deleteGuestContact(decodeURIComponent(phone)), 6000, "Guest contact delete timeout");
+    const decodedPhone = decodeURIComponent(phone);
+    await withTimeout(deleteGuestContact(decodedPhone), 6000, "Guest contact delete timeout");
+    broadcastRealtime("guest-contacts.changed", { action: "delete", phone: normalizeReservationPhone(decodedPhone) });
     return reply.status(204).send();
   } catch (error) {
     return reply.status(503).send({
@@ -1760,6 +1952,10 @@ app.get("/api/chat-drafts", async (request) => {
   }
 
   return { drafts: await getChatDraftData() };
+});
+
+app.get("/api/chat-statuses", async () => {
+  return getChatStatusSourcesData();
 });
 
 app.get("/api/chat-drafts/:chatId", async (request) => {

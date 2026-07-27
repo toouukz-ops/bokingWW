@@ -22,7 +22,18 @@ export async function listGuestContacts(): Promise<GuestContact[]> {
 }
 
 export async function getGuestContact(phone: string): Promise<GuestContact | null> {
-  const document = await guestContacts.findOne({ phone: normalizeGuestPhone(phone) }, { maxTimeMS: 3000 });
+  const normalizedPhone = normalizeGuestPhone(phone);
+  const document = await guestContacts.findOne({ phone: normalizedPhone }, { maxTimeMS: 3000 });
+  if (document) return mapGuestContactDocument(document);
+
+  const digits = normalizedPhone.replace(/\D/g, "");
+  if (!/^7\d{10}$/.test(digits)) return null;
+  const legacyDocument = await guestContacts
+    .find({ phone: { $regex: `^\\+?${digits}\\d+` } }, { maxTimeMS: 3000 })
+    .sort({ updatedAt: -1 })
+    .limit(1)
+    .next();
+  if (legacyDocument) return mapGuestContactDocument(legacyDocument);
   return document ? mapGuestContactDocument(document) : null;
 }
 
@@ -68,8 +79,10 @@ function mapGuestContactDocument(document: GuestContactDocument): GuestContact {
 function normalizeGuestPhone(value: string) {
   const digits = value.replace(/\D/g, "");
   if (!digits) return value.trim();
-  if (/^70\d{9}$/.test(digits)) return `+7${digits.slice(0, 10)}`;
-  if (/^8\d{10}$/.test(digits)) return `+7${digits.slice(1)}`;
+  if (digits.startsWith("7") && digits.length > 11) return "";
+  if (/^8\d{10}$/.test(digits)) {
+    return `+7${digits.slice(1)}`;
+  }
   if (/^7\d{10}$/.test(digits)) return `+${digits}`;
   if (/^\d{10}$/.test(digits)) return `+7${digits}`;
   return `+${digits}`;

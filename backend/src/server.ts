@@ -1941,16 +1941,64 @@ app.put("/api/reservations/:id", async (request, reply) => {
     return reply.status(400).send({ error: "Invalid reservation" });
   }
 
-  const validation = await validateReservationBeforeSave(id, body);
+  const canonicalReservation = await findEquivalentActiveReservation(id, body);
+  const targetId = canonicalReservation?.id ?? id;
+  const normalizedBody = canonicalReservation
+    ? {
+      ...body,
+      id: targetId,
+      balancePaidAt: canonicalReservation.balancePaidAt ?? body.balancePaidAt,
+      checkedInAt: canonicalReservation.checkedInAt ?? body.checkedInAt,
+      checkedOutAt: canonicalReservation.checkedOutAt ?? body.checkedOutAt,
+      paidAmount: Math.max(Number(canonicalReservation.paidAmount ?? 0), Number(body.paidAmount ?? 0)),
+      payments: Array.isArray(canonicalReservation.payments) && canonicalReservation.payments.length
+        ? canonicalReservation.payments
+        : body.payments,
+      prepaymentReceivedAt: canonicalReservation.prepaymentReceivedAt ?? body.prepaymentReceivedAt
+    }
+    : body;
+
+  const validation = await validateReservationBeforeSave(targetId, normalizedBody);
   if (!validation.ok) {
     return reply.status(validation.status).send(validation);
   }
 
-  const reservation = await saveReservationData(id, body);
+  const reservation = await saveReservationData(targetId, normalizedBody);
   upsertCachedReservationStatusSource(reservation);
   broadcastRealtime("reservations.changed", { action: "upsert", reservation }, query.clientId);
   return reservation;
 });
+
+async function findEquivalentActiveReservation(id: string, reservation: Record<string, unknown>) {
+  if (reservation.status === "cancelled" || reservation.isAddOnSale) return null;
+  const phone = normalizeReservationPhone(reservation.phone);
+  const checkIn = toReservationText(reservation.checkIn);
+  const checkOut = toReservationText(reservation.checkOut);
+  const roomIds = Array.isArray(reservation.roomIds) ? reservation.roomIds.map(toReservationText).filter(Boolean).sort() : [];
+  if (!phone || !checkIn || !checkOut || !roomIds.length) return null;
+  return (await listReservations())
+    .filter((candidate) =>
+      candidate.id !== id &&
+      !candidate.isAddOnSale &&
+      candidate.status !== "cancelled" &&
+      !candidate.noShowAt &&
+      normalizeReservationPhone(candidate.phone) === phone &&
+      candidate.checkIn === checkIn &&
+      candidate.checkOut === checkOut
+    )
+    .filter((candidate) => {
+      const candidateRoomIds = Array.isArray(candidate.roomIds)
+        ? candidate.roomIds.map(toReservationText).filter(Boolean).sort()
+        : [];
+      return candidateRoomIds.length === roomIds.length && candidateRoomIds.every((roomId, index) => roomId === roomIds[index]);
+    })
+    .sort((left, right) => {
+      const leftPaid = Number(left.paidAmount ?? 0);
+      const rightPaid = Number(right.paidAmount ?? 0);
+      if (leftPaid !== rightPaid) return rightPaid - leftPaid;
+      return String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || ""));
+    })[0] ?? null;
+}
 
 app.post("/api/reservations/:id/actions/:action", async (request, reply) => {
   const { id, action } = request.params as { id: string; action: ReservationAction };

@@ -1167,6 +1167,7 @@ export function BookingPanel() {
   const [bookingDateWarningHoldId, setBookingDateWarningHoldId] = useState("");
   const [ignoredRoomHoldIds, setIgnoredRoomHoldIds] = useState<string[]>([]);
   const [cancelReservationTarget, setCancelReservationTarget] = useState<Reservation | null>(null);
+  const [cancelReservationSaving, setCancelReservationSaving] = useState(false);
   const [deleteReservationTarget, setDeleteReservationTarget] = useState<Reservation | null>(null);
   const [prepaymentAmountTarget, setPrepaymentAmountTarget] = useState<Reservation | null>(null);
   const [roomDateEditTarget, setRoomDateEditTarget] = useState<Room | null>(null);
@@ -6020,6 +6021,7 @@ export function BookingPanel() {
     const draftPatch: Partial<ChatBookingDraft> = {
       adminComment: reservation.adminComment ?? adminComment,
       agreementSent: reservation.status === "pending",
+      agreementEverSent: reservation.status === "cancelled" ? false : agreementEverSent,
       checkIn: reservation.checkIn,
       checkOut: reservation.checkOut,
       checkInTime: reservation.checkInTime,
@@ -6029,7 +6031,9 @@ export function BookingPanel() {
       manualSaleOpen: Boolean(reservation.isManualSale),
       manualSalePaymentMethod: reservation.paymentMethod ?? manualSalePaymentMethod,
       phone: normalizedPhone || reservation.phone,
-      prepaymentAlreadyPaid: Boolean(reservation.prepaymentReceivedAt)
+      prepaymentAlreadyPaid: Boolean(reservation.prepaymentReceivedAt),
+      manualStatus: reservation.status === "cancelled" ? "cancelled" : "none",
+      manualStatusAt: new Date().toISOString()
     };
 
     await Promise.all(chats.map((chat) => saveChatDraftForChat(chat, draftPatch)));
@@ -6758,10 +6762,12 @@ export function BookingPanel() {
     if (cancelledReservation && shouldAttachReservationToActiveChat(cancelledReservation)) {
       setLastReservation(cancelledReservation);
     }
-    await Promise.all(cancelledReservations.map((cancelledReservation) => syncReservationDraftForStatus(cancelledReservation)));
-    if (cancelledReservation) {
-      await saveAgreementDraftForReservation(cancelledReservation);
-    }
+    void Promise.all(cancelledReservations.map((item) => syncReservationDraftForStatus(item))).catch((error) => {
+      void sendDebugLog("reservation-cancel-draft-sync-error", {
+        message: error instanceof Error ? error.message : String(error),
+        reservationIds: cancelledReservations.map((item) => item.id)
+      });
+    });
     return true;
   }
 
@@ -6783,15 +6789,13 @@ export function BookingPanel() {
   }
 
   async function handleCancelReservationWithReason(reason: string) {
-    if (!cancelReservationTarget) return;
-    if (reason === BOOKING_ERROR_CANCEL_REASON) {
-      await revertErroneousReservation(cancelReservationTarget);
-      setCancelReservationTarget(null);
-      return;
-    }
-    const saved = await cancelReservation(cancelReservationTarget, reason);
-    if (saved) {
-      setCancelReservationTarget(null);
+    if (!cancelReservationTarget || cancelReservationSaving) return;
+    setCancelReservationSaving(true);
+    try {
+      const saved = await cancelReservation(cancelReservationTarget, reason);
+      if (saved) setCancelReservationTarget(null);
+    } finally {
+      setCancelReservationSaving(false);
     }
   }
 
@@ -9526,7 +9530,10 @@ export function BookingPanel() {
       ) : null}
       {cancelReservationTarget ? (
         <CancelReservationModal
-          onClose={() => setCancelReservationTarget(null)}
+          isSaving={cancelReservationSaving}
+          onClose={() => {
+            if (!cancelReservationSaving) setCancelReservationTarget(null);
+          }}
           onSelectReason={handleCancelReservationWithReason}
         />
       ) : null}
@@ -10121,11 +10128,13 @@ function ReservationDailyReminderEmptyOverlay({ onClose }: { onClose: () => void
 }
 
 function CancelReservationModal({
+  isSaving,
   onClose,
   onSelectReason
 }: {
+  isSaving: boolean;
   onClose: () => void;
-  onSelectReason: (reason: string) => void;
+  onSelectReason: (reason: string) => void | Promise<void>;
 }) {
   return (
     <div className="gpb-create-backdrop">
@@ -10135,24 +10144,29 @@ function CancelReservationModal({
             <strong>Причина снятия брони</strong>
             <span>Выберите вариант, чтобы снять бронь</span>
           </div>
-          <button type="button" onClick={onClose} title="Закрыть">
+          <button type="button" disabled={isSaving} onClick={onClose} title="Закрыть">
             <X size={18} />
           </button>
         </div>
         <div className="gpb-cancel-reservation-body">
-          <button type="button" onClick={() => onSelectReason("Клиент отменил, предоплата не возвращается")}>
+          <button type="button" disabled={isSaving} onClick={() => void onSelectReason("Клиент отменил, предоплата не возвращается")}>
             Клиент отменил, предоплата не возвращается
           </button>
-          <button type="button" onClick={() => onSelectReason("Клиент отменил, деньги возвращаются")}>
+          <button type="button" disabled={isSaving} onClick={() => void onSelectReason("Клиент отменил, деньги возвращаются")}>
             Клиент отменил, деньги возвращаются
           </button>
-          <button type="button" onClick={() => onSelectReason("Отель отменил, предоплата возвращается")}>
+          <button type="button" disabled={isSaving} onClick={() => void onSelectReason("Отель отменил, предоплата возвращается")}>
             Отель отменил, предоплата возвращается
           </button>
-          <button type="button" onClick={() => onSelectReason(BOOKING_ERROR_CANCEL_REASON)}>
+          <button type="button" disabled={isSaving} onClick={() => void onSelectReason(BOOKING_ERROR_CANCEL_REASON)}>
             Ошибка бронирования
           </button>
         </div>
+        {isSaving ? (
+          <div className="gpb-cancel-reservation-progress" role="status" aria-label="Снятие брони сохраняется">
+            <span />
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -11143,6 +11143,7 @@ body.gpb-reservation-split-resizing {
 }
 
 .gpb-cancel-reservation-modal {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: min(520px, 100%);
@@ -11179,6 +11180,40 @@ body.gpb-reservation-split-resizing {
 
 .gpb-cancel-reservation-body button:hover {
   border-color: #0f6b57;
+}
+
+.gpb-cancel-reservation-body button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.gpb-cancel-reservation-progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 5px;
+  overflow: hidden;
+  background: #dce7e3;
+}
+
+.gpb-cancel-reservation-progress span {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0f6b57, #27a887, #0f6b57);
+  animation: gpb-cancel-reservation-loading 1.05s ease-in-out infinite;
+}
+
+@keyframes gpb-cancel-reservation-loading {
+  from {
+    transform: translateX(-110%);
+  }
+
+  to {
+    transform: translateX(345%);
+  }
 }
 
 .gpb-create-header,

@@ -940,6 +940,7 @@ function getChatRowTitle(row: HTMLElement) {
 
 function getDraftStatusItem(draft: ChatBookingDraft): ChatStatusItem | null {
   const manualStatus = getManualChatStatusItem(draft.manualStatus, draft.manualStatusAt || draft.updatedAt);
+  if (draft.manualStatus === "cancelled" && draft.manualStatusAt) return manualStatus;
   if (draft.agreementEverSent || draft.agreementSent) return { label: "На согласовании", tone: "pending", updatedAt: draft.updatedAt };
   if (manualStatus && draft.manualStatusAt) return manualStatus;
   if (draft.catalogStatus === "room-sent") return { label: "Номер отправлен", tone: "info", updatedAt: draft.catalogStatusAt || draft.updatedAt };

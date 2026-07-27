@@ -32,6 +32,7 @@ let chatStatusEvents: EventSource | null = null;
 let manualStatusMenu: HTMLElement | null = null;
 let activeChatStatusRow: HTMLElement | null = null;
 let activeChatStatusIdentity: ReturnType<typeof getChatIdentityForRow> | null = null;
+const loadedChatStatuses = new Map<string, ChatStatusItem>();
 const observedOutgoingMessages = new WeakSet<Element>();
 let lastObservedOutgoingFingerprint = "";
 let chatStatusDebug = {
@@ -105,6 +106,7 @@ function startWhatsAppChatStatusOverlay() {
   const observer = new MutationObserver((mutations) => {
     if (mutations.length && mutations.every(isOwnChatStatusMutation)) return;
     detectOutgoingChatStatusEvents(mutations);
+    scheduleApplyChatStatuses();
   });
 
   observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -142,7 +144,6 @@ async function activateChatStatusRow(row: HTMLElement) {
   if (!identity.chatId) return;
   activeChatStatusRow = row;
   activeChatStatusIdentity = identity;
-  clearInactiveChatStatusRows(row);
   await applyLocalStatusToActiveChat();
 
   const activationKey = getChatStatusIdentityKey(identity);
@@ -159,6 +160,7 @@ async function activateChatStatusRow(row: HTMLElement) {
     const drafts = mergeChatDraftStatusSources(localSources.drafts, serverSources.drafts);
     const reservations = mergeReservationStatusSources(localSources.reservations, serverSources.reservations);
     chatStatusIndex = createChatStatusIndexFromSources(drafts, reservations);
+    syncLoadedStatusForActiveChat();
     applyChatStatusesToWhatsAppList();
   } catch {
     // The local status already remains visible for the selected chat.
@@ -169,6 +171,7 @@ async function applyLocalStatusToActiveChat() {
   if (!activeChatStatusRow || !activeChatStatusIdentity) return;
   const localSources = await getLocalChatStatusSources();
   chatStatusIndex = createChatStatusIndexFromSources(localSources.drafts, localSources.reservations);
+  syncLoadedStatusForActiveChat();
   applyChatStatusesToWhatsAppList();
 }
 
@@ -176,11 +179,32 @@ function getChatStatusIdentityKey(identity: ReturnType<typeof getChatIdentityFor
   return identity.waChatId || identity.phone || identity.chatId;
 }
 
-function clearInactiveChatStatusRows(activeRow: HTMLElement) {
-  const sidebar = getWhatsAppSidebar();
-  sidebar?.querySelectorAll<HTMLElement>(".gpb-wa-chat-status-row").forEach((row) => {
-    if (row !== activeRow) clearChatStatusRow(row);
-  });
+function getChatStatusIdentityKeys(identity: ReturnType<typeof getChatIdentityForRow>) {
+  return Array.from(new Set([
+    identity.waChatId ? `wa:${identity.waChatId}` : "",
+    identity.phone ? `phone:${identity.phone}` : "",
+    identity.chatId ? `chat:${identity.chatId}` : ""
+  ].filter(Boolean)));
+}
+
+function syncLoadedStatusForActiveChat() {
+  if (!activeChatStatusIdentity) return;
+  const status = getStatusForChatIdentity(activeChatStatusIdentity);
+  const keys = getChatStatusIdentityKeys(activeChatStatusIdentity);
+  if (!status || status.label === EMPTY_CHAT_STATUS.label) {
+    keys.forEach((key) => loadedChatStatuses.delete(key));
+    if (activeChatStatusRow) clearChatStatusRow(activeChatStatusRow);
+    return;
+  }
+  keys.forEach((key) => loadedChatStatuses.set(key, status));
+}
+
+function getLoadedStatusForIdentity(identity: ReturnType<typeof getChatIdentityForRow>) {
+  for (const key of getChatStatusIdentityKeys(identity)) {
+    const status = loadedChatStatuses.get(key);
+    if (status) return status;
+  }
+  return null;
 }
 
 async function fetchServerChatStatusForIdentity(identity: ReturnType<typeof getChatIdentityForRow>) {
@@ -318,6 +342,7 @@ function scheduleApplyChatStatuses() {
   if (chatStatusRefreshTimer) return;
   chatStatusRefreshTimer = window.setTimeout(() => {
     chatStatusRefreshTimer = null;
+    syncLoadedStatusForActiveChat();
     applyChatStatusesToWhatsAppList();
   }, 180);
 }
@@ -444,13 +469,26 @@ function createChatStatusIndexFromSources(drafts: Record<string, ChatBookingDraf
 }
 
 function applyChatStatusesToWhatsAppList() {
-  const row = activeChatStatusRow;
-  const identity = activeChatStatusIdentity;
-  if (!row || !identity || !row.isConnected) return;
-  clearInactiveChatStatusRows(row);
-  const status = getStatusForChatIdentity(identity) ?? EMPTY_CHAT_STATUS;
-  applyChatStatusToRow(row, status);
-  updateChatStatusDebug(1, 1);
+  const sidebar = getWhatsAppSidebar();
+  if (!sidebar) return;
+  const rows = getWhatsAppChatRows(sidebar);
+  let applied = 0;
+  rows.forEach((row) => {
+    const identity = getChatIdentityForRow(row);
+    const identityKey = getChatStatusIdentityKeys(identity)[0] || "";
+    const status = getLoadedStatusForIdentity(identity);
+    if (status) {
+      if (row.dataset.gpbChatStatusIdentity && row.dataset.gpbChatStatusIdentity !== identityKey) {
+        clearChatStatusRow(row);
+      }
+      applyChatStatusToRow(row, status);
+      row.dataset.gpbChatStatusIdentity = identityKey;
+      applied += 1;
+    } else if (row.dataset.gpbChatStatusIdentity) {
+      clearChatStatusRow(row);
+    }
+  });
+  updateChatStatusDebug(rows.length, applied);
 }
 
 function getStatusForChatIdentity(identity: ReturnType<typeof getChatIdentityForRow>) {
@@ -483,6 +521,10 @@ function getWhatsAppSidebar() {
 }
 
 function applyChatStatusToRow(row: HTMLElement, status: ChatStatusItem) {
+  if (status.label === EMPTY_CHAT_STATUS.label) {
+    clearChatStatusRow(row);
+    return;
+  }
   const nextToneClass = `gpb-wa-chat-status-${status.tone}`;
   const currentBadge = row.querySelector<HTMLElement>(".gpb-wa-chat-status-badge");
   const isAlreadyApplied = row.classList.contains("gpb-wa-chat-status-row") &&
@@ -529,6 +571,7 @@ function clearChatStatusRow(row: HTMLElement) {
   );
   row.querySelector(".gpb-wa-chat-status-badge")?.remove();
   row.removeAttribute("data-gpb-chat-status");
+  row.removeAttribute("data-gpb-chat-status-identity");
 }
 
 function isOwnChatStatusMutation(mutation: MutationRecord) {

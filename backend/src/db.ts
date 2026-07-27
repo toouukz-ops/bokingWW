@@ -29,6 +29,9 @@ export async function connectDatabase() {
   await db.collection("chatDrafts").createIndex({ chatId: 1 });
   await db.collection("chatDrafts").createIndex({ "draft.phone": 1 });
   await db.collection("chatDrafts").createIndex({ "draft.waChatId": 1 });
+  await db.collection("chatDrafts").createIndex({ "draft.guestFirstName": 1 });
+  await db.collection("chatDrafts").createIndex({ "draft.lastReservation.guestFirstName": 1 });
+  await db.collection("reservations").createIndex({ guestFirstName: 1 });
   await db.collection("roomHolds").createIndex({ id: 1 }, { unique: true });
   await db.collection("roomHolds").createIndex({ expiresAt: 1 });
   await db.collection("roomHolds").createIndex({ roomId: 1, checkIn: 1, checkOut: 1 });

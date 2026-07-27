@@ -212,6 +212,7 @@ async function fetchServerChatStatusForIdentity(identity: ReturnType<typeof getC
   params.set("chatId", identity.chatId);
   if (identity.phone) params.set("phone", `+${identity.phone}`);
   if (identity.waChatId) params.set("waChatId", identity.waChatId);
+  if (identity.title) params.set("title", identity.title);
   const response = await fetchWithTimeout(`${API_BASE_URL}/api/chat-status?${params.toString()}`, 8000);
   if (!response.ok) throw new Error(`Chat status request failed: ${response.status}`);
   const payload = await response.json();

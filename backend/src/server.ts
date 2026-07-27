@@ -2027,10 +2027,11 @@ app.get("/api/chat-statuses", async () => {
 });
 
 app.get("/api/chat-status", async (request) => {
-  const query = request.query as { chatId?: string; phone?: string; waChatId?: string };
+  const query = request.query as { chatId?: string; phone?: string; title?: string; waChatId?: string };
   const chatId = toSafeString(query.chatId).toLowerCase();
   const phoneDigits = normalizeReservationPhone(query.phone);
   const phone = phoneDigits ? `+${phoneDigits}` : "";
+  const title = toSafeString(query.title);
   const waChatId = toSafeString(query.waChatId).toLowerCase();
   const chatIds = [
     chatId,
@@ -2038,7 +2039,7 @@ app.get("/api/chat-status", async (request) => {
     waChatId ? `wa:${waChatId}` : ""
   ];
   const phones = phoneDigits ? [phone, phoneDigits] : [];
-  return getChatStatusSourcesForIdentityData(chatIds, phones, waChatId ? [waChatId] : []);
+  return getChatStatusSourcesForIdentityData(chatIds, phones, waChatId ? [waChatId] : [], title ? [title] : []);
 });
 
 app.get("/api/chat-drafts/:chatId", async (request) => {

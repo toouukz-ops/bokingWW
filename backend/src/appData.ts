@@ -67,21 +67,32 @@ export async function getChatStatusSourcesData() {
   };
 }
 
-export async function getChatStatusSourcesForIdentityData(chatIds: string[], phones: string[], waChatIds: string[]) {
+export async function getChatStatusSourcesForIdentityData(chatIds: string[], phones: string[], waChatIds: string[], titles: string[]) {
   const normalizedChatIds = Array.from(new Set(chatIds.filter(Boolean)));
   const normalizedPhones = Array.from(new Set(phones.filter(Boolean)));
   const normalizedWaChatIds = Array.from(new Set(waChatIds.filter(Boolean)));
+  const normalizedTitles = Array.from(new Set(titles.map((title) => title.trim()).filter(Boolean)));
   const draftFilters: Array<Record<string, unknown>> = [];
   if (normalizedChatIds.length) draftFilters.push({ chatId: { $in: normalizedChatIds } });
   if (normalizedPhones.length) draftFilters.push({ "draft.phone": { $in: normalizedPhones } });
   if (normalizedWaChatIds.length) draftFilters.push({ "draft.waChatId": { $in: normalizedWaChatIds } });
+  if (normalizedTitles.length) {
+    draftFilters.push({ "draft.guestFirstName": { $in: normalizedTitles } });
+    draftFilters.push({ "draft.lastReservation.guestFirstName": { $in: normalizedTitles } });
+  }
 
   const [draftDocuments, reservationDocuments] = await Promise.all([
     draftFilters.length
       ? chatDrafts.find({ $or: draftFilters }).toArray()
       : Promise.resolve([]),
-    normalizedPhones.length
-      ? reservations.find({ phone: { $in: normalizedPhones }, isAddOnSale: { $ne: true } }).toArray()
+    normalizedPhones.length || normalizedTitles.length
+      ? reservations.find({
+        $or: [
+          ...(normalizedPhones.length ? [{ phone: { $in: normalizedPhones } }] : []),
+          ...(normalizedTitles.length ? [{ guestFirstName: { $in: normalizedTitles } }] : [])
+        ],
+        isAddOnSale: { $ne: true }
+      }).toArray()
       : Promise.resolve([])
   ]);
 

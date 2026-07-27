@@ -1168,6 +1168,7 @@ export function BookingPanel() {
   const [ignoredRoomHoldIds, setIgnoredRoomHoldIds] = useState<string[]>([]);
   const [cancelReservationTarget, setCancelReservationTarget] = useState<Reservation | null>(null);
   const [cancelReservationSaving, setCancelReservationSaving] = useState(false);
+  const [reservationConfirming, setReservationConfirming] = useState(false);
   const [deleteReservationTarget, setDeleteReservationTarget] = useState<Reservation | null>(null);
   const [prepaymentAmountTarget, setPrepaymentAmountTarget] = useState<Reservation | null>(null);
   const [roomDateEditTarget, setRoomDateEditTarget] = useState<Room | null>(null);
@@ -1223,6 +1224,8 @@ export function BookingPanel() {
   const clearedBookingPhoneRef = useRef("");
   const recentContactExtractionAtRef = useRef(0);
   const saveChatDraftTimerRef = useRef<number | null>(null);
+  const draftServerSavePendingRef = useRef(new Map<string, ChatBookingDraft>());
+  const draftServerSaveWorkerRef = useRef(new Map<string, Promise<void>>());
   const draftCacheRef = useRef<Record<string, ChatBookingDraft>>({});
   const lastAppliedDraftUpdatedAtRef = useRef("");
   const draftCacheLoadPromiseRef = useRef<Promise<Record<string, ChatBookingDraft>> | null>(null);
@@ -2446,11 +2449,18 @@ export function BookingPanel() {
 
     const timeoutId = window.setTimeout(async () => {
       const sourceChatId = activeChat.id;
-      const extracted = await extractGuestPhoneFromChat({ allowProfileLookup: true });
-      if (isCancelled || activeChatIdRef.current !== sourceChatId || !extracted?.phone) return;
-      const normalizedPhone = formatStrictContactPhone(extracted.phone);
+      for (let attempt = 0; attempt < 60 && isRestoringChatDraftRef.current; attempt += 1) {
+        await waitForDelay(200);
+      }
+      if (isCancelled || activeChatIdRef.current !== sourceChatId) return;
+      const normalizedPhone = formatStrictContactPhone(
+        activeChat.phone ||
+        contactDatabasePhone ||
+        resolvePanelGuestPhone()
+      );
       if (!isCompleteContactPhone(normalizedPhone)) return;
-      const contactName = extracted.name || getGuestNameFallbackFromPhone(normalizedPhone);
+      const contactName = resolveGuestNameForPhone(guestFirstName || activeChat.title, normalizedPhone)
+        || getGuestNameFallbackFromPhone(normalizedPhone);
       const saved = await saveContactToDatabase(contactName, normalizedPhone);
       if (isCancelled || activeChatIdRef.current !== sourceChatId) return;
       setContactSaveState(saved ? "saved" : "error");
@@ -2458,7 +2468,7 @@ export function BookingPanel() {
         setContactLookupNotice({ tone: "success", text: "Контакт автоматически связан с активным чатом." });
       }
       window.setTimeout(() => setContactSaveState("idle"), 1800);
-    }, 450);
+    }, 650);
 
     return () => {
       isCancelled = true;
@@ -2473,7 +2483,17 @@ export function BookingPanel() {
       window.clearTimeout(saveChatDraftTimerRef.current);
     }
 
-    void saveCurrentChatDraft();
+    saveChatDraftTimerRef.current = window.setTimeout(() => {
+      saveChatDraftTimerRef.current = null;
+      void saveCurrentChatDraft();
+    }, 700);
+
+    return () => {
+      if (saveChatDraftTimerRef.current) {
+        window.clearTimeout(saveChatDraftTimerRef.current);
+        saveChatDraftTimerRef.current = null;
+      }
+    };
   }, [
     activeChat?.id,
     checkIn,
@@ -2996,7 +3016,6 @@ export function BookingPanel() {
     const chatPhone = formatPhoneDigits(chat.phone || "");
     const phoneBelongsToChat = !normalizedPhone || !chatPhone || phonesMatchForContactLookup(chatPhone, normalizedPhone);
     const phoneChatId = normalizedPhone ? createChatId(`phone:${normalizedPhone}`) : "";
-    const shouldSaveOnlyPhoneAlias = Boolean(normalizedPhone && phoneChatId && !chatPhone && chat.id.startsWith("title:"));
     const waChatId = chat.waChatId || draft.waChatId || "";
     const waChatKey = waChatId ? createChatId(`wa:${waChatId}`) : "";
 
@@ -3014,17 +3033,12 @@ export function BookingPanel() {
       return;
     }
 
-    if (!shouldSaveOnlyPhoneAlias) {
-      await saveCachedChatBookingDraft(chat.id, draft);
-    }
-    if (waChatKey && waChatKey !== chat.id) {
-      await saveCachedChatBookingDraft(waChatKey, draft);
-    }
-    if (phoneChatId && phoneChatId !== chat.id) {
-      const existingPhoneDraft = getCachedChatBookingDraft(phoneChatId) ?? await getChatBookingDraft(phoneChatId);
-      const mergedDraft = mergeChatDraftForPhoneAlias(existingPhoneDraft ?? undefined, draft);
-      await saveCachedChatBookingDraft(phoneChatId, mergedDraft);
-    }
+    const canonicalChatId = phoneChatId || waChatKey || chat.id;
+    const existingDraft = getCachedChatBookingDraft(canonicalChatId) ?? await getChatBookingDraft(canonicalChatId);
+    const canonicalDraft = phoneChatId
+      ? mergeChatDraftForPhoneAlias(existingDraft ?? undefined, draft)
+      : draft;
+    await saveCachedChatBookingDraft(canonicalChatId, canonicalDraft);
   }
 
   function updateDraftCache(chatId: string, draft: ChatBookingDraft) {
@@ -3044,7 +3058,26 @@ export function BookingPanel() {
     if (isRealtimeDraftForActiveChat(chatId, draft)) {
       lastAppliedDraftUpdatedAtRef.current = maxIsoDate(lastAppliedDraftUpdatedAtRef.current, draft.updatedAt);
     }
-    await saveChatBookingDraft(chatId, draft);
+    draftServerSavePendingRef.current.set(chatId, draft);
+    const existingWorker = draftServerSaveWorkerRef.current.get(chatId);
+    if (existingWorker) {
+      await existingWorker;
+      const queuedDraft = draftServerSavePendingRef.current.get(chatId);
+      if (queuedDraft) await saveCachedChatBookingDraft(chatId, queuedDraft);
+      return;
+    }
+
+    const worker = (async () => {
+      while (draftServerSavePendingRef.current.has(chatId)) {
+        const latestDraft = draftServerSavePendingRef.current.get(chatId);
+        draftServerSavePendingRef.current.delete(chatId);
+        if (latestDraft) await saveChatBookingDraft(chatId, latestDraft);
+      }
+    })().finally(() => {
+      draftServerSaveWorkerRef.current.delete(chatId);
+    });
+    draftServerSaveWorkerRef.current.set(chatId, worker);
+    await worker;
   }
 
   function applyRealtimeChatDraft(chatId: string, draft: ChatBookingDraft) {
@@ -5671,7 +5704,10 @@ export function BookingPanel() {
       const fastProfile = await extractActiveChatPhoneFast(sourceChat);
       const profile = fastProfile.phone || !options.allowProfileLookup
         ? fastProfile
-        : await extractActiveChatPhoneOnly(sourceChat);
+        : {
+          name: extractNameFromActiveChat(sourceChat),
+          phone: await extractPhoneFromCurrentChatProfile(sourceChat)
+        };
       if (sourceChatId && activeChatIdRef.current !== sourceChatId) return null;
       const phone = profile.phone;
       if (!phone) {
@@ -6690,12 +6726,15 @@ export function BookingPanel() {
   }
 
   async function handleConfirmReservation() {
+    if (reservationConfirming) return;
     const reservation = currentReservationDraft;
     if (!reservation) return;
     if (hasSelectedHourlyConflict) return;
     if (!ensureReservationDatesAreNotPast(reservation)) return;
     if (!ensureSelectedRoomsAreNotHeldByAnotherGuest()) return;
     if (!ensurePaymentMethodSelected()) return;
+    setReservationConfirming(true);
+    try {
     const existingReservation = findExistingReservationForDraft(reservation);
     const confirmedReservation = mergeReservationPaymentState({
       ...reservation,
@@ -6734,6 +6773,9 @@ export function BookingPanel() {
       clearRoomHoldsForReservation(savedReservation, true),
       saveAgreementDraftForReservation(savedReservation, { includeActiveChat: true })
     ]);
+    } finally {
+      setReservationConfirming(false);
+    }
   }
 
   async function cancelReservation(reservation: Reservation, reason?: string) {
@@ -8934,8 +8976,8 @@ export function BookingPanel() {
                   <span>Снять бронь</span>
                 </button>
               ) : (
-                <button className={canConfirmAgreement ? "gpb-primary" : "gpb-secondary"} type="button" onClick={handleConfirmReservation} disabled={!canConfirmAgreement}>
-                  <span>Подтвердить бронь</span>
+                <button className={canConfirmAgreement ? "gpb-primary" : "gpb-secondary"} type="button" onClick={handleConfirmReservation} disabled={!canConfirmAgreement || reservationConfirming}>
+                  <span>{reservationConfirming ? "Сохраняю бронь…" : "Подтвердить бронь"}</span>
                 </button>
               )}
               <button className="gpb-secondary" type="button" onClick={sendBookingPriceProposalToWhatsApp} disabled={isBookingConfirmed || !canSendAgreementText || !selectedBookingRooms.length || sendState === "sending"}>
@@ -19289,17 +19331,15 @@ async function extractActiveChatPhoneOnly(activeChat: ActiveChat | null) {
 }
 
 async function extractActiveChatPhoneFast(activeChat: ActiveChat | null) {
-  const phoneFromStore = await extractPhoneFromWhatsAppStore();
-  const phoneFromSelected = extractPhoneFromSelectedChat();
-  const phoneFromDom = extractPhoneFromActiveChat();
-  const phone = phoneFromSelected || phoneFromStore || phoneFromDom || activeChat?.phone || "";
+  const phoneFromChatIdentity = formatStrictContactPhone(activeChat?.phone || "");
+  const phoneFromTitle = extractPhoneFromText(activeChat?.title || "");
+  const phone = phoneFromChatIdentity || phoneFromTitle;
   debugContactFlow("extract-phone-fast-result", {
     activeChatId: activeChat?.id ?? "",
     activeChatTitle: activeChat?.title ?? "",
     activeChatPhone: activeChat?.phone ?? "",
-    phoneFromSelected,
-    phoneFromStore,
-    phoneFromDom,
+    phoneFromChatIdentity,
+    phoneFromTitle,
     phone
   });
   return {
@@ -19309,13 +19349,11 @@ async function extractActiveChatPhoneFast(activeChat: ActiveChat | null) {
 }
 
 async function extractPhoneFromCurrentChatProfile(activeChat: ActiveChat | null = null) {
-  const phoneFromStore = await extractPhoneFromWhatsAppStore();
-  const phoneFromDom = extractPhoneFromActiveChat();
-  if (phoneFromStore || phoneFromDom || activeChat?.phone) {
+  const phoneFromIdentity = formatStrictContactPhone(activeChat?.phone || "");
+  if (phoneFromIdentity) {
     debugContactFlow("extract-phone-fast-source", {
       activeChatPhone: activeChat?.phone ?? "",
-      phoneFromStore,
-      phoneFromDom
+      phoneFromIdentity
     });
   }
 
@@ -19324,16 +19362,16 @@ async function extractPhoneFromCurrentChatProfile(activeChat: ActiveChat | null 
   openActiveChatProfile();
 
   const profilePanel = await waitForElement(findVisibleProfilePanel, 3200);
-  if (!profilePanel) return phoneFromStore || phoneFromDom || activeChat?.phone || "";
+  if (!profilePanel) return phoneFromIdentity;
 
   let profileText = getVisibleProfileText();
-  let phone = extractPhoneFromText(profileText) || phoneFromStore || phoneFromDom || activeChat?.phone || "";
+  let phone = extractPhoneFromText(profileText) || phoneFromIdentity;
 
   if (!phone) {
     clickProfileContactDetails();
     await waitForProfileTextChange(profileText, 2500);
     profileText = getVisibleProfileText();
-    phone = extractPhoneFromText(profileText) || extractPhoneFromText(getBroadPhoneSearchText()) || phoneFromStore || phoneFromDom || activeChat?.phone || "";
+    phone = extractPhoneFromText(profileText) || phoneFromIdentity;
   }
 
   closeWhatsAppProfilePanels();

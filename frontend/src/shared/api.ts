@@ -240,6 +240,10 @@ export async function deleteGuestContact(phone: string): Promise<void> {
 }
 
 export async function sendDebugLog(event: string, details: Record<string, unknown> = {}): Promise<void> {
+  if (import.meta.env.PROD) {
+    console.debug(`[GPB debug] ${event}`, details);
+    return;
+  }
   try {
     await fetch(`${API_BASE_URL}/api/debug/logs`, {
       method: "POST",

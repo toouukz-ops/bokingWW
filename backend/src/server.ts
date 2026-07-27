@@ -64,6 +64,7 @@ const app = Fastify({
 });
 
 await app.register(cors, {
+  maxAge: 86_400,
   origin: (origin, callback) => {
     if (
       !origin ||

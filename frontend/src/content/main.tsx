@@ -31,6 +31,10 @@ let manualStatusMenu: HTMLElement | null = null;
 let activeChatStatusRow: HTMLElement | null = null;
 let activeChatStatusIdentity: ReturnType<typeof getChatIdentityForRow> | null = null;
 const loadedChatStatuses = new Map<string, ChatStatusItem>();
+let startupLocalStatusSources: { drafts: Record<string, ChatBookingDraft>; reservations: Reservation[] } = {
+  drafts: {},
+  reservations: []
+};
 const observedOutgoingMessages = new WeakSet<Element>();
 let lastObservedOutgoingFingerprint = "";
 let chatStatusDebug = {
@@ -100,6 +104,7 @@ function startWhatsAppChatStatusOverlay() {
     return;
   }
   chatStatusOverlayStarted = true;
+  void hydrateStartupLocalStatuses();
 
   const observer = new MutationObserver((mutations) => {
     if (mutations.length && mutations.every(isOwnChatStatusMutation)) return;
@@ -121,6 +126,24 @@ function startWhatsAppChatStatusOverlay() {
     chatStatusOverlayStarted = false;
     observer.disconnect();
   }
+}
+
+async function hydrateStartupLocalStatuses() {
+  startupLocalStatusSources = await getLocalChatStatusSources();
+  scheduleApplyChatStatuses();
+}
+
+function saveTargetedStatusSourcesLocally(drafts: Record<string, ChatBookingDraft>, reservations: Reservation[]) {
+  return new Promise<void>((resolve) => {
+    if (!canUseChromeStorage()) {
+      resolve();
+      return;
+    }
+    chrome.storage.local.set({
+      [LOCAL_CHAT_DRAFTS_STORAGE_KEY]: drafts,
+      [LOCAL_RESERVATIONS_STORAGE_KEY]: reservations
+    }, () => resolve());
+  });
 }
 
 function handleChatStatusActivationClick(event: MouseEvent) {
@@ -155,6 +178,8 @@ async function activateChatStatusRow(row: HTMLElement) {
     const localSources = await getLocalChatStatusSources();
     const drafts = mergeChatDraftStatusSources(localSources.drafts, serverSources.drafts);
     const reservations = mergeReservationStatusSources(localSources.reservations, serverSources.reservations);
+    startupLocalStatusSources = { drafts, reservations };
+    await saveTargetedStatusSourcesLocally(drafts, reservations);
     const status = resolveStatusForIdentityFromSources(identity, drafts, reservations) ?? EMPTY_CHAT_STATUS;
     syncLoadedStatusForIdentity(identity, status);
     applyChatStatusesToWhatsAppList();
@@ -494,6 +519,14 @@ function applyChatStatusesToWhatsAppList() {
   rows.forEach((row) => {
     const identity = getChatIdentityForRow(row);
     const identityKey = getChatStatusIdentityKeys(identity)[0] || "";
+    const cachedStatus = resolveStatusForIdentityFromSources(
+      identity,
+      startupLocalStatusSources.drafts,
+      startupLocalStatusSources.reservations
+    );
+    if (!getLoadedStatusForIdentity(identity) && cachedStatus) {
+      syncLoadedStatusForIdentity(identity, cachedStatus);
+    }
     const status = getLoadedStatusForIdentity(identity);
     if (status) {
       if (row.dataset.gpbChatStatusIdentity && row.dataset.gpbChatStatusIdentity !== identityKey) {
@@ -647,7 +680,7 @@ function getWhatsAppChatRows(sidebar: HTMLElement) {
 
 function uniqueChatRows(rows: HTMLElement[]) {
   const sortedRows = rows.sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top);
-  return sortedRows.filter((row) => !sortedRows.some((otherRow) => otherRow !== row && row.contains(otherRow)));
+  return sortedRows.filter((row) => !sortedRows.some((otherRow) => otherRow !== row && otherRow.contains(row)));
 }
 
 function findWhatsAppChatRow(element: HTMLElement, sidebar: HTMLElement, sidebarRect: DOMRect) {

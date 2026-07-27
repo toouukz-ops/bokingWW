@@ -3487,26 +3487,12 @@ export function BookingPanel() {
     const restoredCheckIn = shouldResetPastBookingFields ? getDefaultCheckInDate() : restoredDraft.checkIn;
     const restoredCheckOut = shouldResetPastBookingFields ? getDefaultCheckOutDate() : restoredDraft.checkOut;
     if (restoredDraft !== draft && activeChat) {
-      const shouldPersistRestoredReservation = Boolean(
-        restoredDraft.lastReservation &&
-        reservations.some((reservation) =>
-          reservation.id === restoredDraft.lastReservation?.id &&
-          reservation.status !== "cancelled" &&
-          !reservation.noShowAt
-        )
-      );
-      if (restoredDraft.lastReservation && shouldPersistRestoredReservation) {
-        void saveReservation(restoredDraft.lastReservation);
-      }
+      // Draft restoration is read-only for reservations. A stale draft must
+      // never overwrite a newer payment, confirmation, check-in or cancellation.
       void saveCachedChatBookingDraft(activeChat.id, {
         ...restoredDraft,
         updatedAt: new Date().toISOString()
       });
-      if (restoredDraft.lastReservation && shouldPersistRestoredReservation) {
-        setReservations((currentReservations) => currentReservations.map((reservation) =>
-          reservation.id === restoredDraft.lastReservation?.id ? restoredDraft.lastReservation as Reservation : reservation
-        ));
-      }
       void sendDebugLog("chat-draft-reservation-date-repaired-on-restore", {
         activeChatId: activeChat.id,
         reservationId: restoredDraft.lastReservation?.id ?? "",

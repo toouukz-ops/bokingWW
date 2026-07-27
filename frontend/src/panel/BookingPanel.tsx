@@ -6012,6 +6012,8 @@ export function BookingPanel() {
     if (!normalizedPhone) return;
     const contactName = resolveGuestNameForPhone(reservation.guestFirstName, normalizedPhone);
     if (!contactName) return;
+    const existingContact = findStoredGuestContactByPhone(normalizedPhone);
+    if (existingContact) return;
     await saveContactToDatabase(contactName, normalizedPhone);
   }
 
@@ -6145,7 +6147,6 @@ export function BookingPanel() {
 
       const savedContact = await withContactSaveTimeout(saveGuestContact(contactForSave), 9000);
       applySavedContact(savedContact);
-      void loadGuestContacts();
       debugContactFlow("database-save-success", savedContact as unknown as Record<string, unknown>);
       return true;
     } catch (error) {
@@ -6153,7 +6154,6 @@ export function BookingPanel() {
       const savedContact = await lookupSavedContactAfterSaveFailure(normalizedPhone, message);
       if (savedContact) {
         applySavedContact(savedContact);
-        void loadGuestContacts();
         debugContactFlow("database-save-confirmed-after-error", {
           normalizedPhone,
           message,
@@ -6761,8 +6761,11 @@ export function BookingPanel() {
     }, existingReservation);
     let savedReservation: Reservation;
     if (existingReservation) {
-      const draftSaved = await updateReservation({ ...confirmedReservation, status: existingReservation.status });
-      if (!draftSaved) return;
+      const pendingUpdate = { ...confirmedReservation, status: existingReservation.status };
+      if (reservationConfirmationNeedsSave(existingReservation, pendingUpdate)) {
+        const draftSaved = await updateReservation(pendingUpdate);
+        if (!draftSaved) return;
+      }
       try {
         savedReservation = await applyReservationAction(confirmedReservation.id, "confirm", {
           clientId: syncClientIdRef.current

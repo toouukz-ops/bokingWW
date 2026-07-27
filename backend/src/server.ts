@@ -44,6 +44,7 @@ import {
   saveReservationData,
   saveRoomHoldData
 } from "./appData.js";
+import { resolveChatStatus } from "./chatStatusDomain.js";
 import { applyReservationAction, isBlockingReservation, type ReservationAction } from "./reservationDomain.js";
 import { mergeChatDraftUpdate } from "./chatDraftDomain.js";
 import { exportServerBackup, importServerBackup } from "./backup.js";
@@ -2095,7 +2096,11 @@ app.get("/api/chat-status", async (request) => {
     waChatId ? `wa:${waChatId}` : ""
   ];
   const phones = phoneDigits ? [phone, phoneDigits] : [];
-  return getChatStatusSourcesForIdentityData(chatIds, phones, waChatId ? [waChatId] : [], title ? [title] : []);
+  const sources = await getChatStatusSourcesForIdentityData(chatIds, phones, waChatId ? [waChatId] : [], title ? [title] : []);
+  return {
+    ...sources,
+    resolvedStatus: resolveChatStatus(sources.drafts, sources.reservations)
+  };
 });
 
 app.get("/api/chat-drafts/:chatId", async (request) => {

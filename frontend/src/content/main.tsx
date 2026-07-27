@@ -11,6 +11,8 @@ type ChatStatusTone = "info" | "pending" | "success" | "extended" | "muted" | "d
 type ChatStatusItem = {
   label: string;
   manualStatus?: ManualChatStatus;
+  reservationId?: string;
+  source?: "draft" | "reservation";
   tone: ChatStatusTone;
   updatedAt: string;
 };
@@ -174,7 +176,7 @@ async function activateChatStatusRow(row: HTMLElement) {
     const reservations = mergeReservationStatusSources(localSources.reservations, serverSources.reservations);
     startupLocalStatusSources = { drafts, reservations };
     await saveTargetedStatusSourcesLocally(drafts, reservations);
-    const status = resolveStatusForIdentityFromSources(identity, drafts, reservations) ?? EMPTY_CHAT_STATUS;
+    const status = serverSources.resolvedStatus ?? EMPTY_CHAT_STATUS;
     syncLoadedStatusForIdentity(identity, status);
     applyChatStatusesToWhatsAppList();
   } catch {
@@ -236,7 +238,24 @@ async function fetchServerChatStatusForIdentity(identity: ReturnType<typeof getC
   const payload = await response.json();
   return {
     drafts: normalizeChatDrafts((payload as { drafts?: unknown })?.drafts),
-    reservations: normalizeReservations((payload as { reservations?: unknown })?.reservations)
+    reservations: normalizeReservations((payload as { reservations?: unknown })?.reservations),
+    resolvedStatus: normalizeResolvedChatStatus((payload as { resolvedStatus?: unknown })?.resolvedStatus)
+  };
+}
+
+function normalizeResolvedChatStatus(value: unknown): ChatStatusItem | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const tone = String(record.tone || "") as ChatStatusTone;
+  if (!["info", "pending", "success", "extended", "muted", "danger"].includes(tone)) return null;
+  const label = typeof record.label === "string" ? record.label.trim() : "";
+  if (!label) return null;
+  return {
+    label,
+    reservationId: typeof record.reservationId === "string" ? record.reservationId : undefined,
+    source: record.source === "reservation" ? "reservation" : "draft",
+    tone,
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : ""
   };
 }
 
@@ -416,8 +435,8 @@ function resolveStatusForIdentityFromSources(
   const identityPhone = normalizePhone(identity.phone);
   const identityWaChatId = normalizeWhatsAppChatId(identity.waChatId);
   const identityTitle = normalizeTitle(identity.title);
-  const strongCandidates: ChatStatusItem[] = [];
-  const titleCandidates: ChatStatusItem[] = [];
+  const strongDrafts: ChatBookingDraft[] = [];
+  const titleDrafts: ChatBookingDraft[] = [];
 
   Object.entries(drafts).forEach(([chatId, draft]) => {
     const draftPhone = normalizePhone(draft.phone);
@@ -432,28 +451,30 @@ function resolveStatusForIdentityFromSources(
       Boolean(identityPhone && draftPhone === identityPhone);
     const titleMatch = Boolean(identityTitle && draftTitles.includes(identityTitle));
     if (!strongMatch && !titleMatch) return;
-    const status = getDraftStatusItem(draft);
-    if (status) (strongMatch ? strongCandidates : titleCandidates).push(status);
+    (strongMatch ? strongDrafts : titleDrafts).push(draft);
   });
 
-  reservations.forEach((reservation) => {
+  const matchingReservations = reservations.filter((reservation) => {
     const strongMatch = Boolean(identityPhone && normalizePhone(reservation.phone) === identityPhone);
     const titleMatch = Boolean(identityTitle && normalizeTitle(reservation.guestFirstName) === identityTitle);
-    if (strongMatch || titleMatch) {
-      (strongMatch ? strongCandidates : titleCandidates).push(getReservationStatusItem(reservation));
-    }
+    return strongMatch || titleMatch;
   });
 
-  const candidates = strongCandidates.length ? strongCandidates : titleCandidates;
-  return candidates.reduce<ChatStatusItem | null>((current, candidate) => {
-    if (!current) return candidate;
-    const currentPriority = getStatusPriority(current);
-    const candidatePriority = getStatusPriority(candidate);
-    if (candidatePriority !== currentPriority) {
-      return candidatePriority > currentPriority ? candidate : current;
-    }
-    return getStatusUpdatedAt(candidate).localeCompare(getStatusUpdatedAt(current)) >= 0 ? candidate : current;
-  }, null);
+  const latestDraft = (strongDrafts.length ? strongDrafts : titleDrafts)
+    .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")))[0] ?? null;
+  const linkedReservationId = latestDraft?.lastReservation?.id || "";
+  const linkedReservation = linkedReservationId
+    ? matchingReservations.find((reservation) => reservation.id === linkedReservationId) ?? null
+    : null;
+  if (linkedReservation) return getReservationStatusItem(linkedReservation);
+
+  const latestReservation = matchingReservations
+    .filter((reservation) => !reservation.isAddOnSale)
+    .sort((left, right) =>
+      getReservationStatusUpdatedAt(right).localeCompare(getReservationStatusUpdatedAt(left))
+    )[0] ?? null;
+  if (latestReservation) return getReservationStatusItem(latestReservation);
+  return latestDraft ? getDraftStatusItem(latestDraft) : null;
 }
 
 function fetchWithTimeout(url: string, timeoutMs: number, init?: RequestInit) {

@@ -116,7 +116,7 @@ function startWhatsAppChatStatusOverlay() {
     chrome.storage?.onChanged?.addListener((changes, areaName) => {
       if (areaName !== "local") return;
       if (!changes[LOCAL_CHAT_DRAFTS_STORAGE_KEY] && !changes[LOCAL_RESERVATIONS_STORAGE_KEY]) return;
-      void applyLocalStatusToActiveChat();
+      void applyLocalStatusToSelectedChat();
     });
   } catch {
     chatStatusOverlayStarted = false;
@@ -150,8 +150,18 @@ function handleChatStatusActivationClick(event: MouseEvent) {
   const row = findWhatsAppChatRow(target, sidebar, sidebar.getBoundingClientRect());
   if (!row) return;
   window.setTimeout(() => {
-    void activateChatStatusRow(row);
+    void activateChatStatusRow(getSelectedWhatsAppChatRow() ?? row);
   }, 0);
+}
+
+function getSelectedWhatsAppChatRow() {
+  const sidebar = getWhatsAppSidebar();
+  if (!sidebar) return null;
+  const selectedElements = Array.from(sidebar.querySelectorAll<HTMLElement>(
+    '[aria-selected="true"], [data-testid="cell-frame-container"][aria-selected="true"]'
+  ));
+  const rows = getWhatsAppChatRows(sidebar);
+  return rows.find((row) => selectedElements.some((selected) => row === selected || row.contains(selected) || selected.contains(row))) ?? null;
 }
 
 async function activateChatStatusRow(row: HTMLElement) {
@@ -190,6 +200,15 @@ async function applyLocalStatusToActiveChat() {
   const status = resolveStatusForIdentityFromSources(activeChatStatusIdentity, localSources.drafts, localSources.reservations) ?? EMPTY_CHAT_STATUS;
   syncLoadedStatusForIdentity(activeChatStatusIdentity, status);
   applyChatStatusesToWhatsAppList();
+}
+
+async function applyLocalStatusToSelectedChat() {
+  const selectedRow = getSelectedWhatsAppChatRow();
+  if (selectedRow) {
+    activeChatStatusRow = selectedRow;
+    activeChatStatusIdentity = getChatIdentityForRow(selectedRow);
+  }
+  await applyLocalStatusToActiveChat();
 }
 
 function getChatStatusIdentityKey(identity: ReturnType<typeof getChatIdentityForRow>) {

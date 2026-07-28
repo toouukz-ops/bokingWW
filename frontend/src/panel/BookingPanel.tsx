@@ -6081,8 +6081,9 @@ export function BookingPanel() {
       manualSalePaymentMethod: reservation.paymentMethod ?? manualSalePaymentMethod,
       phone: normalizedPhone || reservation.phone,
       prepaymentAlreadyPaid: Boolean(reservation.prepaymentReceivedAt),
-      manualStatus: reservation.status === "cancelled" ? "cancelled" : "none",
-      manualStatusAt: new Date().toISOString()
+      ...(reservation.status === "cancelled"
+        ? { manualStatus: "cancelled" as const, manualStatusAt: new Date().toISOString() }
+        : {})
     };
 
     await Promise.all(chats.map((chat) => saveChatDraftForChat(chat, draftPatch)));

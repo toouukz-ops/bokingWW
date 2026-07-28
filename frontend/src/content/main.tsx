@@ -27,6 +27,7 @@ type ChatStatusIndex = {
 
 let chatStatusIndex: ChatStatusIndex = createEmptyChatStatusIndex();
 let chatStatusRefreshTimer: number | null = null;
+let localStatusRefreshTimer: number | null = null;
 let chatStatusOverlayStarted = false;
 let chatStatusRefreshInFlight = false;
 let manualStatusMenu: HTMLElement | null = null;
@@ -116,12 +117,44 @@ function startWhatsAppChatStatusOverlay() {
     chrome.storage?.onChanged?.addListener((changes, areaName) => {
       if (areaName !== "local") return;
       if (!changes[LOCAL_CHAT_DRAFTS_STORAGE_KEY] && !changes[LOCAL_RESERVATIONS_STORAGE_KEY]) return;
-      void applyLocalStatusToSelectedChat();
+      if (changes[LOCAL_CHAT_DRAFTS_STORAGE_KEY]) {
+        startupLocalStatusSources.drafts = normalizeChatDrafts(changes[LOCAL_CHAT_DRAFTS_STORAGE_KEY].newValue);
+      }
+      if (changes[LOCAL_RESERVATIONS_STORAGE_KEY]) {
+        startupLocalStatusSources.reservations = normalizeReservations(changes[LOCAL_RESERVATIONS_STORAGE_KEY].newValue);
+      }
+      scheduleLocalStatusRefresh();
     });
   } catch {
     chatStatusOverlayStarted = false;
     observer.disconnect();
   }
+}
+
+function scheduleLocalStatusRefresh() {
+  if (localStatusRefreshTimer !== null) {
+    window.clearTimeout(localStatusRefreshTimer);
+  }
+  localStatusRefreshTimer = window.setTimeout(() => {
+    localStatusRefreshTimer = null;
+    applyCachedLocalStatusToSelectedChat();
+  }, 0);
+}
+
+function applyCachedLocalStatusToSelectedChat() {
+  const selectedRow = getSelectedWhatsAppChatRow();
+  if (selectedRow) {
+    activeChatStatusRow = selectedRow;
+    activeChatStatusIdentity = getChatIdentityForRow(selectedRow);
+  }
+  if (!activeChatStatusRow || !activeChatStatusIdentity) return;
+  const status = resolveStatusForIdentityFromSources(
+    activeChatStatusIdentity,
+    startupLocalStatusSources.drafts,
+    startupLocalStatusSources.reservations
+  ) ?? EMPTY_CHAT_STATUS;
+  syncLoadedStatusForIdentity(activeChatStatusIdentity, status);
+  applyChatStatusesToWhatsAppList();
 }
 
 async function hydrateStartupLocalStatuses() {

@@ -1379,9 +1379,11 @@ export function BookingPanel() {
     }
     return null;
   }, [activeChat?.phone, guestPhone, guestPhonePrefix, reservations]);
-  const panelActiveReservation = isBookingPanelWorkflowReservation(lastReservation)
+  const panelActiveReservation = isBookingPanelActiveReservation(lastReservation)
     ? lastReservation
-    : phoneMatchedActiveReservation;
+    : lastReservation
+      ? null
+      : phoneMatchedActiveReservation;
   const bookedReservationRooms = useMemo(
     () => panelActiveReservation
       ? panelActiveReservation.roomIds
@@ -3815,8 +3817,12 @@ export function BookingPanel() {
   const canSendAgreementText = Boolean(currentReservationDraft && !hasSelectedHourlyConflict && !currentReservationHasPastDate);
   const canConfirmAgreement = Boolean(currentReservationDraft && currentReservationDraft.status !== "cancelled" && !hasSelectedHourlyConflict && !currentReservationHasPastDate);
   const isBookingConfirmed = Boolean(panelActiveReservation?.status === "booked");
-  const cancelableReservation = panelActiveReservation ?? phoneMatchedActiveReservation;
-  const actionableReservation = panelActiveReservation ?? phoneMatchedActiveReservation ?? lastReservation;
+  const cancelableReservation = isBookingPanelActiveReservation(lastReservation)
+    ? lastReservation
+    : lastReservation
+      ? null
+      : phoneMatchedActiveReservation;
+  const actionableReservation = cancelableReservation;
   const isBookingLocked = isBookingConfirmed || isCurrentChatOwnedByOther;
   const currentChatMenuOrders = useMemo(
     () => {
@@ -25588,15 +25594,6 @@ function isReservationBlockingExtraInventory(reservation: Pick<Reservation, "sta
 
 function isBookingPanelActiveReservation(reservation: Pick<Reservation, "status" | "checkedInAt" | "checkedOutAt" | "checkOut" | "checkOutTime"> | null | undefined) {
   return Boolean(reservation?.status === "booked" && !isReservationCheckedOut(reservation) && !isReservationPastStay(reservation));
-}
-
-function isBookingPanelWorkflowReservation(reservation: Pick<Reservation, "status" | "checkedInAt" | "checkedOutAt" | "checkOut" | "checkOutTime"> | null | undefined) {
-  return Boolean(
-    reservation &&
-    (reservation.status === "pending" || reservation.status === "booked") &&
-    !isReservationCheckedOut(reservation) &&
-    !isReservationPastStay(reservation)
-  );
 }
 
 function getReservationScheduledCheckOutIso(reservation: Pick<Reservation, "checkOut" | "checkOutTime">) {

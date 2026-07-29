@@ -1211,7 +1211,14 @@ function getGuestNameFallbackFromPhone(phone: string) {
 
 function extractPhoneFromText(value: string) {
   const match = value.match(/(?:\+|00)?\d[\d\s().-]{6,}\d/);
-  return match ? match[0].replace(/\D/g, "") : "";
+  if (!match) return "";
+  let digits = match[0].replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  // WhatsApp places the message time immediately after the chat title. The
+  // previous greedy match could therefore turn "+7 708 807 1123 11:46" into
+  // "7708807112311". Country code 7 numbers always contain exactly 11 digits.
+  if (digits.startsWith("7") && digits.length >= 11) return digits.slice(0, 11);
+  return digits;
 }
 
 function normalizeText(value: string) {

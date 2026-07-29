@@ -46,7 +46,7 @@ import {
 } from "./appData.js";
 import { resolveChatStatus } from "./chatStatusDomain.js";
 import { applyReservationAction, isBlockingReservation, type ReservationAction } from "./reservationDomain.js";
-import { mergeChatDraftUpdate } from "./chatDraftDomain.js";
+import { canonicalizeChatDraftIdentity, mergeChatDraftUpdate, normalizeKazakhstanPhone } from "./chatDraftDomain.js";
 import { exportServerBackup, importServerBackup } from "./backup.js";
 import { createStubDraft, bookingDraftRequestSchema } from "./booking.js";
 import { config } from "./config.js";
@@ -290,11 +290,7 @@ function toReservationText(value: unknown) {
 }
 
 function normalizeReservationPhone(value: unknown) {
-  const digits = toReservationText(value).replace(/\D/g, "");
-  if (!digits) return "";
-  if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
-  if (digits.length === 10) return `7${digits}`;
-  return digits;
+  return normalizeKazakhstanPhone(toReservationText(value));
 }
 
 function reservationDateRangesOverlap(leftStart: string, leftEnd: string, rightStart: string, rightEnd: string) {
@@ -2106,10 +2102,11 @@ app.get("/api/chat-status", async (request) => {
 app.get("/api/chat-drafts/:chatId", async (request) => {
   const { chatId } = request.params as { chatId: string };
   const decodedChatId = decodeURIComponent(chatId);
-  const storedDraft = await getChatDraftById(decodedChatId);
+  const canonicalIdentity = canonicalizeChatDraftIdentity(decodedChatId, {});
+  const storedDraft = await getChatDraftById(canonicalIdentity.chatId) ?? await getChatDraftById(decodedChatId);
   const draft = await sanitizeChatDraft(storedDraft);
   if (draft && storedDraft && JSON.stringify(draft) !== JSON.stringify(storedDraft)) {
-    await saveChatDraftData(decodedChatId, draft as Record<string, unknown>);
+    await saveChatDraftData(canonicalIdentity.chatId, draft as Record<string, unknown>);
   }
   return { draft };
 });
@@ -2192,7 +2189,12 @@ function clearDraftReservationLink(draft: Record<string, unknown>) {
 app.put("/api/chat-drafts", async (request) => {
   const body = request.body as { drafts?: Record<string, unknown> } | undefined;
   const drafts = body?.drafts && typeof body.drafts === "object" && !Array.isArray(body.drafts) ? body.drafts : {};
-  const savedDrafts = await replaceChatDraftData(await sanitizeChatDrafts(drafts));
+  const canonicalDrafts: Record<string, unknown> = {};
+  for (const [chatId, rawDraft] of Object.entries(drafts)) {
+    const identity = canonicalizeChatDraftIdentity(chatId, rawDraft);
+    canonicalDrafts[identity.chatId] = mergeChatDraftUpdate(canonicalDrafts[identity.chatId], identity.draft);
+  }
+  const savedDrafts = await replaceChatDraftData(await sanitizeChatDrafts(canonicalDrafts));
   replaceCachedChatDraftStatusSources(savedDrafts);
   broadcastRealtime("chat-drafts.changed", { action: "replace", drafts: savedDrafts });
   return { drafts: savedDrafts };
@@ -2206,11 +2208,21 @@ app.put("/api/chat-drafts/:chatId", async (request, reply) => {
   }
 
   const decodedChatId = decodeURIComponent(chatId);
-  const existingDraft = await getChatDraftById(decodedChatId);
-  const mergedDraft = mergeChatDraftUpdate(existingDraft, body.draft as Record<string, unknown>);
-  const draft = await saveChatDraftData(decodedChatId, await sanitizeChatDraft(mergedDraft));
-  upsertCachedChatDraftStatusSource(decodedChatId, draft);
-  broadcastRealtime("chat-drafts.changed", { action: "upsert", chatId: decodedChatId, draft });
+  const identity = canonicalizeChatDraftIdentity(decodedChatId, body.draft);
+  const existingCanonicalDraft = await getChatDraftById(identity.chatId);
+  const existingLegacyDraft = identity.chatId === decodedChatId ? null : await getChatDraftById(decodedChatId);
+  const mergedExistingDraft = mergeChatDraftUpdate(
+    existingCanonicalDraft,
+    (existingLegacyDraft ?? {}) as Record<string, unknown>
+  );
+  const mergedDraft = mergeChatDraftUpdate(mergedExistingDraft, identity.draft);
+  const draft = await saveChatDraftData(identity.chatId, await sanitizeChatDraft(mergedDraft));
+  if (identity.chatId !== decodedChatId) {
+    await deleteChatDraftData(decodedChatId);
+    deleteCachedChatDraftStatusSource(decodedChatId);
+  }
+  upsertCachedChatDraftStatusSource(identity.chatId, draft);
+  broadcastRealtime("chat-drafts.changed", { action: "upsert", chatId: identity.chatId, draft });
   return { draft };
 });
 

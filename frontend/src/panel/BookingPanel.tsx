@@ -8455,16 +8455,23 @@ export function BookingPanel() {
                             {availableExtraGuestTypes.length && extraInventoryCatalogItems.length ? (
                               <>
                                 <span className="gpb-card-extra-items-list">
-                                  {extraInventoryCatalogItems.map((item) => (
-                                    <button
-                                      className={item.id === extraInventoryPickerItemId ? "is-active" : ""}
-                                      type="button"
-                                      key={item.id}
-                                      onClick={() => setExtraInventoryPickerItemId(item.id)}
-                                    >
-                                      {item.label}
-                                    </button>
-                                  ))}
+                                  {extraInventoryCatalogItems.map((item) => {
+                                    const availableCount = getAvailableExtraInventoryCount(availableExtraInventory, item.id);
+                                    const unavailable = availableCount <= 0;
+                                    return (
+                                      <button
+                                        className={`${item.id === extraInventoryPickerItemId ? "is-active" : ""} ${unavailable ? "is-unavailable" : ""}`.trim()}
+                                        type="button"
+                                        key={item.id}
+                                        disabled={unavailable}
+                                        title={unavailable ? `${item.label}: нет свободных` : `${item.label}: доступно ${availableCount}`}
+                                        onClick={() => setExtraInventoryPickerItemId(item.id)}
+                                      >
+                                        <span>{item.label}</span>
+                                        <small>{unavailable ? "Нет свободных" : `Доступно: ${availableCount}`}</small>
+                                      </button>
+                                    );
+                                  })}
                                 </span>
                                 {activeExtraInventoryCatalogItem ? (
                                   <span className="gpb-card-extra-guest-list">
@@ -26017,24 +26024,20 @@ function getAvailableExtraInventory(
   inventoryCustomCapacities: Record<string, number> = {}
 ) {
   const configured = getConfiguredRoomInventoryCounts(rooms);
-  const used = reservations
+  const blockingReservations = reservations
     .filter((reservation) =>
       isReservationBlockingExtraInventory(reservation) &&
       dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
-    )
-    .reduce((sum, reservation) => {
-      const counts = getReservationExtraInventoryCounts(reservation);
-      return {
-        airBeds: sum.airBeds + counts.airBeds,
-        rollaways: sum.rollaways + counts.rollaways
-      };
-    }, { airBeds: 0, rollaways: 0 });
-  const usedCustomCounts = reservations
-    .filter((reservation) =>
-      isReservationBlockingExtraInventory(reservation) &&
-      dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
-    )
-    .reduce((sum, reservation) => mergeExtraInventoryPlacementCounts(sum, getReservationExtraInventoryPlacementCounts(reservation)), {} as Record<string, number>);
+    );
+  const uniquePlacements = getUniqueBlockingExtraInventoryPlacements(blockingReservations);
+  const used = uniquePlacements.reduce((sum, placement) => ({
+    airBeds: sum.airBeds + (placement.typeId === "air-bed" ? 1 : 0),
+    rollaways: sum.rollaways + (placement.typeId === "rollaway" ? 1 : 0)
+  }), { airBeds: 0, rollaways: 0 });
+  const usedCustomCounts = uniquePlacements.reduce((sum, placement) => {
+    sum[placement.typeId] = (sum[placement.typeId] || 0) + 1;
+    return sum;
+  }, {} as Record<string, number>);
   const custom = Object.fromEntries(Object.entries(inventoryCustomCounts).map(([typeId, count]) => {
     const itemCount = Math.max(0, Math.round(count || 0));
     const itemCapacity = getExtraInventoryUnitCapacity(typeId, inventoryCustomCapacities[typeId]);
@@ -26049,6 +26052,32 @@ function getAvailableExtraInventory(
     rollaways: Math.max(0, inventoryRollaways - configured.rollaways - used.rollaways),
     custom
   };
+}
+
+function getUniqueBlockingExtraInventoryPlacements(reservations: Reservation[]) {
+  const unique = new Map<string, ExtraInventoryPlacement>();
+  reservations.forEach((reservation) => {
+    const explicitPlacements = Object.values(reservation.extraInventoryByRoomId ?? {})
+      .flatMap((item) => getExtraInventoryPlacements(item));
+    const placements = explicitPlacements.length
+      ? explicitPlacements
+      : (() => {
+        const counts = getReservationExtraInventoryCounts(reservation);
+        return [
+          ...Array.from({ length: counts.airBeds }, (_, index) => createLegacyExtraInventoryPlacement("air-bed", "Надувной матрас", index)),
+          ...Array.from({ length: counts.rollaways }, (_, index) => createLegacyExtraInventoryPlacement("rollaway", "Раскладушка", index))
+        ];
+      })();
+
+    placements.forEach((placement, index) => {
+      const isStablePlacementId = Boolean(placement.id && !placement.id.startsWith("legacy-"));
+      const key = isStablePlacementId
+        ? placement.id
+        : `${reservation.id}:legacy:${placement.typeId}:${index}`;
+      if (!unique.has(key)) unique.set(key, placement);
+    });
+  });
+  return Array.from(unique.values());
 }
 
 function getDefaultExtraInventoryUnitCapacity(typeId: string, label = "") {

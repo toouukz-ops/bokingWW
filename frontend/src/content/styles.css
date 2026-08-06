@@ -1516,8 +1516,29 @@ body.gpb-booking-panel-open #app {
 }
 
 .gpb-card-extra-items-list button {
+  display: grid;
+  gap: 2px;
   color: #0f6b57;
   font-size: 13px;
+}
+
+.gpb-card-extra-items-list button small {
+  color: #6b7683;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.gpb-card-extra-menu button:disabled,
+.gpb-card-extra-menu button.is-unavailable {
+  background: #f3f5f7;
+  color: #8a949f;
+  cursor: not-allowed;
+  opacity: 0.82;
+}
+
+.gpb-card-extra-menu button:disabled small,
+.gpb-card-extra-menu button.is-unavailable small {
+  color: #b42318;
 }
 
 .gpb-card-extra-guest-list button {

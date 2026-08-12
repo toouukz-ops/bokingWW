@@ -14829,47 +14829,45 @@ function SettingsModal({
                 </div>
                 {getCurrentAuthUser()?.role === "admin" ? (
                   <>
-                    <p className="gpb-settings-note">Создавайте отдельный логин каждому сотруднику. Пароль не отображается после сохранения — его можно только заменить.</p>
-                    <form className="gpb-user-create-form" onSubmit={submitManagedUser}>
-                      <input value={newManagedUser.username} onChange={(event) => setNewManagedUser((value) => ({ ...value, username: event.target.value }))} placeholder="Логин" autoComplete="off" required />
-                      <input value={newManagedUser.displayName} onChange={(event) => setNewManagedUser((value) => ({ ...value, displayName: event.target.value }))} placeholder="Имя сотрудника" required />
-                      <input value={newManagedUser.password} onChange={(event) => setNewManagedUser((value) => ({ ...value, password: event.target.value }))} placeholder="Пароль — минимум 10 символов" type="password" autoComplete="new-password" minLength={10} required />
-                      <select value={newManagedUser.role} onChange={(event) => setNewManagedUser((value) => ({ ...value, role: event.target.value === "admin" ? "admin" : "operator" }))}>
-                        <option value="operator">Оператор</option>
-                        <option value="admin">Администратор</option>
-                      </select>
-                      <button className="gpb-primary" type="submit" disabled={managedUsersState === "saving"}>Добавить пользователя</button>
-                    </form>
+                    <details className="gpb-user-create-box">
+                      <summary><Plus size={16} /> Добавить пользователя</summary>
+                      <form className="gpb-user-create-form" onSubmit={submitManagedUser}>
+                        <label><span>Логин</span><input value={newManagedUser.username} onChange={(event) => setNewManagedUser((value) => ({ ...value, username: event.target.value }))} placeholder="Например: anna" autoComplete="off" required /></label>
+                        <label><span>Имя сотрудника</span><input value={newManagedUser.displayName} onChange={(event) => setNewManagedUser((value) => ({ ...value, displayName: event.target.value }))} placeholder="Анна" required /></label>
+                        <label><span>Пароль</span><input value={newManagedUser.password} onChange={(event) => setNewManagedUser((value) => ({ ...value, password: event.target.value }))} placeholder="Минимум 10 символов" type="password" autoComplete="new-password" minLength={10} required /></label>
+                        <label><span>Роль</span><select value={newManagedUser.role} onChange={(event) => setNewManagedUser((value) => ({ ...value, role: event.target.value === "admin" ? "admin" : "operator" }))}><option value="operator">Оператор</option><option value="admin">Администратор</option></select></label>
+                        <button className="gpb-primary" type="submit" disabled={managedUsersState === "saving"}>Создать пользователя</button>
+                      </form>
+                    </details>
+                    <div className="gpb-users-section-heading"><div><strong>Сотрудники</strong><span>{managedUsers.length}</span></div><small>Логины, роли и доступ</small></div>
                     <div className="gpb-managed-users-list">
                       {managedUsersState === "loading" ? <p>Загружаю пользователей…</p> : null}
                       {managedUsers.map((user) => {
                         const edit = managedUserEdits[user.id] ?? { displayName: user.displayName, password: "", role: user.role };
+                        const userDevices = managedDevices.filter((device) => device.userId === user.id);
                         return (
                           <article className={`gpb-managed-user-card ${user.active ? "" : "is-disabled"}`} key={user.id}>
-                            <header><strong>{user.username}</strong><span>{user.active ? "Активен" : "Заблокирован"}</span></header>
+                            <header><div><strong>{user.displayName}</strong><small>@{user.username} · {user.role === "admin" ? "Администратор" : "Оператор"}</small></div><span className={user.active ? "is-active" : "is-blocked"}>{user.active ? "Активен" : "Заблокирован"}</span></header>
                             <div className="gpb-managed-user-fields">
-                              <input value={edit.displayName} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, displayName: event.target.value } }))} placeholder="Имя" />
-                              <input value={edit.password} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, password: event.target.value } }))} placeholder="Новый пароль (не менять — оставить пустым)" type="password" autoComplete="new-password" />
-                              <select value={edit.role} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, role: event.target.value === "admin" ? "admin" : "operator" } }))}>
-                                <option value="operator">Оператор</option><option value="admin">Администратор</option>
-                              </select>
+                              <label><span>Имя</span><input value={edit.displayName} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, displayName: event.target.value } }))} /></label>
+                              <label><span>Роль</span><select value={edit.role} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, role: event.target.value === "admin" ? "admin" : "operator" } }))}><option value="operator">Оператор</option><option value="admin">Администратор</option></select></label>
+                              <label className="is-wide"><span>Новый пароль <em>не заполняйте, если не меняете</em></span><input value={edit.password} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, password: event.target.value } }))} placeholder="Введите новый пароль" type="password" autoComplete="new-password" /></label>
                             </div>
                             <div className="gpb-managed-user-actions">
                               <button className="gpb-primary" type="button" onClick={() => void saveManagedUser(user)}>Сохранить</button>
                               <button type="button" onClick={() => void revokeManagedUserSessions(user.id).then(() => setManagedUsersMessage("Все сессии пользователя завершены."))}>Завершить сессии</button>
                               <button className={user.active ? "is-danger" : ""} type="button" onClick={() => void toggleManagedUser(user)}>{user.active ? "Заблокировать" : "Разблокировать"}</button>
                             </div>
+                            <div className="gpb-user-devices-summary"><span>Устройства</span><strong>{userDevices.filter((item) => item.status === "approved").length} разрешено</strong><small>{userDevices.filter((item) => item.status === "pending").length ? `${userDevices.filter((item) => item.status === "pending").length} ожидает` : "Нет новых запросов"}</small></div>
                           </article>
                         );
                       })}
                     </div>
-                    <h3>Разрешённые устройства</h3>
-                    <p className="gpb-settings-note">Новая установка не сможет войти, пока вы не разрешите её здесь. Неизвестные устройства оставляйте заблокированными.</p>
+                    <div className="gpb-users-section-heading"><div><strong>Устройства</strong><span>{managedDevices.length}</span></div><small>Разрешайте только знакомые компьютеры</small></div>
                     <div className="gpb-managed-users-list">
                       {managedDevices.map((device) => (
-                        <article className={`gpb-managed-user-card ${device.status === "approved" ? "" : "is-disabled"}`} key={device.id}>
-                          <header><strong>{device.deviceName}</strong><span>{device.status === "approved" ? "Разрешено" : device.status === "pending" ? "Ожидает разрешения" : "Заблокировано"}</span></header>
-                          <p className="gpb-settings-note">Пользователь: {device.username || "неизвестен"} · ID: {device.deviceId.slice(0, 12)}…</p>
+                        <article className={`gpb-managed-user-card gpb-device-card is-${device.status}`} key={device.id}>
+                          <header><div><strong>{device.deviceName}</strong><small>Пользователь: @{device.username || "неизвестен"} · ID {device.deviceId.slice(0, 10)}…</small></div><span>{device.status === "approved" ? "Разрешено" : device.status === "pending" ? "Ожидает" : "Заблокировано"}</span></header>
                           <div className="gpb-managed-user-actions">
                             {device.status !== "approved" ? <button className="gpb-primary" type="button" onClick={() => void changeManagedDevice(device, "approved")}>Разрешить</button> : null}
                             {device.status !== "blocked" ? <button className="is-danger" type="button" onClick={() => void changeManagedDevice(device, "blocked")}>Заблокировать</button> : null}

@@ -11518,16 +11518,42 @@ body.gpb-reservation-split-resizing {
 .gpb-auth-error { border-radius: 8px; background: #fff0f0; padding: 9px; color: #b42318; font-weight: 700; }
 .gpb-auth-logout { position: fixed; z-index: 2147483647; right: 76px; bottom: 12px; border: 1px solid #cbd5df; border-radius: 999px; background: #fff; padding: 6px 10px; color: #475569; font-size: 11px; pointer-events: auto; }
 
-.gpb-user-create-form, .gpb-managed-user-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.gpb-user-create-form input, .gpb-user-create-form select, .gpb-managed-user-fields input, .gpb-managed-user-fields select { min-height: 38px; border: 1px solid #cbd5df; border-radius: 8px; padding: 0 10px; }
+.gpb-user-create-box { margin: 4px 0 18px; border: 1px solid #b9d8ce; border-radius: 12px; background: #f3faf7; overflow: hidden; }
+.gpb-user-create-box summary { display: flex; align-items: center; gap: 7px; padding: 11px 13px; color: #0f6d59; cursor: pointer; font-weight: 850; }
+.gpb-user-create-box[open] summary { border-bottom: 1px solid #d4e8e1; }
+.gpb-user-create-form { padding: 12px; }
+.gpb-user-create-form, .gpb-managed-user-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.gpb-user-create-form label, .gpb-managed-user-fields label { display: grid; gap: 5px; color: #52606d; font-size: 11px; font-weight: 800; }
+.gpb-user-create-form label span, .gpb-managed-user-fields label span { display: flex; justify-content: space-between; gap: 8px; }
+.gpb-managed-user-fields label em { color: #8793a0; font-size: 10px; font-style: normal; font-weight: 600; }
+.gpb-managed-user-fields label.is-wide { grid-column: 1 / -1; }
+.gpb-user-create-form input, .gpb-user-create-form select, .gpb-managed-user-fields input, .gpb-managed-user-fields select { width: 100%; min-height: 38px; border: 1px solid #cbd5df; border-radius: 8px; background: #fff; padding: 0 10px; }
 .gpb-user-create-form button { grid-column: 1 / -1; }
-.gpb-managed-users-list { display: grid; gap: 10px; margin-top: 14px; }
-.gpb-managed-user-card { display: grid; gap: 9px; border: 1px solid #d8dee5; border-radius: 10px; background: #f8fafb; padding: 11px; }
+.gpb-users-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin: 18px 0 8px; }
+.gpb-users-section-heading div { display: flex; align-items: center; gap: 7px; }
+.gpb-users-section-heading strong { color: #1f2933; font-size: 14px; }
+.gpb-users-section-heading span { min-width: 22px; border-radius: 999px; background: #e7edf1; padding: 2px 7px; color: #536170; font-size: 11px; text-align: center; }
+.gpb-users-section-heading small { color: #758190; font-size: 11px; }
+.gpb-managed-users-list { display: grid; gap: 8px; }
+.gpb-managed-user-card { display: grid; gap: 10px; border: 1px solid #d8dee5; border-radius: 11px; background: #f8fafb; padding: 12px; }
 .gpb-managed-user-card.is-disabled { opacity: .68; }
 .gpb-managed-user-card header, .gpb-managed-user-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.gpb-managed-user-card header span { color: #64748b; font-size: 12px; font-weight: 800; }
+.gpb-managed-user-card header > div { display: grid; gap: 2px; }
+.gpb-managed-user-card header strong { color: #1f2933; font-size: 14px; }
+.gpb-managed-user-card header small { color: #758190; font-size: 11px; }
+.gpb-managed-user-card header > span { border-radius: 999px; background: #e7edf1; padding: 4px 8px; color: #64748b; font-size: 10px; font-weight: 850; }
+.gpb-managed-user-card header > span.is-active, .gpb-device-card.is-approved header > span { background: #dff5eb; color: #0f6d59; }
+.gpb-managed-user-card header > span.is-blocked, .gpb-device-card.is-blocked header > span { background: #fee8e7; color: #b42318; }
+.gpb-device-card.is-pending { border-color: #e8bd65; background: #fffaf0; }
+.gpb-device-card.is-pending header > span { background: #fff0c7; color: #8a5a00; }
 .gpb-managed-user-actions { justify-content: flex-start; flex-wrap: wrap; }
 .gpb-managed-user-actions button { min-height: 34px; border: 1px solid #cbd5df; border-radius: 7px; background: #fff; padding: 0 10px; font-weight: 750; }
+.gpb-managed-user-actions button.gpb-primary { border-color: #0f755f; background: #0f755f; color: #fff; }
 .gpb-managed-user-actions button.is-danger { color: #b42318; border-color: #f0b7b7; }
+.gpb-user-devices-summary { display: flex; align-items: center; gap: 8px; border-top: 1px solid #e1e7eb; padding-top: 8px; color: #758190; font-size: 10px; }
+.gpb-user-devices-summary span { font-weight: 800; }
+.gpb-user-devices-summary strong { color: #0f6d59; }
+.gpb-user-devices-summary small { margin-left: auto; }
 .gpb-user-machine-settings { margin-top: 16px; border-top: 1px solid #d8dee5; padding-top: 12px; }
 .gpb-user-machine-settings summary { cursor: pointer; font-weight: 800; }
+@media (max-width: 700px) { .gpb-user-create-form, .gpb-managed-user-fields { grid-template-columns: 1fr; } .gpb-managed-user-fields label.is-wide { grid-column: auto; } .gpb-users-section-heading { align-items: flex-start; flex-direction: column; gap: 2px; } }

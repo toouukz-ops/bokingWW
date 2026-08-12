@@ -1,6 +1,7 @@
 export type SessionUser = { id: string; username: string; displayName: string; role: "admin" | "operator" };
 export type ManagedUser = SessionUser & { active: boolean; createdAt?: string; lastLoginAt?: string };
 export type ManagedDevice = { id: string; deviceId: string; deviceName: string; username: string; userId: string; status: "pending" | "approved" | "blocked"; createdAt?: string; lastSeenAt?: string };
+export type UpdateRequiredDetail = { minimumVersion: string; updateUrl: string };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://bokingww.onrender.com";
 const AUTH_STORAGE_KEY = "gpb-auth-session";
@@ -20,6 +21,10 @@ export async function initializeAuth() {
   installAuthenticatedFetch();
   if (!currentToken) return null;
   const response = await nativeFetch(`${API_BASE_URL}/api/auth/me`, { headers: getDirectHeaders({ Authorization: `Bearer ${currentToken}` }) });
+  if (response.status === 426) {
+    await dispatchUpdateRequired(response);
+    return null;
+  }
   if (!response.ok) {
     await clearAuthSession();
     return null;
@@ -35,7 +40,8 @@ export async function login(username: string, password: string) {
     headers: getDirectHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ username, password, ...currentDevice })
   });
-  const errorPayload = response.ok ? null : await response.json().catch(() => ({})) as { code?: string };
+  const errorPayload = response.ok ? null : await response.clone().json().catch(() => ({})) as { code?: string; minimumVersion?: string; updateUrl?: string };
+  if (response.status === 426) await dispatchUpdateRequired(response);
   if (!response.ok) throw new Error(response.status === 426 ? "Версия расширения устарела. Установите последнюю версию." : errorPayload?.code === "DEVICE_PENDING" ? "Это устройство ожидает разрешения администратора." : errorPayload?.code === "DEVICE_BLOCKED" ? "Это устройство заблокировано администратором." : response.status === 429 ? "Слишком много попыток. Повторите через 15 минут." : "Неверный логин или пароль.");
   const session = await response.json() as { token: string; expiresAt: string; user: SessionUser };
   currentToken = session.token;
@@ -122,12 +128,19 @@ function installAuthenticatedFetch() {
       if (currentToken) headers.set("Authorization", `Bearer ${currentToken}`);
     }
     const response = await nativeFetch(input, { ...init, headers });
+    if (response.status === 426) await dispatchUpdateRequired(response);
     if (response.status === 401 && !url.includes("/api/auth/login")) {
       await clearAuthSession();
       window.dispatchEvent(new CustomEvent("gpb-auth-required"));
     }
     return response;
   };
+}
+
+async function dispatchUpdateRequired(response: Response) {
+  const payload = await response.clone().json().catch(() => ({})) as { minimumVersion?: string; updateUrl?: string };
+  await clearAuthSession();
+  window.dispatchEvent(new CustomEvent<UpdateRequiredDetail>("gpb-update-required", { detail: { minimumVersion: String(payload.minimumVersion || "последняя"), updateUrl: String(payload.updateUrl || "https://github.com/toouukz-ops/bokingWW/releases/latest") } }));
 }
 
 function getDirectHeaders(initial: HeadersInit) {

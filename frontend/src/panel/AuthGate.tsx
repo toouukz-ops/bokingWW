@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { initializeAuth, login, logout, type SessionUser } from "../shared/auth";
+import { initializeAuth, login, logout, type SessionUser, type UpdateRequiredDetail } from "../shared/auth";
 
 export function AuthGate({ children, onAuthenticated }: { children: ReactNode; onAuthenticated: () => void }) {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [state, setState] = useState<"checking" | "ready" | "submitting">("checking");
   const [error, setError] = useState("");
+  const [updateRequired, setUpdateRequired] = useState<UpdateRequiredDetail | null>(null);
 
   useEffect(() => {
     initializeAuth().then((nextUser) => {
@@ -18,7 +19,13 @@ export function AuthGate({ children, onAuthenticated }: { children: ReactNode; o
       setError("Сессия завершена. Войдите снова.");
     };
     window.addEventListener("gpb-auth-required", requireAuth);
-    return () => window.removeEventListener("gpb-auth-required", requireAuth);
+    const requireUpdate = (event: Event) => {
+      setUser(null);
+      setState("ready");
+      setUpdateRequired((event as CustomEvent<UpdateRequiredDetail>).detail);
+    };
+    window.addEventListener("gpb-update-required", requireUpdate);
+    return () => { window.removeEventListener("gpb-auth-required", requireAuth); window.removeEventListener("gpb-update-required", requireUpdate); };
   }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -37,6 +44,7 @@ export function AuthGate({ children, onAuthenticated }: { children: ReactNode; o
     }
   }
 
+  if (updateRequired) return <div className="gpb-update-lock"><aside className="gpb-update-dialog"><strong>Требуется обновление</strong><p>Эта версия расширения заблокирована сервером. Для продолжения установите версию {updateRequired.minimumVersion} или новее.</p><a href={updateRequired.updateUrl} target="_blank" rel="noreferrer">Скачать обновление</a><small>До обновления доступ к системе полностью закрыт.</small></aside></div>;
   if (state === "checking") return <aside className="gpb-auth-panel"><strong>Проверка доступа…</strong></aside>;
   if (!user) {
     return (

@@ -11517,6 +11517,11 @@ body.gpb-reservation-split-resizing {
 .gpb-auth-panel button { min-height: 44px; border: 0; border-radius: 9px; background: #10715d; color: #fff; font-weight: 800; }
 .gpb-auth-error { border-radius: 8px; background: #fff0f0; padding: 9px; color: #b42318; font-weight: 700; }
 .gpb-auth-logout { position: fixed; z-index: 2147483647; right: 76px; bottom: 12px; border: 1px solid #cbd5df; border-radius: 999px; background: #fff; padding: 6px 10px; color: #475569; font-size: 11px; pointer-events: auto; }
+.gpb-update-lock { position: fixed; z-index: 2147483647; inset: 0; display: grid; place-items: center; background: rgba(15, 23, 42, .82); pointer-events: auto; }
+.gpb-update-dialog { display: grid; width: min(420px, calc(100vw - 32px)); gap: 13px; border-radius: 16px; background: #fff; box-shadow: 0 24px 80px rgba(0,0,0,.4); padding: 24px; color: #17212b; }
+.gpb-update-dialog strong { font-size: 22px; }
+.gpb-update-dialog p, .gpb-update-dialog small { margin: 0; color: #5f6b78; line-height: 1.45; }
+.gpb-update-dialog a { display: grid; min-height: 44px; place-items: center; border-radius: 9px; background: #10715d; color: #fff; font-weight: 850; text-decoration: none; }
 
 .gpb-users-panel { max-width: 1040px; }
 .gpb-user-create-box { width: min(100%, 620px); margin: 4px 0 18px; border: 1px solid #b9d8ce; border-radius: 12px; background: #f3faf7; overflow: hidden; }

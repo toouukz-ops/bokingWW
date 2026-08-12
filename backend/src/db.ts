@@ -18,6 +18,7 @@ export async function connectDatabase() {
   await ensureCollection("contactLocks");
   await ensureCollection("authUsers");
   await ensureCollection("authSessions");
+  await ensureCollection("authDevices");
   await ensureCollection("authAuditLogs");
   await dropLegacyNumberIndex();
   await migrateLegacyRooms();
@@ -48,6 +49,8 @@ export async function connectDatabase() {
   await db.collection("authSessions").createIndex({ tokenHash: 1 }, { unique: true });
   await db.collection("authSessions").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
   await db.collection("authSessions").createIndex({ userId: 1 });
+  await db.collection("authDevices").createIndex({ deviceId: 1 }, { unique: true });
+  await db.collection("authDevices").createIndex({ userId: 1, status: 1 });
   await db.collection("authAuditLogs").createIndex({ createdAt: -1 });
 }
 

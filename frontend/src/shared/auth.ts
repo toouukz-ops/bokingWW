@@ -1,16 +1,20 @@
 export type SessionUser = { id: string; username: string; displayName: string; role: "admin" | "operator" };
 export type ManagedUser = SessionUser & { active: boolean; createdAt?: string; lastLoginAt?: string };
+export type ManagedDevice = { id: string; deviceId: string; deviceName: string; username: string; userId: string; status: "pending" | "approved" | "blocked"; createdAt?: string; lastSeenAt?: string };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://bokingww.onrender.com";
 const AUTH_STORAGE_KEY = "gpb-auth-session";
+const DEVICE_STORAGE_KEY = "gpb-auth-device";
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const VERSION_HEADER = "X-GPB-Extension-Version";
 const nativeFetch = window.fetch.bind(window);
 let currentToken = "";
 let currentUser: SessionUser | null = null;
+let currentDevice = { deviceId: "", deviceName: "" };
 let fetchInstalled = false;
 
 export async function initializeAuth() {
+  currentDevice = await ensureDeviceIdentity();
   const stored = await readStoredSession();
   currentToken = stored?.token || "";
   installAuthenticatedFetch();
@@ -25,12 +29,14 @@ export async function initializeAuth() {
 }
 
 export async function login(username: string, password: string) {
+  currentDevice = await ensureDeviceIdentity();
   const response = await nativeFetch(`${API_BASE_URL}/api/auth/login`, {
     method: "POST",
     headers: getDirectHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ username, password })
+    body: JSON.stringify({ username, password, ...currentDevice })
   });
-  if (!response.ok) throw new Error(response.status === 426 ? "Версия расширения устарела. Установите последнюю версию." : response.status === 429 ? "Слишком много попыток. Повторите через 15 минут." : "Неверный логин или пароль.");
+  const errorPayload = response.ok ? null : await response.json().catch(() => ({})) as { code?: string };
+  if (!response.ok) throw new Error(response.status === 426 ? "Версия расширения устарела. Установите последнюю версию." : errorPayload?.code === "DEVICE_PENDING" ? "Это устройство ожидает разрешения администратора." : errorPayload?.code === "DEVICE_BLOCKED" ? "Это устройство заблокировано администратором." : response.status === 429 ? "Слишком много попыток. Повторите через 15 минут." : "Неверный логин или пароль.");
   const session = await response.json() as { token: string; expiresAt: string; user: SessionUser };
   currentToken = session.token;
   currentUser = session.user;
@@ -79,10 +85,22 @@ export async function revokeManagedUserSessions(id: string) {
   if (!response.ok) throw new Error("Не удалось завершить сессии пользователя.");
 }
 
+export async function getManagedDevices() {
+  const response = await fetch(`${API_BASE_URL}/api/auth/devices`);
+  if (!response.ok) throw new Error("Не удалось загрузить устройства.");
+  return (await response.json() as { devices: ManagedDevice[] }).devices;
+}
+
+export async function setManagedDeviceStatus(id: string, status: "approved" | "blocked") {
+  const response = await fetch(`${API_BASE_URL}/api/auth/devices/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+  if (!response.ok) throw new Error("Не удалось изменить доступ устройства.");
+}
+
 export function appendAuthToken(url: string) {
   const parsed = new URL(url);
   if (currentToken) parsed.searchParams.set("access_token", currentToken);
   parsed.searchParams.set("extension_version", EXTENSION_VERSION);
+  parsed.searchParams.set("device_id", currentDevice.deviceId);
   return parsed.toString();
 }
 
@@ -94,6 +112,7 @@ function installAuthenticatedFetch() {
     const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
     if (url.startsWith(API_BASE_URL)) {
       headers.set(VERSION_HEADER, EXTENSION_VERSION);
+      headers.set("X-GPB-Device-Id", currentDevice.deviceId);
       if (currentToken) headers.set("Authorization", `Bearer ${currentToken}`);
     }
     const response = await nativeFetch(input, { ...init, headers });
@@ -108,7 +127,20 @@ function installAuthenticatedFetch() {
 function getDirectHeaders(initial: HeadersInit) {
   const headers = new Headers(initial);
   headers.set(VERSION_HEADER, EXTENSION_VERSION);
+  headers.set("X-GPB-Device-Id", currentDevice.deviceId);
   return headers;
+}
+
+async function ensureDeviceIdentity() {
+  const stored = await new Promise<{ deviceId?: string; deviceName?: string }>((resolve) => chrome.storage.local.get([DEVICE_STORAGE_KEY], (result) => resolve(result[DEVICE_STORAGE_KEY] || {})));
+  if (stored.deviceId) return { deviceId: stored.deviceId, deviceName: stored.deviceName || defaultDeviceName() };
+  const identity = { deviceId: crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", ""), deviceName: defaultDeviceName() };
+  await new Promise<void>((resolve) => chrome.storage.local.set({ [DEVICE_STORAGE_KEY]: identity }, () => resolve()));
+  return identity;
+}
+
+function defaultDeviceName() {
+  return `${navigator.platform || "Компьютер"} · ${navigator.userAgent.includes("Windows") ? "Windows" : navigator.userAgent.includes("Mac") ? "Mac" : navigator.userAgent.includes("Linux") ? "Linux" : "Chrome"}`;
 }
 
 async function clearAuthSession() {

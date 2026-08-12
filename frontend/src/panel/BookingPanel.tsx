@@ -100,7 +100,7 @@ import {
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
 import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ContactLock, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, MenuOrder, PaymentSettings, QuickReplyButton, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, RoomWorkStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
-import { createManagedUser, getCurrentAuthUser, getManagedUsers, revokeManagedUserSessions, updateManagedUser, type ManagedUser } from "../shared/auth";
+import { createManagedUser, getCurrentAuthUser, getManagedDevices, getManagedUsers, revokeManagedUserSessions, setManagedDeviceStatus, updateManagedUser, type ManagedDevice, type ManagedUser } from "../shared/auth";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -13566,6 +13566,7 @@ function SettingsModal({
   const [savedChatDialogStatus, setSavedChatDialogStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
   const [savedChatDialogActionState, setSavedChatDialogActionState] = useState<"idle" | "copied" | "exported" | "error">("idle");
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
+  const [managedDevices, setManagedDevices] = useState<ManagedDevice[]>([]);
   const [managedUsersState, setManagedUsersState] = useState<"idle" | "loading" | "saving" | "error">("idle");
   const [managedUsersMessage, setManagedUsersMessage] = useState("");
   const [newManagedUser, setNewManagedUser] = useState({ username: "", displayName: "", password: "", role: "operator" as "admin" | "operator" });
@@ -13626,8 +13627,9 @@ function SettingsModal({
     setManagedUsersState("loading");
     setManagedUsersMessage("");
     try {
-      const users = await getManagedUsers();
+      const [users, devices] = await Promise.all([getManagedUsers(), getManagedDevices()]);
       setManagedUsers(users);
+      setManagedDevices(devices);
       setManagedUserEdits(Object.fromEntries(users.map((user) => [user.id, { displayName: user.displayName, password: "", role: user.role }])));
       setManagedUsersState("idle");
     } catch (error) {
@@ -13674,6 +13676,17 @@ function SettingsModal({
       setManagedUsersMessage(updated.active ? "Доступ пользователя включён." : "Пользователь заблокирован, его сессии завершены.");
     } catch (error) {
       setManagedUsersMessage(error instanceof Error ? error.message : "Не удалось изменить доступ.");
+    }
+  }
+
+  async function changeManagedDevice(device: ManagedDevice, status: "approved" | "blocked") {
+    try {
+      await setManagedDeviceStatus(device.id, status);
+      await loadManagedUsers();
+      setManagedUsersMessage(status === "approved" ? `Устройство «${device.deviceName}» разрешено.` : `Устройство «${device.deviceName}» заблокировано.`);
+    } catch (error) {
+      setManagedUsersState("error");
+      setManagedUsersMessage(error instanceof Error ? error.message : "Не удалось изменить устройство.");
     }
   }
 
@@ -14849,6 +14862,20 @@ function SettingsModal({
                           </article>
                         );
                       })}
+                    </div>
+                    <h3>Разрешённые устройства</h3>
+                    <p className="gpb-settings-note">Новая установка не сможет войти, пока вы не разрешите её здесь. Неизвестные устройства оставляйте заблокированными.</p>
+                    <div className="gpb-managed-users-list">
+                      {managedDevices.map((device) => (
+                        <article className={`gpb-managed-user-card ${device.status === "approved" ? "" : "is-disabled"}`} key={device.id}>
+                          <header><strong>{device.deviceName}</strong><span>{device.status === "approved" ? "Разрешено" : device.status === "pending" ? "Ожидает разрешения" : "Заблокировано"}</span></header>
+                          <p className="gpb-settings-note">Пользователь: {device.username || "неизвестен"} · ID: {device.deviceId.slice(0, 12)}…</p>
+                          <div className="gpb-managed-user-actions">
+                            {device.status !== "approved" ? <button className="gpb-primary" type="button" onClick={() => void changeManagedDevice(device, "approved")}>Разрешить</button> : null}
+                            {device.status !== "blocked" ? <button className="is-danger" type="button" onClick={() => void changeManagedDevice(device, "blocked")}>Заблокировать</button> : null}
+                          </div>
+                        </article>
+                      ))}
                     </div>
                     {managedUsersMessage ? <div className={`gpb-settings-save-status ${managedUsersState === "error" ? "is-error" : ""}`}>{managedUsersMessage}</div> : null}
                   </>

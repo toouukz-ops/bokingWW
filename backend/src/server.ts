@@ -56,7 +56,7 @@ import { cropPhotoFile, deleteMediaFile, ensureWhatsappVideoFile, getLocalUpload
 import { getMediaContentType, getStoredMedia, openStoredMediaStream, saveStoredMediaBuffer } from "./mediaStore.js";
 import { createOpenAiClient } from "./openai.js";
 import { addRoomMedia, deleteRoom, getRoom, listRooms, removeRoomMedia, replaceRoomMedia, roomSchema, saveRoom } from "./rooms.js";
-import { authenticate, createUser, getAuthenticatedUser, isAuthRequired, listUsers, logout, revokeUserSessions, updateUser, writeAudit, type AuthUser } from "./auth.js";
+import { authenticate, createUser, getAuthenticatedUser, isAuthRequired, listDevices, listUsers, logout, revokeUserSessions, updateDevice, updateUser, writeAudit, type AuthUser } from "./auth.js";
 
 await connectDatabase();
 
@@ -94,7 +94,7 @@ const publicApiPaths = new Set([
   "/api/public/menu",
   "/api/public/menu-orders"
 ]);
-const MIN_EXTENSION_VERSION = process.env.MIN_EXTENSION_VERSION || "1.0.261";
+const MIN_EXTENSION_VERSION = process.env.MIN_EXTENSION_VERSION || "1.0.262";
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 
 app.addHook("preHandler", async (request, reply) => {
@@ -110,6 +110,7 @@ app.addHook("preHandler", async (request, reply) => {
       minimumVersion: MIN_EXTENSION_VERSION
     });
   }
+  if (path === "/api/auth/login") return;
   const auth = await getAuthenticatedUser(request);
   if (auth) {
     (request as FastifyRequest & { authUser?: AuthUser }).authUser = auth.user;
@@ -144,11 +145,15 @@ app.post("/api/auth/login", async (request, reply) => {
   if (attempt && attempt.resetAt > now && attempt.count >= 8) {
     return reply.status(429).send({ error: "Too many login attempts" });
   }
-  const body = request.body as { username?: string; password?: string } | undefined;
-  const result = await authenticate(String(body?.username || ""), String(body?.password || ""), request);
+  const body = request.body as { username?: string; password?: string; deviceId?: string; deviceName?: string } | undefined;
+  const result = await authenticate(String(body?.username || ""), String(body?.password || ""), { deviceId: String(body?.deviceId || ""), deviceName: String(body?.deviceName || "") }, request);
   if (!result) {
     loginAttempts.set(key, { count: attempt && attempt.resetAt > now ? attempt.count + 1 : 1, resetAt: now + 15 * 60 * 1000 });
     return reply.status(401).send({ error: "Invalid login or password" });
+  }
+  if (result.denied) {
+    const status = result.reason === "DEVICE_PENDING" ? 403 : 401;
+    return reply.status(status).send({ error: result.reason, code: result.reason });
   }
   loginAttempts.delete(key);
   return result;
@@ -205,6 +210,28 @@ app.delete("/api/auth/users/:id/sessions", async (request, reply) => {
   const revoked = await revokeUserSessions(id);
   await writeAudit("user.sessions.revoked", actor, request, { userId: id, revoked });
   return { revoked };
+});
+
+app.get("/api/auth/devices", async (request, reply) => {
+  const actor = getRequestAuthUser(request);
+  if (!actor || actor.role !== "admin") return reply.status(403).send({ error: "Admin access required" });
+  return { devices: await listDevices() };
+});
+
+app.patch("/api/auth/devices/:id", async (request, reply) => {
+  const actor = getRequestAuthUser(request);
+  if (!actor || actor.role !== "admin") return reply.status(403).send({ error: "Admin access required" });
+  const { id } = request.params as { id: string };
+  const body = request.body as { status?: "approved" | "blocked" };
+  if (body.status !== "approved" && body.status !== "blocked") return reply.status(400).send({ error: "Invalid device status" });
+  try {
+    const device = await updateDevice(id, body.status);
+    if (!device) return reply.status(404).send({ error: "Device not found" });
+    await writeAudit(`device.${body.status}`, actor, request, { deviceId: device.deviceId, userId: String(device.userId) });
+    return { ok: true };
+  } catch (error) {
+    return reply.status(400).send({ error: error instanceof Error ? error.message : String(error) });
+  }
 });
 
 function getRequestAuthUser(request: FastifyRequest) {

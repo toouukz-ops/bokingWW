@@ -56,7 +56,7 @@ import { cropPhotoFile, deleteMediaFile, ensureWhatsappVideoFile, getLocalUpload
 import { getMediaContentType, getStoredMedia, openStoredMediaStream, saveStoredMediaBuffer } from "./mediaStore.js";
 import { createOpenAiClient } from "./openai.js";
 import { addRoomMedia, deleteRoom, getRoom, listRooms, removeRoomMedia, replaceRoomMedia, roomSchema, saveRoom } from "./rooms.js";
-import { authenticate, createUser, getAuthenticatedUser, isAuthRequired, listDevices, listUsers, logout, revokeUserSessions, updateDevice, updateUser, writeAudit, type AuthUser } from "./auth.js";
+import { authenticate, createUser, deleteUser, getAuthenticatedUser, isAuthRequired, listDevices, listUsers, logout, revokeUserSessions, updateDevice, updateUser, writeAudit, type AuthUser } from "./auth.js";
 
 await connectDatabase();
 
@@ -94,7 +94,7 @@ const publicApiPaths = new Set([
   "/api/public/menu",
   "/api/public/menu-orders"
 ]);
-const MIN_EXTENSION_VERSION = process.env.MIN_EXTENSION_VERSION || "1.0.263";
+const MIN_EXTENSION_VERSION = process.env.MIN_EXTENSION_VERSION || "1.0.264";
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 
 app.addHook("preHandler", async (request, reply) => {
@@ -210,6 +210,20 @@ app.delete("/api/auth/users/:id/sessions", async (request, reply) => {
   const revoked = await revokeUserSessions(id);
   await writeAudit("user.sessions.revoked", actor, request, { userId: id, revoked });
   return { revoked };
+});
+
+app.delete("/api/auth/users/:id", async (request, reply) => {
+  const actor = getRequestAuthUser(request);
+  if (!actor || actor.role !== "admin") return reply.status(403).send({ error: "Admin access required" });
+  try {
+    const { id } = request.params as { id: string };
+    const deleted = await deleteUser(id, actor.id);
+    if (!deleted) return reply.status(404).send({ error: "User not found" });
+    await writeAudit("user.deleted", actor, request, { userId: id, username: deleted.username });
+    return { deleted: true };
+  } catch (error) {
+    return reply.status(400).send({ error: error instanceof Error ? error.message : String(error) });
+  }
 });
 
 app.get("/api/auth/devices", async (request, reply) => {

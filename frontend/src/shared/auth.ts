@@ -85,6 +85,12 @@ export async function revokeManagedUserSessions(id: string) {
   if (!response.ok) throw new Error("Не удалось завершить сессии пользователя.");
 }
 
+export async function deleteManagedUser(id: string) {
+  const response = await fetch(`${API_BASE_URL}/api/auth/users/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const payload = await response.json().catch(() => ({})) as { error?: string };
+  if (!response.ok) throw new Error(payload.error === "You cannot delete your own account" ? "Нельзя удалить свою учётную запись." : payload.error === "The last administrator cannot be deleted" ? "Нельзя удалить последнего администратора." : payload.error || "Не удалось удалить пользователя.");
+}
+
 export async function getManagedDevices() {
   const response = await fetch(`${API_BASE_URL}/api/auth/devices`);
   if (!response.ok) throw new Error("Не удалось загрузить устройства.");

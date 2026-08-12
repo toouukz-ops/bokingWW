@@ -120,6 +120,17 @@ export async function revokeUserSessions(id: string) {
   return (await sessions.deleteMany({ userId: new ObjectId(id) })).deletedCount;
 }
 
+export async function deleteUser(id: string, actorId: string) {
+  if (id === actorId) throw new Error("You cannot delete your own account");
+  const _id = new ObjectId(id);
+  const user = await users.findOne({ _id });
+  if (!user) return null;
+  if (user.role === "admin" && await users.countDocuments({ role: "admin", active: { $ne: false } }) <= 1) throw new Error("The last administrator cannot be deleted");
+  await Promise.all([sessions.deleteMany({ userId: _id }), devices.deleteMany({ userId: _id })]);
+  await users.deleteOne({ _id });
+  return serializeUserRecord(user);
+}
+
 export async function listDevices(): Promise<AuthDevice[]> {
   const userRecords = await users.find({}).project({ username: 1 }).toArray();
   const names = new Map(userRecords.map((user) => [String(user._id), String(user.username)]));

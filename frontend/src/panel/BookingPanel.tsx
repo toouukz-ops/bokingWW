@@ -100,7 +100,7 @@ import {
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
 import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ContactLock, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, MenuOrder, PaymentSettings, QuickReplyButton, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, RoomWorkStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
-import { createManagedUser, getCurrentAuthUser, getManagedDevices, getManagedUsers, revokeManagedUserSessions, setManagedDeviceStatus, updateManagedUser, type ManagedDevice, type ManagedUser } from "../shared/auth";
+import { createManagedUser, deleteManagedUser, getCurrentAuthUser, getManagedDevices, getManagedUsers, revokeManagedUserSessions, setManagedDeviceStatus, updateManagedUser, type ManagedDevice, type ManagedUser } from "../shared/auth";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -13679,6 +13679,18 @@ function SettingsModal({
     }
   }
 
+  async function removeManagedUser(user: ManagedUser) {
+    if (!window.confirm(`Удалить пользователя «${user.displayName}»? Его устройства и активные сессии тоже будут удалены.`)) return;
+    try {
+      await deleteManagedUser(user.id);
+      await loadManagedUsers();
+      setManagedUsersMessage(`Пользователь ${user.username} удалён.`);
+    } catch (error) {
+      setManagedUsersState("error");
+      setManagedUsersMessage(error instanceof Error ? error.message : "Не удалось удалить пользователя.");
+    }
+  }
+
   async function changeManagedDevice(device: ManagedDevice, status: "approved" | "blocked") {
     try {
       await setManagedDeviceStatus(device.id, status);
@@ -14822,7 +14834,7 @@ function SettingsModal({
                 ) : null}
               </section>
 
-              <section className={`gpb-settings-panel ${activeSettingsSection === "users" ? "" : "is-hidden"}`}>
+              <section className={`gpb-settings-panel gpb-users-panel ${activeSettingsSection === "users" ? "" : "is-hidden"}`}>
                 <div className="gpb-editor-title">
                   <Users size={20} />
                   <h2>Пользователи</h2>
@@ -14847,18 +14859,26 @@ function SettingsModal({
                         const userDevices = managedDevices.filter((device) => device.userId === user.id);
                         return (
                           <article className={`gpb-managed-user-card ${user.active ? "" : "is-disabled"}`} key={user.id}>
-                            <header><div><strong>{user.displayName}</strong><small>@{user.username} · {user.role === "admin" ? "Администратор" : "Оператор"}</small></div><span className={user.active ? "is-active" : "is-blocked"}>{user.active ? "Активен" : "Заблокирован"}</span></header>
-                            <div className="gpb-managed-user-fields">
-                              <label><span>Имя</span><input value={edit.displayName} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, displayName: event.target.value } }))} /></label>
-                              <label><span>Роль</span><select value={edit.role} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, role: event.target.value === "admin" ? "admin" : "operator" } }))}><option value="operator">Оператор</option><option value="admin">Администратор</option></select></label>
-                              <label className="is-wide"><span>Новый пароль <em>не заполняйте, если не меняете</em></span><input value={edit.password} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, password: event.target.value } }))} placeholder="Введите новый пароль" type="password" autoComplete="new-password" /></label>
+                            <div className="gpb-user-row">
+                              <div className="gpb-user-identity"><strong>{user.displayName}</strong><span>@{user.username}</span></div>
+                              <span className="gpb-user-role">{user.role === "admin" ? "Администратор" : "Оператор"}</span>
+                              <span className={`gpb-user-state ${user.active ? "is-active" : "is-blocked"}`}>{user.active ? "Активен" : "Заблокирован"}</span>
+                              <span className="gpb-user-device-count">Устройств: {userDevices.filter((item) => item.status === "approved").length}</span>
                             </div>
-                            <div className="gpb-managed-user-actions">
-                              <button className="gpb-primary" type="button" onClick={() => void saveManagedUser(user)}>Сохранить</button>
-                              <button type="button" onClick={() => void revokeManagedUserSessions(user.id).then(() => setManagedUsersMessage("Все сессии пользователя завершены."))}>Завершить сессии</button>
+                            <details className="gpb-user-edit-details">
+                              <summary>Изменить</summary>
+                              <div className="gpb-managed-user-fields">
+                                <label><span>Имя</span><input value={edit.displayName} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, displayName: event.target.value } }))} /></label>
+                                <label><span>Роль</span><select value={edit.role} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, role: event.target.value === "admin" ? "admin" : "operator" } }))}><option value="operator">Оператор</option><option value="admin">Администратор</option></select></label>
+                                <label className="is-wide"><span>Новый пароль <em>оставьте пустым, если не меняете</em></span><input value={edit.password} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, password: event.target.value } }))} placeholder="Новый пароль" type="password" autoComplete="new-password" /></label>
+                              </div>
+                              <div className="gpb-managed-user-actions"><button className="gpb-primary" type="button" onClick={() => void saveManagedUser(user)}>Сохранить изменения</button></div>
+                            </details>
+                            <div className="gpb-managed-user-actions gpb-user-security-actions">
+                              <button type="button" onClick={() => void revokeManagedUserSessions(user.id).then(() => setManagedUsersMessage("Все сессии пользователя завершены."))}>Выйти на всех устройствах</button>
                               <button className={user.active ? "is-danger" : ""} type="button" onClick={() => void toggleManagedUser(user)}>{user.active ? "Заблокировать" : "Разблокировать"}</button>
+                              <button className="is-danger" type="button" disabled={getCurrentAuthUser()?.id === user.id} onClick={() => void removeManagedUser(user)}>Удалить</button>
                             </div>
-                            <div className="gpb-user-devices-summary"><span>Устройства</span><strong>{userDevices.filter((item) => item.status === "approved").length} разрешено</strong><small>{userDevices.filter((item) => item.status === "pending").length ? `${userDevices.filter((item) => item.status === "pending").length} ожидает` : "Нет новых запросов"}</small></div>
                           </article>
                         );
                       })}

@@ -100,6 +100,7 @@ import {
 } from "../shared/api";
 import type { BackupExportOptions } from "../shared/api";
 import type { ActiveChat, ActiveDialog, AiReplySuggestions, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ContactLock, ExpenseCategory, ExpenseEntry, ExtraGuestType, ExtraInventoryItem, ExtraInventoryPlacement, GuestContact, MenuItem, MenuOrder, PaymentSettings, QuickReplyButton, Reservation, ReservationItem, ReservationPayment, Room, RoomHold, RoomStatus, RoomWorkStatus, SleepingPlace, SleepingPlaceType } from "../shared/types";
+import { createManagedUser, getCurrentAuthUser, getManagedUsers, revokeManagedUserSessions, updateManagedUser, type ManagedUser } from "../shared/auth";
 
 const MIN_WIDTH = 560;
 const MAX_WIDTH = 960;
@@ -13564,6 +13565,11 @@ function SettingsModal({
   const [savedChatDialogs, setSavedChatDialogs] = useState<ChatMessageDialog[]>([]);
   const [savedChatDialogStatus, setSavedChatDialogStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
   const [savedChatDialogActionState, setSavedChatDialogActionState] = useState<"idle" | "copied" | "exported" | "error">("idle");
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
+  const [managedUsersState, setManagedUsersState] = useState<"idle" | "loading" | "saving" | "error">("idle");
+  const [managedUsersMessage, setManagedUsersMessage] = useState("");
+  const [newManagedUser, setNewManagedUser] = useState({ username: "", displayName: "", password: "", role: "operator" as "admin" | "operator" });
+  const [managedUserEdits, setManagedUserEdits] = useState<Record<string, { displayName: string; password: string; role: "admin" | "operator" }>>({});
   const objectGalleryPhotoInputRef = useRef<HTMLInputElement | null>(null);
   const objectGalleryVideoInputRef = useRef<HTMLInputElement | null>(null);
   const [backupOptions, setBackupOptions] = useState<BackupExportOptions>({
@@ -13610,6 +13616,66 @@ function SettingsModal({
   useEffect(() => {
     setLocalOperatorName(operatorName);
   }, [operatorName]);
+
+  useEffect(() => {
+    if (activeSettingsSection !== "users" || getCurrentAuthUser()?.role !== "admin") return;
+    void loadManagedUsers();
+  }, [activeSettingsSection]);
+
+  async function loadManagedUsers() {
+    setManagedUsersState("loading");
+    setManagedUsersMessage("");
+    try {
+      const users = await getManagedUsers();
+      setManagedUsers(users);
+      setManagedUserEdits(Object.fromEntries(users.map((user) => [user.id, { displayName: user.displayName, password: "", role: user.role }])));
+      setManagedUsersState("idle");
+    } catch (error) {
+      setManagedUsersState("error");
+      setManagedUsersMessage(error instanceof Error ? error.message : "Не удалось загрузить пользователей.");
+    }
+  }
+
+  async function submitManagedUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setManagedUsersState("saving");
+    setManagedUsersMessage("");
+    try {
+      await createManagedUser(newManagedUser);
+      setNewManagedUser({ username: "", displayName: "", password: "", role: "operator" });
+      await loadManagedUsers();
+      setManagedUsersMessage("Пользователь создан.");
+    } catch (error) {
+      setManagedUsersState("error");
+      setManagedUsersMessage(error instanceof Error ? error.message : "Не удалось создать пользователя.");
+    }
+  }
+
+  async function saveManagedUser(user: ManagedUser) {
+    const edit = managedUserEdits[user.id];
+    if (!edit) return;
+    setManagedUsersState("saving");
+    try {
+      const updated = await updateManagedUser(user.id, { displayName: edit.displayName, role: edit.role, ...(edit.password ? { password: edit.password } : {}) });
+      setManagedUsers((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, password: "" } }));
+      setManagedUsersState("idle");
+      setManagedUsersMessage(`Пользователь ${updated.username} обновлён.`);
+    } catch (error) {
+      setManagedUsersState("error");
+      setManagedUsersMessage(error instanceof Error ? error.message : "Не удалось обновить пользователя.");
+    }
+  }
+
+  async function toggleManagedUser(user: ManagedUser) {
+    try {
+      const updated = await updateManagedUser(user.id, { active: !user.active });
+      setManagedUsers((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setManagedUsersMessage(updated.active ? "Доступ пользователя включён." : "Пользователь заблокирован, его сессии завершены.");
+    } catch (error) {
+      setManagedUsersMessage(error instanceof Error ? error.message : "Не удалось изменить доступ.");
+    }
+  }
 
   useEffect(() => {
     setLocalChatBotPrompt(chatBotPrompt);
@@ -14748,30 +14814,51 @@ function SettingsModal({
                   <Users size={20} />
                   <h2>Пользователи</h2>
                 </div>
-                <p className="gpb-settings-note">Имя этой машины показывается другим операторам в статусе активного диалога.</p>
-                <label className="gpb-wide-label">
-                  Имя оператора
-                  <input
-                    type="text"
-                    value={localOperatorName}
-                    onChange={(event) => {
-                      setLocalOperatorName(event.target.value);
-                      if (operatorSaveState !== "idle") setOperatorSaveState("idle");
-                    }}
-                    placeholder="Например: Эрнест"
-                  />
-                </label>
-                <div className="gpb-settings-panel-actions">
-                  <button className="gpb-settings-add-button" type="button" onClick={saveOperatorName} disabled={operatorSaveState === "saving"}>
-                    {operatorSaveState === "saving" ? "Сохраняю..." : "Сохранить пользователя"}
-                  </button>
-                  {operatorSaveState === "saved" ? <span className="gpb-settings-save-status">Сохранено</span> : null}
-                  {operatorSaveState === "error" ? <span className="gpb-settings-save-status is-error">Ошибка сохранения</span> : null}
-                </div>
-                <label className="gpb-wide-label">
-                  ID машины
-                  <input readOnly type="text" value={syncClientId} />
-                </label>
+                {getCurrentAuthUser()?.role === "admin" ? (
+                  <>
+                    <p className="gpb-settings-note">Создавайте отдельный логин каждому сотруднику. Пароль не отображается после сохранения — его можно только заменить.</p>
+                    <form className="gpb-user-create-form" onSubmit={submitManagedUser}>
+                      <input value={newManagedUser.username} onChange={(event) => setNewManagedUser((value) => ({ ...value, username: event.target.value }))} placeholder="Логин" autoComplete="off" required />
+                      <input value={newManagedUser.displayName} onChange={(event) => setNewManagedUser((value) => ({ ...value, displayName: event.target.value }))} placeholder="Имя сотрудника" required />
+                      <input value={newManagedUser.password} onChange={(event) => setNewManagedUser((value) => ({ ...value, password: event.target.value }))} placeholder="Пароль — минимум 10 символов" type="password" autoComplete="new-password" minLength={10} required />
+                      <select value={newManagedUser.role} onChange={(event) => setNewManagedUser((value) => ({ ...value, role: event.target.value === "admin" ? "admin" : "operator" }))}>
+                        <option value="operator">Оператор</option>
+                        <option value="admin">Администратор</option>
+                      </select>
+                      <button className="gpb-primary" type="submit" disabled={managedUsersState === "saving"}>Добавить пользователя</button>
+                    </form>
+                    <div className="gpb-managed-users-list">
+                      {managedUsersState === "loading" ? <p>Загружаю пользователей…</p> : null}
+                      {managedUsers.map((user) => {
+                        const edit = managedUserEdits[user.id] ?? { displayName: user.displayName, password: "", role: user.role };
+                        return (
+                          <article className={`gpb-managed-user-card ${user.active ? "" : "is-disabled"}`} key={user.id}>
+                            <header><strong>{user.username}</strong><span>{user.active ? "Активен" : "Заблокирован"}</span></header>
+                            <div className="gpb-managed-user-fields">
+                              <input value={edit.displayName} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, displayName: event.target.value } }))} placeholder="Имя" />
+                              <input value={edit.password} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, password: event.target.value } }))} placeholder="Новый пароль (не менять — оставить пустым)" type="password" autoComplete="new-password" />
+                              <select value={edit.role} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, role: event.target.value === "admin" ? "admin" : "operator" } }))}>
+                                <option value="operator">Оператор</option><option value="admin">Администратор</option>
+                              </select>
+                            </div>
+                            <div className="gpb-managed-user-actions">
+                              <button className="gpb-primary" type="button" onClick={() => void saveManagedUser(user)}>Сохранить</button>
+                              <button type="button" onClick={() => void revokeManagedUserSessions(user.id).then(() => setManagedUsersMessage("Все сессии пользователя завершены."))}>Завершить сессии</button>
+                              <button className={user.active ? "is-danger" : ""} type="button" onClick={() => void toggleManagedUser(user)}>{user.active ? "Заблокировать" : "Разблокировать"}</button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                    {managedUsersMessage ? <div className={`gpb-settings-save-status ${managedUsersState === "error" ? "is-error" : ""}`}>{managedUsersMessage}</div> : null}
+                  </>
+                ) : <p className="gpb-settings-note">Управление пользователями доступно только администратору.</p>}
+                <details className="gpb-user-machine-settings">
+                  <summary>Настройки этой машины</summary>
+                  <label className="gpb-wide-label">Имя машины<input type="text" value={localOperatorName} onChange={(event) => setLocalOperatorName(event.target.value)} /></label>
+                  <button className="gpb-settings-add-button" type="button" onClick={saveOperatorName}>Сохранить имя машины</button>
+                  <label className="gpb-wide-label">ID машины<input readOnly type="text" value={syncClientId} /></label>
+                </details>
               </section>
 
               <section className={`gpb-settings-panel ${activeSettingsSection === "service" ? "" : "is-hidden"}`}>

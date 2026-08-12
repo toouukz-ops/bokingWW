@@ -11517,3 +11517,17 @@ body.gpb-reservation-split-resizing {
 .gpb-auth-panel button { min-height: 44px; border: 0; border-radius: 9px; background: #10715d; color: #fff; font-weight: 800; }
 .gpb-auth-error { border-radius: 8px; background: #fff0f0; padding: 9px; color: #b42318; font-weight: 700; }
 .gpb-auth-logout { position: fixed; z-index: 2147483647; right: 76px; bottom: 12px; border: 1px solid #cbd5df; border-radius: 999px; background: #fff; padding: 6px 10px; color: #475569; font-size: 11px; pointer-events: auto; }
+
+.gpb-user-create-form, .gpb-managed-user-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.gpb-user-create-form input, .gpb-user-create-form select, .gpb-managed-user-fields input, .gpb-managed-user-fields select { min-height: 38px; border: 1px solid #cbd5df; border-radius: 8px; padding: 0 10px; }
+.gpb-user-create-form button { grid-column: 1 / -1; }
+.gpb-managed-users-list { display: grid; gap: 10px; margin-top: 14px; }
+.gpb-managed-user-card { display: grid; gap: 9px; border: 1px solid #d8dee5; border-radius: 10px; background: #f8fafb; padding: 11px; }
+.gpb-managed-user-card.is-disabled { opacity: .68; }
+.gpb-managed-user-card header, .gpb-managed-user-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.gpb-managed-user-card header span { color: #64748b; font-size: 12px; font-weight: 800; }
+.gpb-managed-user-actions { justify-content: flex-start; flex-wrap: wrap; }
+.gpb-managed-user-actions button { min-height: 34px; border: 1px solid #cbd5df; border-radius: 7px; background: #fff; padding: 0 10px; font-weight: 750; }
+.gpb-managed-user-actions button.is-danger { color: #b42318; border-color: #f0b7b7; }
+.gpb-user-machine-settings { margin-top: 16px; border-top: 1px solid #d8dee5; padding-top: 12px; }
+.gpb-user-machine-settings summary { cursor: pointer; font-weight: 800; }

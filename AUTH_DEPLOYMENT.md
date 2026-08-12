@@ -2,7 +2,7 @@
 
 ## 1. Deploy without enforcement
 
-Deploy the backend with `AUTH_REQUIRED=false` (or leave it unset). Authentication endpoints are available, but existing extension versions continue to work.
+Authentication is required by default. Deploy without `AUTH_REQUIRED`, or set `AUTH_REQUIRED=true`. Existing extension versions that do not support login will be denied access.
 
 ## 2. Create the first administrator
 

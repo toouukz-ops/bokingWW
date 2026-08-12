@@ -13,7 +13,7 @@ const SESSION_HOURS = Math.max(1, Number.parseInt(process.env.AUTH_SESSION_HOURS
 export type AuthUser = { id: string; username: string; displayName: string; role: "admin" | "operator" };
 
 export function isAuthRequired() {
-  return String(process.env.AUTH_REQUIRED || "false").toLowerCase() === "true";
+  return String(process.env.AUTH_REQUIRED || "true").toLowerCase() !== "false";
 }
 
 export async function hashPassword(password: string) {

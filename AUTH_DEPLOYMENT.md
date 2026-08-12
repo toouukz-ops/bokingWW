@@ -29,9 +29,10 @@ Set these backend environment variables and redeploy:
 ```text
 AUTH_REQUIRED=true
 AUTH_SESSION_HOURS=12
+MIN_EXTENSION_VERSION=1.0.261
 ```
 
-After this deploy, old extensions and direct API requests without a valid token receive HTTP 401.
+After this deploy, extensions older than `MIN_EXTENSION_VERSION` (or without a version marker) receive HTTP 426. Current extensions without a valid token receive HTTP 401.
 
 ## Emergency rollback
 

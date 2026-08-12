@@ -91,16 +91,25 @@ await mkdir(uploadsRoot, { recursive: true });
 
 const publicApiPaths = new Set([
   "/api/health",
-  "/api/auth/login",
   "/api/public/menu",
   "/api/public/menu-orders"
 ]);
+const MIN_EXTENSION_VERSION = process.env.MIN_EXTENSION_VERSION || "1.0.261";
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 
 app.addHook("preHandler", async (request, reply) => {
   const path = request.url.split("?")[0] || "";
   const isPublic = publicApiPaths.has(path) || path.startsWith("/api/public/menu/");
   if (!path.startsWith("/api/") || isPublic) return;
+  const query = request.query as { extension_version?: string } | undefined;
+  const extensionVersion = String(request.headers["x-gpb-extension-version"] || query?.extension_version || "").trim();
+  if (compareVersions(extensionVersion, MIN_EXTENSION_VERSION) < 0) {
+    return reply.status(426).send({
+      error: "Extension update required",
+      code: "EXTENSION_UPDATE_REQUIRED",
+      minimumVersion: MIN_EXTENSION_VERSION
+    });
+  }
   const auth = await getAuthenticatedUser(request);
   if (auth) {
     (request as FastifyRequest & { authUser?: AuthUser }).authUser = auth.user;
@@ -108,6 +117,18 @@ app.addHook("preHandler", async (request, reply) => {
   }
   if (isAuthRequired()) return reply.status(401).send({ error: "Authentication required", code: "AUTH_REQUIRED" });
 });
+
+function compareVersions(left: string, right: string) {
+  const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10));
+  const leftParts = parse(left);
+  const rightParts = parse(right);
+  if (!left || leftParts.some((part) => !Number.isFinite(part))) return -1;
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] || 0) - (rightParts[index] || 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
 
 app.addHook("onResponse", async (request, reply) => {
   if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return;

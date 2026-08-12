@@ -11518,7 +11518,7 @@ body.gpb-reservation-split-resizing {
 .gpb-auth-error { border-radius: 8px; background: #fff0f0; padding: 9px; color: #b42318; font-weight: 700; }
 .gpb-auth-logout { position: fixed; z-index: 2147483647; right: 76px; bottom: 12px; border: 1px solid #cbd5df; border-radius: 999px; background: #fff; padding: 6px 10px; color: #475569; font-size: 11px; pointer-events: auto; }
 
-.gpb-users-panel { max-width: 920px; }
+.gpb-users-panel { max-width: 1040px; }
 .gpb-user-create-box { width: min(100%, 620px); margin: 4px 0 18px; border: 1px solid #b9d8ce; border-radius: 12px; background: #f3faf7; overflow: hidden; }
 .gpb-user-create-box summary { display: flex; align-items: center; gap: 7px; padding: 11px 13px; color: #0f6d59; cursor: pointer; font-weight: 850; }
 .gpb-user-create-box[open] summary { border-bottom: 1px solid #d4e8e1; }
@@ -11536,6 +11536,12 @@ body.gpb-reservation-split-resizing {
 .gpb-users-section-heading span { min-width: 22px; border-radius: 999px; background: #e7edf1; padding: 2px 7px; color: #536170; font-size: 11px; text-align: center; }
 .gpb-users-section-heading small { color: #758190; font-size: 11px; }
 .gpb-managed-users-list { display: grid; gap: 8px; }
+.gpb-users-table { overflow: hidden; border: 1px solid #d8dee5; border-radius: 11px; background: #fff; }
+.gpb-users-table-head, .gpb-user-row { display: grid; grid-template-columns: minmax(145px, 1.2fr) 105px 80px 72px minmax(300px, 1.6fr); align-items: center; gap: 10px; }
+.gpb-users-table-head { min-height: 30px; background: #f3f6f8; padding: 0 11px; color: #758190; font-size: 9px; font-weight: 850; text-transform: uppercase; }
+.gpb-user-table-item + .gpb-user-table-item { border-top: 1px solid #e1e7eb; }
+.gpb-user-table-item.is-disabled .gpb-user-row { opacity: .62; }
+.gpb-user-table-item .gpb-user-row { min-height: 52px; padding: 7px 11px; }
 .gpb-managed-user-card { display: grid; gap: 9px; border: 1px solid #d8dee5; border-radius: 11px; background: #f8fafb; padding: 10px 12px; }
 .gpb-managed-user-card.is-disabled { opacity: .68; }
 .gpb-managed-user-card header, .gpb-managed-user-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -11552,7 +11558,6 @@ body.gpb-reservation-split-resizing {
 .gpb-managed-user-actions button.gpb-primary { border-color: #0f755f; background: #0f755f; color: #fff; }
 .gpb-managed-user-actions button.is-danger { color: #b42318; border-color: #f0b7b7; }
 .gpb-managed-user-actions button:disabled { cursor: not-allowed; opacity: .45; }
-.gpb-user-row { display: grid; grid-template-columns: minmax(150px, 1fr) 120px 90px 95px; align-items: center; gap: 12px; }
 .gpb-user-identity { display: grid; gap: 1px; }
 .gpb-user-identity strong { color: #1f2933; font-size: 13px; }
 .gpb-user-identity span, .gpb-user-device-count { color: #758190; font-size: 10px; }
@@ -11560,16 +11565,32 @@ body.gpb-reservation-split-resizing {
 .gpb-user-state { justify-self: start; border-radius: 999px; padding: 3px 7px; font-size: 10px; font-weight: 850; }
 .gpb-user-state.is-active { background: #dff5eb; color: #0f6d59; }
 .gpb-user-state.is-blocked { background: #fee8e7; color: #b42318; }
-.gpb-user-edit-details { border-top: 1px solid #e1e7eb; padding-top: 7px; }
-.gpb-user-edit-details summary { width: fit-content; color: #0f6d59; cursor: pointer; font-size: 11px; font-weight: 850; }
-.gpb-user-edit-details[open] summary { margin-bottom: 9px; }
-.gpb-user-edit-details .gpb-managed-user-fields { max-width: 620px; }
-.gpb-user-edit-details .gpb-managed-user-actions { margin-top: 9px; }
-.gpb-user-security-actions { border-top: 1px solid #e1e7eb; padding-top: 8px; }
+.gpb-user-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+.gpb-user-row-actions button { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; border: 1px solid #d1d9e0; border-radius: 6px; background: #fff; padding: 0 8px; color: #33404c; font-size: 10px; font-weight: 750; white-space: nowrap; }
+.gpb-user-row-actions button.is-danger { border-color: #f0c3c0; color: #b42318; }
+.gpb-user-row-actions button.is-icon { width: 29px; justify-content: center; padding: 0; }
+.gpb-user-edit-panel { border-top: 1px solid #d8dee5; background: #f8fafb; padding: 11px; }
+.gpb-user-edit-title { display: flex; align-items: center; justify-content: space-between; max-width: 620px; margin-bottom: 9px; }
+.gpb-user-edit-title strong { color: #33404c; font-size: 11px; }
+.gpb-user-edit-title button { display: grid; width: 26px; height: 26px; place-items: center; border: 0; border-radius: 6px; background: transparent; color: #64748b; }
+.gpb-user-edit-panel .gpb-managed-user-fields { max-width: 620px; }
+.gpb-user-edit-panel .gpb-managed-user-actions { margin-top: 9px; }
+.gpb-devices-list { overflow: hidden; border: 1px solid #d8dee5; border-radius: 11px; background: #fff; }
+.gpb-device-row { display: grid; grid-template-columns: minmax(200px, 1fr) 150px auto; align-items: center; gap: 12px; min-height: 52px; padding: 8px 11px; }
+.gpb-device-row + .gpb-device-row { border-top: 1px solid #e1e7eb; }
+.gpb-device-row > div:first-child { display: grid; gap: 2px; }
+.gpb-device-row strong { color: #1f2933; font-size: 12px; }
+.gpb-device-row small { color: #758190; font-size: 10px; }
+.gpb-device-row > span { justify-self: start; border-radius: 999px; background: #e7edf1; padding: 3px 7px; color: #64748b; font-size: 10px; font-weight: 850; }
+.gpb-device-row.is-approved > span { background: #dff5eb; color: #0f6d59; }
+.gpb-device-row.is-pending { background: #fffaf0; }
+.gpb-device-row.is-pending > span { background: #fff0c7; color: #8a5a00; }
+.gpb-device-row.is-blocked > span { background: #fee8e7; color: #b42318; }
 .gpb-user-devices-summary { display: flex; align-items: center; gap: 8px; border-top: 1px solid #e1e7eb; padding-top: 8px; color: #758190; font-size: 10px; }
 .gpb-user-devices-summary span { font-weight: 800; }
 .gpb-user-devices-summary strong { color: #0f6d59; }
 .gpb-user-devices-summary small { margin-left: auto; }
 .gpb-user-machine-settings { margin-top: 16px; border-top: 1px solid #d8dee5; padding-top: 12px; }
 .gpb-user-machine-settings summary { cursor: pointer; font-weight: 800; }
-@media (max-width: 700px) { .gpb-user-create-form, .gpb-managed-user-fields { grid-template-columns: 1fr; } .gpb-managed-user-fields label.is-wide { grid-column: auto; } .gpb-users-section-heading { align-items: flex-start; flex-direction: column; gap: 2px; } .gpb-user-row { grid-template-columns: 1fr auto; gap: 4px 10px; } .gpb-user-role, .gpb-user-device-count { grid-row: 2; } }
+@media (max-width: 800px) { .gpb-users-table-head { display: none; } .gpb-user-row { grid-template-columns: 1fr auto auto; gap: 5px 10px; } .gpb-user-role, .gpb-user-device-count { grid-row: 2; } .gpb-user-row-actions { grid-column: 1 / -1; justify-content: flex-start; } .gpb-device-row { grid-template-columns: 1fr auto; } .gpb-device-row .gpb-managed-user-actions { grid-column: 1 / -1; } }
+@media (max-width: 700px) { .gpb-user-create-form, .gpb-managed-user-fields { grid-template-columns: 1fr; } .gpb-managed-user-fields label.is-wide { grid-column: auto; } .gpb-users-section-heading { align-items: flex-start; flex-direction: column; gap: 2px; } }

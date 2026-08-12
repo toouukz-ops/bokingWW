@@ -13571,6 +13571,7 @@ function SettingsModal({
   const [managedUsersMessage, setManagedUsersMessage] = useState("");
   const [newManagedUser, setNewManagedUser] = useState({ username: "", displayName: "", password: "", role: "operator" as "admin" | "operator" });
   const [managedUserEdits, setManagedUserEdits] = useState<Record<string, { displayName: string; password: string; role: "admin" | "operator" }>>({});
+  const [editingManagedUserId, setEditingManagedUserId] = useState("");
   const objectGalleryPhotoInputRef = useRef<HTMLInputElement | null>(null);
   const objectGalleryVideoInputRef = useRef<HTMLInputElement | null>(null);
   const [backupOptions, setBackupOptions] = useState<BackupExportOptions>({
@@ -13661,6 +13662,7 @@ function SettingsModal({
       const updated = await updateManagedUser(user.id, { displayName: edit.displayName, role: edit.role, ...(edit.password ? { password: edit.password } : {}) });
       setManagedUsers((items) => items.map((item) => item.id === updated.id ? updated : item));
       setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, password: "" } }));
+      setEditingManagedUserId("");
       setManagedUsersState("idle");
       setManagedUsersMessage(`Пользователь ${updated.username} обновлён.`);
     } catch (error) {
@@ -14851,43 +14853,45 @@ function SettingsModal({
                         <button className="gpb-primary" type="submit" disabled={managedUsersState === "saving"}>Создать пользователя</button>
                       </form>
                     </details>
-                    <div className="gpb-users-section-heading"><div><strong>Сотрудники</strong><span>{managedUsers.length}</span></div><small>Логины, роли и доступ</small></div>
-                    <div className="gpb-managed-users-list">
+                    <div className="gpb-users-section-heading"><div><strong>Сотрудники</strong><span>{managedUsers.length}</span></div><small>Учётные записи для входа</small></div>
+                    <div className="gpb-users-table">
+                      <div className="gpb-users-table-head"><span>Пользователь</span><span>Роль</span><span>Доступ</span><span>Компьютеры</span><span>Действия</span></div>
                       {managedUsersState === "loading" ? <p>Загружаю пользователей…</p> : null}
                       {managedUsers.map((user) => {
                         const edit = managedUserEdits[user.id] ?? { displayName: user.displayName, password: "", role: user.role };
                         const userDevices = managedDevices.filter((device) => device.userId === user.id);
                         return (
-                          <article className={`gpb-managed-user-card ${user.active ? "" : "is-disabled"}`} key={user.id}>
+                          <article className={`gpb-user-table-item ${user.active ? "" : "is-disabled"}`} key={user.id}>
                             <div className="gpb-user-row">
                               <div className="gpb-user-identity"><strong>{user.displayName}</strong><span>@{user.username}</span></div>
                               <span className="gpb-user-role">{user.role === "admin" ? "Администратор" : "Оператор"}</span>
                               <span className={`gpb-user-state ${user.active ? "is-active" : "is-blocked"}`}>{user.active ? "Активен" : "Заблокирован"}</span>
-                              <span className="gpb-user-device-count">Устройств: {userDevices.filter((item) => item.status === "approved").length}</span>
+                              <span className="gpb-user-device-count">{userDevices.filter((item) => item.status === "approved").length}</span>
+                              <div className="gpb-user-row-actions">
+                                <button type="button" onClick={() => setEditingManagedUserId((id) => id === user.id ? "" : user.id)}><Pencil size={13} /> Изменить</button>
+                                <button title="Завершить все сессии" type="button" onClick={() => void revokeManagedUserSessions(user.id).then(() => setManagedUsersMessage("Все сессии пользователя завершены."))}>Выйти</button>
+                                <button className={user.active ? "is-danger" : ""} type="button" onClick={() => void toggleManagedUser(user)}>{user.active ? "Блокировать" : "Разрешить"}</button>
+                                {getCurrentAuthUser()?.id !== user.id ? <button className="is-danger is-icon" title="Удалить пользователя" type="button" onClick={() => void removeManagedUser(user)}><Trash2 size={14} /></button> : null}
+                              </div>
                             </div>
-                            <details className="gpb-user-edit-details">
-                              <summary>Изменить</summary>
+                            {editingManagedUserId === user.id ? <div className="gpb-user-edit-panel">
+                              <div className="gpb-user-edit-title"><strong>Редактирование: {user.displayName}</strong><button type="button" onClick={() => setEditingManagedUserId("")}><X size={14} /></button></div>
                               <div className="gpb-managed-user-fields">
                                 <label><span>Имя</span><input value={edit.displayName} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, displayName: event.target.value } }))} /></label>
                                 <label><span>Роль</span><select value={edit.role} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, role: event.target.value === "admin" ? "admin" : "operator" } }))}><option value="operator">Оператор</option><option value="admin">Администратор</option></select></label>
                                 <label className="is-wide"><span>Новый пароль <em>оставьте пустым, если не меняете</em></span><input value={edit.password} onChange={(event) => setManagedUserEdits((items) => ({ ...items, [user.id]: { ...edit, password: event.target.value } }))} placeholder="Новый пароль" type="password" autoComplete="new-password" /></label>
                               </div>
-                              <div className="gpb-managed-user-actions"><button className="gpb-primary" type="button" onClick={() => void saveManagedUser(user)}>Сохранить изменения</button></div>
-                            </details>
-                            <div className="gpb-managed-user-actions gpb-user-security-actions">
-                              <button type="button" onClick={() => void revokeManagedUserSessions(user.id).then(() => setManagedUsersMessage("Все сессии пользователя завершены."))}>Выйти на всех устройствах</button>
-                              <button className={user.active ? "is-danger" : ""} type="button" onClick={() => void toggleManagedUser(user)}>{user.active ? "Заблокировать" : "Разблокировать"}</button>
-                              <button className="is-danger" type="button" disabled={getCurrentAuthUser()?.id === user.id} onClick={() => void removeManagedUser(user)}>Удалить</button>
-                            </div>
+                              <div className="gpb-managed-user-actions"><button className="gpb-primary" type="button" onClick={() => void saveManagedUser(user)}>Сохранить</button><button type="button" onClick={() => setEditingManagedUserId("")}>Отмена</button></div>
+                            </div> : null}
                           </article>
                         );
                       })}
                     </div>
-                    <div className="gpb-users-section-heading"><div><strong>Устройства</strong><span>{managedDevices.length}</span></div><small>Разрешайте только знакомые компьютеры</small></div>
-                    <div className="gpb-managed-users-list">
+                    <div className="gpb-users-section-heading"><div><strong>Подключённые компьютеры</strong><span>{managedDevices.length}</span></div><small>Это установки расширения, а не пользователи</small></div>
+                    <div className="gpb-devices-list">
                       {managedDevices.map((device) => (
-                        <article className={`gpb-managed-user-card gpb-device-card is-${device.status}`} key={device.id}>
-                          <header><div><strong>{device.deviceName}</strong><small>Пользователь: @{device.username || "неизвестен"} · ID {device.deviceId.slice(0, 10)}…</small></div><span>{device.status === "approved" ? "Разрешено" : device.status === "pending" ? "Ожидает" : "Заблокировано"}</span></header>
+                        <article className={`gpb-device-row is-${device.status}`} key={device.id}>
+                          <div><strong>{device.deviceName}</strong><small>Вошёл как @{device.username || "неизвестен"} · ID {device.deviceId.slice(0, 10)}…</small></div><span>{device.status === "approved" ? "Разрешён" : device.status === "pending" ? "Ожидает подтверждения" : "Заблокирован"}</span>
                           <div className="gpb-managed-user-actions">
                             {device.status !== "approved" ? <button className="gpb-primary" type="button" onClick={() => void changeManagedDevice(device, "approved")}>Разрешить</button> : null}
                             {device.status !== "blocked" ? <button className="is-danger" type="button" onClick={() => void changeManagedDevice(device, "blocked")}>Заблокировать</button> : null}

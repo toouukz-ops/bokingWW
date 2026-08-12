@@ -94,7 +94,7 @@ const publicApiPaths = new Set([
   "/api/public/menu",
   "/api/public/menu-orders"
 ]);
-const MIN_EXTENSION_VERSION = process.env.MIN_EXTENSION_VERSION || "1.0.264";
+const MIN_EXTENSION_VERSION = process.env.MIN_EXTENSION_VERSION || "1.0.265";
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 
 app.addHook("preHandler", async (request, reply) => {

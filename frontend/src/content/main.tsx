@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { BookingPanel } from "../panel/BookingPanel";
+import { AuthGate } from "../panel/AuthGate";
 import type { ChatBookingDraft, ManualChatStatus, Reservation } from "../shared/types";
 
 const ROOT_ID = "gpb-booking-extension-root";
@@ -91,7 +92,7 @@ function mountPanel() {
   root.id = ROOT_ID;
   document.body.appendChild(root);
 
-  createRoot(root).render(<BookingPanel />);
+  createRoot(root).render(<AuthGate onAuthenticated={startWhatsAppChatStatusOverlay}><BookingPanel /></AuthGate>);
 }
 
 function startWhatsAppChatStatusOverlay() {
@@ -1292,7 +1293,6 @@ function isNonChatRowText(value: string) {
 function waitForWhatsApp() {
   if (document.querySelector("#app")) {
     mountPanel();
-    startWhatsAppChatStatusOverlay();
     return;
   }
 
@@ -1301,7 +1301,6 @@ function waitForWhatsApp() {
     if (app) {
       observer.disconnect();
       mountPanel();
-      startWhatsAppChatStatusOverlay();
     }
   });
 

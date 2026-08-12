@@ -1,4 +1,5 @@
 import type { ActiveDialog, AiReplySuggestions, BookingDraft, ChatBookingDraft, ChatMessageDialog, ChatMessageLogItem, ContactLock, ExpenseCategory, ExpenseEntry, GuestContact, MenuItem, MenuOrder, PaymentSettings, Reservation, Room, RoomHold } from "./types";
+import { appendAuthToken } from "./auth";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://bokingww.onrender.com";
 const LOCAL_ROOMS_STORAGE_KEY = "gpb-booking-rooms";
@@ -39,7 +40,7 @@ export async function getHealth(): Promise<{ ok: boolean; service: string }> {
 
 export function getRealtimeEventsUrl(clientId: string) {
   const params = new URLSearchParams({ clientId });
-  return `${API_BASE_URL}/api/events?${params.toString()}`;
+  return appendAuthToken(`${API_BASE_URL}/api/events?${params.toString()}`);
 }
 
 export async function getActiveDialogs(): Promise<ActiveDialog[]> {

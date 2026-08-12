@@ -12,7 +12,8 @@
     "build": "tsc",
     "migrate:chat-draft-phones": "tsx src/migrateChatDraftPhones.ts",
     "test": "tsx --test src/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "auth:create-user": "tsx src/createUser.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

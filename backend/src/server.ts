@@ -1,6 +1,6 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
-import Fastify, { type FastifyReply } from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { createReadStream } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { stat } from "node:fs/promises";
@@ -56,6 +56,7 @@ import { cropPhotoFile, deleteMediaFile, ensureWhatsappVideoFile, getLocalUpload
 import { getMediaContentType, getStoredMedia, openStoredMediaStream, saveStoredMediaBuffer } from "./mediaStore.js";
 import { createOpenAiClient } from "./openai.js";
 import { addRoomMedia, deleteRoom, getRoom, listRooms, removeRoomMedia, replaceRoomMedia, roomSchema, saveRoom } from "./rooms.js";
+import { authenticate, createUser, getAuthenticatedUser, isAuthRequired, listUsers, logout, revokeUserSessions, updateUser, writeAudit, type AuthUser } from "./auth.js";
 
 await connectDatabase();
 
@@ -87,6 +88,107 @@ await app.register(multipart, {
   }
 });
 await mkdir(uploadsRoot, { recursive: true });
+
+const publicApiPaths = new Set([
+  "/api/health",
+  "/api/auth/login",
+  "/api/public/menu",
+  "/api/public/menu-orders"
+]);
+const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+
+app.addHook("preHandler", async (request, reply) => {
+  const path = request.url.split("?")[0] || "";
+  const isPublic = publicApiPaths.has(path) || path.startsWith("/api/public/menu/");
+  if (!path.startsWith("/api/") || isPublic) return;
+  const auth = await getAuthenticatedUser(request);
+  if (auth) {
+    (request as FastifyRequest & { authUser?: AuthUser }).authUser = auth.user;
+    return;
+  }
+  if (isAuthRequired()) return reply.status(401).send({ error: "Authentication required", code: "AUTH_REQUIRED" });
+});
+
+app.addHook("onResponse", async (request, reply) => {
+  if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return;
+  const actor = getRequestAuthUser(request);
+  if (!actor || request.url.startsWith("/api/auth/") || request.url.startsWith("/api/debug/")) return;
+  await writeAudit("api.mutation", actor, request, { statusCode: reply.statusCode });
+});
+
+app.post("/api/auth/login", async (request, reply) => {
+  const key = request.ip;
+  const now = Date.now();
+  const attempt = loginAttempts.get(key);
+  if (attempt && attempt.resetAt > now && attempt.count >= 8) {
+    return reply.status(429).send({ error: "Too many login attempts" });
+  }
+  const body = request.body as { username?: string; password?: string } | undefined;
+  const result = await authenticate(String(body?.username || ""), String(body?.password || ""), request);
+  if (!result) {
+    loginAttempts.set(key, { count: attempt && attempt.resetAt > now ? attempt.count + 1 : 1, resetAt: now + 15 * 60 * 1000 });
+    return reply.status(401).send({ error: "Invalid login or password" });
+  }
+  loginAttempts.delete(key);
+  return result;
+});
+
+app.get("/api/auth/me", async (request, reply) => {
+  const auth = await getAuthenticatedUser(request);
+  if (!auth) return reply.status(401).send({ error: "Authentication required" });
+  return { user: auth.user };
+});
+
+app.post("/api/auth/logout", async (request, reply) => {
+  await logout(request);
+  return reply.status(204).send();
+});
+
+app.get("/api/auth/users", async (request, reply) => {
+  const actor = getRequestAuthUser(request);
+  if (!actor || actor.role !== "admin") return reply.status(403).send({ error: "Admin access required" });
+  return { users: await listUsers() };
+});
+
+app.post("/api/auth/users", async (request, reply) => {
+  const actor = getRequestAuthUser(request);
+  if (!actor || actor.role !== "admin") return reply.status(403).send({ error: "Admin access required" });
+  try {
+    const body = request.body as { username?: string; displayName?: string; password?: string; role?: "admin" | "operator" };
+    const user = await createUser({ username: String(body.username || ""), displayName: String(body.displayName || ""), password: String(body.password || ""), role: body.role === "admin" ? "admin" : "operator" });
+    await writeAudit("user.created", actor, request, { userId: user.id, username: user.username, role: user.role });
+    return reply.status(201).send({ user });
+  } catch (error) {
+    return reply.status(400).send({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.patch("/api/auth/users/:id", async (request, reply) => {
+  const actor = getRequestAuthUser(request);
+  if (!actor || actor.role !== "admin") return reply.status(403).send({ error: "Admin access required" });
+  try {
+    const { id } = request.params as { id: string };
+    const user = await updateUser(id, request.body as { active?: boolean; displayName?: string; password?: string; role?: "admin" | "operator" });
+    if (!user) return reply.status(404).send({ error: "User not found" });
+    await writeAudit("user.updated", actor, request, { userId: id });
+    return { user };
+  } catch (error) {
+    return reply.status(400).send({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.delete("/api/auth/users/:id/sessions", async (request, reply) => {
+  const actor = getRequestAuthUser(request);
+  if (!actor || actor.role !== "admin") return reply.status(403).send({ error: "Admin access required" });
+  const { id } = request.params as { id: string };
+  const revoked = await revokeUserSessions(id);
+  await writeAudit("user.sessions.revoked", actor, request, { userId: id, revoked });
+  return { revoked };
+});
+
+function getRequestAuthUser(request: FastifyRequest) {
+  return (request as FastifyRequest & { authUser?: AuthUser }).authUser ?? null;
+}
 
 const mediaCacheControl = "public, max-age=31536000, immutable";
 const menuThumbnailWidth = 640;

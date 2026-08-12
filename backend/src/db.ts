@@ -16,6 +16,9 @@ export async function connectDatabase() {
   await ensureCollection("roomHolds");
   await ensureCollection("activeDialogs");
   await ensureCollection("contactLocks");
+  await ensureCollection("authUsers");
+  await ensureCollection("authSessions");
+  await ensureCollection("authAuditLogs");
   await dropLegacyNumberIndex();
   await migrateLegacyRooms();
   await migrateLegacyGuestContacts();
@@ -41,6 +44,11 @@ export async function connectDatabase() {
   await db.collection("contactLocks").createIndex({ phone: 1 }, { unique: true });
   await db.collection("contactLocks").createIndex({ expiresAt: 1 });
   await db.collection("contactLocks").createIndex({ clientId: 1 });
+  await db.collection("authUsers").createIndex({ username: 1 }, { unique: true });
+  await db.collection("authSessions").createIndex({ tokenHash: 1 }, { unique: true });
+  await db.collection("authSessions").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+  await db.collection("authSessions").createIndex({ userId: 1 });
+  await db.collection("authAuditLogs").createIndex({ createdAt: -1 });
 }
 
 export async function closeDatabase() {

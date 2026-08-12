@@ -1,0 +1,56 @@
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { initializeAuth, login, logout, type SessionUser } from "../shared/auth";
+
+export function AuthGate({ children, onAuthenticated }: { children: ReactNode; onAuthenticated: () => void }) {
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [state, setState] = useState<"checking" | "ready" | "submitting">("checking");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    initializeAuth().then((nextUser) => {
+      setUser(nextUser);
+      setState("ready");
+      if (nextUser) onAuthenticated();
+    });
+    const requireAuth = () => {
+      setUser(null);
+      setState("ready");
+      setError("Сессия завершена. Войдите снова.");
+    };
+    window.addEventListener("gpb-auth-required", requireAuth);
+    return () => window.removeEventListener("gpb-auth-required", requireAuth);
+  }, []);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setState("submitting");
+    setError("");
+    try {
+      const nextUser = await login(String(form.get("username") || ""), String(form.get("password") || ""));
+      setUser(nextUser);
+      setState("ready");
+      onAuthenticated();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Не удалось войти.");
+      setState("ready");
+    }
+  }
+
+  if (state === "checking") return <aside className="gpb-auth-panel"><strong>Проверка доступа…</strong></aside>;
+  if (!user) {
+    return (
+      <aside className="gpb-auth-panel">
+        <form onSubmit={submit}>
+          <h2>Вход в GPB</h2>
+          <p>Введите личную учётную запись оператора.</p>
+          <input name="username" autoComplete="username" placeholder="Логин" required />
+          <input name="password" type="password" autoComplete="current-password" placeholder="Пароль" required />
+          {error ? <div className="gpb-auth-error">{error}</div> : null}
+          <button type="submit" disabled={state === "submitting"}>{state === "submitting" ? "Входим…" : "Войти"}</button>
+        </form>
+      </aside>
+    );
+  }
+  return <div data-gpb-auth-user={user.username}>{children}<button className="gpb-auth-logout" type="button" onClick={() => void logout().then(() => setUser(null))}>Выйти · {user.displayName}</button></div>;
+}

@@ -241,7 +241,9 @@ export async function listChatMessages(chatKey: string, limit = 500) {
 export async function listChatMessageDialogs(limit = 200) {
   const documents = await chatMessages
     .find({})
-    .sort({ chatTitle: 1, chatKey: 1, sortKey: 1, createdAt: 1, updatedAt: 1 })
+    // Keep the bounded response focused on recent activity. Sorting by title
+    // before applying the limit could exclude newer dialogs entirely.
+    .sort({ createdAt: -1, updatedAt: -1 })
     .limit(Math.max(1, Math.min(limit, 20_000)))
     .toArray();
   const dialogs = new Map<string, Record<string, unknown> & { messages: Array<Record<string, unknown>> }>();
@@ -260,8 +262,16 @@ export async function listChatMessageDialogs(limit = 200) {
     dialogs.set(document.chatKey, existing);
   }
   return Array.from(dialogs.values()).sort((left, right) =>
+    getChatMessageDialogLatestTime(right) - getChatMessageDialogLatestTime(left) ||
     String(left.chatTitle || left.phone || left.chatKey).localeCompare(String(right.chatTitle || right.phone || right.chatKey), "ru")
   );
+}
+
+function getChatMessageDialogLatestTime(dialog: { messages: Array<Record<string, unknown>> }) {
+  return dialog.messages.reduce((latest, message) => {
+    const createdAt = new Date(String(message.createdAt || "")).getTime();
+    return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
+  }, 0);
 }
 
 export async function saveChatMessagesData(chatKey: string, payload: Record<string, unknown>) {

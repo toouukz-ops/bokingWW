@@ -1310,8 +1310,17 @@ export function BookingPanel() {
     [checkIn, checkOut, checkInTime, checkOutTime, pricedRooms, reservations]
   );
   const availableExtraInventory = useMemo(
-    () => getAvailableExtraInventory(reservations, checkIn, checkOut, inventoryAirBeds, inventoryRollaways, pricedRooms, inventoryCustomCounts, inventoryCustomCapacities),
-    [checkIn, checkOut, inventoryAirBeds, inventoryCustomCapacities, inventoryCustomCounts, inventoryRollaways, pricedRooms, reservations]
+    () => getAvailableExtraInventory(
+      reservations.filter((reservation) => reservation.id !== lastReservation?.id),
+      checkIn,
+      checkOut,
+      inventoryAirBeds,
+      inventoryRollaways,
+      pricedRooms,
+      inventoryCustomCounts,
+      inventoryCustomCapacities
+    ),
+    [checkIn, checkOut, inventoryAirBeds, inventoryCustomCapacities, inventoryCustomCounts, inventoryRollaways, lastReservation?.id, pricedRooms, reservations]
   );
   const visibleAvailableRooms = useMemo(
     () => availableRooms,
@@ -4948,8 +4957,14 @@ export function BookingPanel() {
   }
 
   function addExtraInventoryFromCard(roomId: string, catalogItem: ExtraInventoryCatalogItem, guestType: ExtraGuestType) {
-    const availableCount = getAvailableExtraInventoryCount(availableExtraInventory, catalogItem.id);
-    const currentCount = Object.values(extraInventoryByRoomId).flatMap((item) => getExtraInventoryPlacements(item)).filter((item) => item.typeId === catalogItem.id).length;
+    const isRoomBound = isRoomBoundExtraInventoryType(catalogItem.id, catalogItem.label);
+    const availableCount = isRoomBound
+      ? getRoomBoundExtraInventoryPlaceCapacity(catalogItem.id, inventoryCustomCounts, inventoryCustomCapacities)
+      : getAvailableExtraInventoryCount(availableExtraInventory, catalogItem.id);
+    const currentPlacements = isRoomBound
+      ? getExtraInventoryPlacements(extraInventoryByRoomId[roomId])
+      : Object.values(extraInventoryByRoomId).flatMap((item) => getExtraInventoryPlacements(item));
+    const currentCount = currentPlacements.filter((item) => item.typeId === catalogItem.id).length;
     if (currentCount >= availableCount) {
       setExtraInventoryPickerRoomId("");
       return;
@@ -8456,19 +8471,26 @@ export function BookingPanel() {
                               <>
                                 <span className="gpb-card-extra-items-list">
                                   {extraInventoryCatalogItems.map((item) => {
-                                    const availableCount = getAvailableExtraInventoryCount(availableExtraInventory, item.id);
-                                    const unavailable = availableCount <= 0;
+                                    const isRoomBound = isRoomBoundExtraInventoryType(item.id, item.label);
+                                    const availableCount = isRoomBound
+                                      ? getRoomBoundExtraInventoryPlaceCapacity(item.id, inventoryCustomCounts, inventoryCustomCapacities)
+                                      : getAvailableExtraInventoryCount(availableExtraInventory, item.id);
+                                    const selectedCount = (isRoomBound
+                                      ? getExtraInventoryPlacements(extraInventoryByRoomId[room.id])
+                                      : Object.values(extraInventoryByRoomId).flatMap((entry) => getExtraInventoryPlacements(entry)))
+                                      .filter((placement) => placement.typeId === item.id).length;
+                                    const unavailable = selectedCount >= availableCount;
                                     return (
                                       <button
                                         className={`${item.id === extraInventoryPickerItemId ? "is-active" : ""} ${unavailable ? "is-unavailable" : ""}`.trim()}
                                         type="button"
                                         key={item.id}
                                         disabled={unavailable}
-                                        title={unavailable ? `${item.label}: нет свободных` : `${item.label}: доступно ${availableCount}`}
+                                        title={unavailable ? `${item.label}: все места выбраны` : `${item.label}: свободных мест ${Math.max(0, availableCount - selectedCount)}`}
                                         onClick={() => setExtraInventoryPickerItemId(item.id)}
                                       >
                                         <span>{item.label}</span>
-                                        <small>{unavailable ? "Нет свободных" : `Доступно: ${availableCount}`}</small>
+                                        <small>{unavailable ? "Все места выбраны" : `Свободных мест: ${Math.max(0, availableCount - selectedCount)}`}</small>
                                       </button>
                                     );
                                   })}
@@ -13999,8 +14021,21 @@ function SettingsModal({
                 {savedChatDialogsForDisplay.map((dialog) => (
                   <article className="gpb-dialog-log-card" key={dialog.chatKey}>
                     <header>
-                      <strong>{getSavedChatDialogTitle(dialog)}</strong>
-                      <span>{dialog.messages.length} сообщений</span>
+                      {getSavedChatDialogWhatsAppUrl(dialog) ? (
+                        <a
+                          className="gpb-dialog-log-chat-link"
+                          href={getSavedChatDialogWhatsAppUrl(dialog)}
+                          title={`Открыть чат ${getSavedChatDialogTitle(dialog)} в WhatsApp`}
+                        >
+                          {getSavedChatDialogTitle(dialog)}
+                        </a>
+                      ) : (
+                        <strong>{getSavedChatDialogTitle(dialog)}</strong>
+                      )}
+                      <span>
+                        {dialog.messages.length} сообщений
+                        {formatSavedChatDialogLatestTime(dialog) ? ` · ${formatSavedChatDialogLatestTime(dialog)}` : ""}
+                      </span>
                     </header>
                     <pre>{buildSavedChatDialogBody(dialog)}</pre>
                   </article>
@@ -19915,8 +19950,18 @@ function mergeSavedChatDialogs(dialogs: ChatMessageDialog[]) {
     });
   }
   return Array.from(dialogMap.values()).sort((left, right) =>
+    getSavedChatDialogLatestTime(right) - getSavedChatDialogLatestTime(left) ||
     String(getSavedChatDialogTitle(left) || "").localeCompare(String(getSavedChatDialogTitle(right) || ""), "ru")
   );
+}
+
+function getSavedChatDialogLatestTime(dialog: ChatMessageDialog) {
+  return dialog.messages.reduce((latest, message) => {
+    // Old WhatsApp captures contain only HH:mm in `timestamp`. `createdAt` is
+    // the stable full date assigned by the server when the message was stored.
+    const createdAt = new Date(message.createdAt || "").getTime();
+    return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
+  }, 0);
 }
 
 function getSavedChatDialogMergeKey(dialog: ChatMessageDialog) {
@@ -19926,7 +19971,26 @@ function getSavedChatDialogMergeKey(dialog: ChatMessageDialog) {
 }
 
 function getSavedChatDialogTitle(dialog: ChatMessageDialog) {
+  const phone = formatPhoneDigits(dialog.phone || "");
+  if (phone) return formatReservationPhone(phone);
   return getChatMessageStorageTitle(dialog.chatTitle || "", dialog.phone || "") || dialog.chatTitle || dialog.phone || dialog.chatKey || "Гость";
+}
+
+function getSavedChatDialogWhatsAppUrl(dialog: ChatMessageDialog) {
+  const digits = formatPhoneDigits(dialog.phone || "").replace(/\D/g, "");
+  return digits.length >= 10 ? `https://web.whatsapp.com/send?phone=${digits}` : "";
+}
+
+function formatSavedChatDialogLatestTime(dialog: ChatMessageDialog) {
+  const latestTime = getSavedChatDialogLatestTime(dialog);
+  if (!latestTime) return "";
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(latestTime));
 }
 
 function normalizeSavedChatDialogIdentity(dialog: ChatMessageDialog): ChatMessageDialog {
@@ -26029,29 +26093,56 @@ function getAvailableExtraInventory(
       isReservationBlockingExtraInventory(reservation) &&
       dateRangesOverlap(checkIn, checkOut, reservation.checkIn, reservation.checkOut)
     );
-  const uniquePlacements = getUniqueBlockingExtraInventoryPlacements(blockingReservations);
-  const used = uniquePlacements.reduce((sum, placement) => ({
-    airBeds: sum.airBeds + (placement.typeId === "air-bed" ? 1 : 0),
-    rollaways: sum.rollaways + (placement.typeId === "rollaway" ? 1 : 0)
-  }), { airBeds: 0, rollaways: 0 });
-  const usedCustomCounts = uniquePlacements.reduce((sum, placement) => {
-    sum[placement.typeId] = (sum[placement.typeId] || 0) + 1;
-    return sum;
-  }, {} as Record<string, number>);
+  const peakUsedCounts = getPeakBlockingExtraInventoryPlacementCounts(blockingReservations, checkIn, checkOut);
   const custom = Object.fromEntries(Object.entries(inventoryCustomCounts).map(([typeId, count]) => {
     const itemCount = Math.max(0, Math.round(count || 0));
     const itemCapacity = getExtraInventoryUnitCapacity(typeId, inventoryCustomCapacities[typeId]);
     return [
       typeId,
-      Math.max(0, itemCount * itemCapacity - (usedCustomCounts[typeId] || 0))
+      Math.max(0, itemCount * itemCapacity - (peakUsedCounts[typeId] || 0))
     ];
   }));
 
   return {
-    airBeds: Math.max(0, inventoryAirBeds - configured.airBeds - used.airBeds),
-    rollaways: Math.max(0, inventoryRollaways - configured.rollaways - used.rollaways),
+    airBeds: Math.max(0, inventoryAirBeds - configured.airBeds - (peakUsedCounts["air-bed"] || 0)),
+    rollaways: Math.max(0, inventoryRollaways - configured.rollaways - (peakUsedCounts.rollaway || 0)),
     custom
   };
+}
+
+function getPeakBlockingExtraInventoryPlacementCounts(
+  reservations: Reservation[],
+  checkIn: string,
+  checkOut: string
+) {
+  const ranges = getExtraInventoryAvailabilityRanges(checkIn, checkOut);
+  return ranges.reduce((peakCounts, range) => {
+    const nightlyReservations = reservations.filter((reservation) =>
+      dateRangesOverlap(range.checkIn, range.checkOut, reservation.checkIn, reservation.checkOut)
+    );
+    const nightlyCounts = getUniqueBlockingExtraInventoryPlacements(nightlyReservations)
+      .reduce((counts, placement) => {
+        counts[placement.typeId] = (counts[placement.typeId] || 0) + 1;
+        return counts;
+      }, {} as Record<string, number>);
+
+    Object.entries(nightlyCounts).forEach(([typeId, count]) => {
+      peakCounts[typeId] = Math.max(peakCounts[typeId] || 0, count);
+    });
+    return peakCounts;
+  }, {} as Record<string, number>);
+}
+
+function getExtraInventoryAvailabilityRanges(checkIn: string, checkOut: string) {
+  if (!checkIn || !checkOut || checkOut <= checkIn) return [{ checkIn, checkOut }];
+  const ranges: Array<{ checkIn: string; checkOut: string }> = [];
+  let cursor = checkIn;
+  for (let index = 0; cursor < checkOut && index < 400; index += 1) {
+    const next = formatDateInput(addDays(parseDateInput(cursor), 1));
+    ranges.push({ checkIn: cursor, checkOut: next < checkOut ? next : checkOut });
+    cursor = next;
+  }
+  return ranges.length ? ranges : [{ checkIn, checkOut }];
 }
 
 function getUniqueBlockingExtraInventoryPlacements(reservations: Reservation[]) {
@@ -26082,6 +26173,20 @@ function getUniqueBlockingExtraInventoryPlacements(reservations: Reservation[]) 
 
 function getDefaultExtraInventoryUnitCapacity(typeId: string, label = "") {
   return /диван|софа/i.test(`${typeId} ${label}`) ? 2 : 1;
+}
+
+function isRoomBoundExtraInventoryType(typeId: string, label = "") {
+  return /диван|софа/i.test(`${typeId} ${label}`);
+}
+
+function getRoomBoundExtraInventoryPlaceCapacity(
+  typeId: string,
+  inventoryCustomCounts: Record<string, number>,
+  inventoryCustomCapacities: Record<string, number>
+) {
+  const itemCount = Math.max(1, Math.round(inventoryCustomCounts[typeId] || 1));
+  const totalPlaces = Math.max(1, Math.round(inventoryCustomCapacities[typeId] || getDefaultExtraInventoryUnitCapacity(typeId)));
+  return Math.max(1, Math.ceil(totalPlaces / itemCount));
 }
 
 function getExtraInventoryUnitCapacity(typeId: string, value: unknown) {

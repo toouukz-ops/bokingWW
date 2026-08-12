@@ -98,7 +98,7 @@ const BUILT_IN_MIN_EXTENSION_VERSION = "1.0.266";
 const MIN_EXTENSION_VERSION = compareVersions(String(process.env.MIN_EXTENSION_VERSION || ""), BUILT_IN_MIN_EXTENSION_VERSION) > 0
   ? String(process.env.MIN_EXTENSION_VERSION)
   : BUILT_IN_MIN_EXTENSION_VERSION;
-const EXTENSION_UPDATE_URL = process.env.EXTENSION_UPDATE_URL || "https://github.com/toouukz-ops/bokingWW/releases/latest";
+const EXTENSION_UPDATE_URL = process.env.EXTENSION_UPDATE_URL || "";
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 
 app.addHook("preHandler", async (request, reply) => {

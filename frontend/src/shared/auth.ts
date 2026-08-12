@@ -140,7 +140,7 @@ function installAuthenticatedFetch() {
 async function dispatchUpdateRequired(response: Response) {
   const payload = await response.clone().json().catch(() => ({})) as { minimumVersion?: string; updateUrl?: string };
   await clearAuthSession();
-  window.dispatchEvent(new CustomEvent<UpdateRequiredDetail>("gpb-update-required", { detail: { minimumVersion: String(payload.minimumVersion || "последняя"), updateUrl: String(payload.updateUrl || "https://github.com/toouukz-ops/bokingWW/releases/latest") } }));
+  window.dispatchEvent(new CustomEvent<UpdateRequiredDetail>("gpb-update-required", { detail: { minimumVersion: String(payload.minimumVersion || "последняя"), updateUrl: String(payload.updateUrl || "") } }));
 }
 
 function getDirectHeaders(initial: HeadersInit) {

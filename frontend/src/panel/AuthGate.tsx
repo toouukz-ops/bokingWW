@@ -44,7 +44,7 @@ export function AuthGate({ children, onAuthenticated }: { children: ReactNode; o
     }
   }
 
-  if (updateRequired) return <div className="gpb-update-lock"><aside className="gpb-update-dialog"><strong>Требуется обновление</strong><p>Эта версия расширения заблокирована сервером. Для продолжения установите версию {updateRequired.minimumVersion} или новее.</p><a href={updateRequired.updateUrl} target="_blank" rel="noreferrer">Скачать обновление</a><small>До обновления доступ к системе полностью закрыт.</small></aside></div>;
+  if (updateRequired) return <div className="gpb-update-lock"><aside className="gpb-update-dialog"><strong>Требуется обновление</strong><p>Эта версия расширения заблокирована сервером. Для продолжения установите версию {updateRequired.minimumVersion} или новее.</p>{updateRequired.updateUrl ? <a href={updateRequired.updateUrl} target="_blank" rel="noreferrer">Скачать обновление</a> : <div className="gpb-auth-error">Получите новый архив у администратора.</div>}<small>До обновления доступ к системе полностью закрыт.</small></aside></div>;
   if (state === "checking") return <aside className="gpb-auth-panel"><strong>Проверка доступа…</strong></aside>;
   if (!user) {
     return (

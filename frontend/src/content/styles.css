@@ -11320,6 +11320,19 @@ body.gpb-reservation-split-resizing {
   padding: 8px 10px;
 }
 
+.gpb-managed-select-row { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 6px; }
+.gpb-managed-select-row > select { min-width: 0; }
+.gpb-managed-select-row > button { display: grid; min-height: 40px; place-items: center; border: 1px solid #cfd6dd; border-radius: 6px; background: #fff; color: #52606d; cursor: pointer; }
+.gpb-managed-select-row > button:hover { border-color: #0f755f; color: #0f755f; }
+.gpb-room-class-modal { width: min(500px, 100%); }
+.gpb-room-class-list { display: grid; gap: 8px; overflow: auto; padding: 14px 18px; }
+.gpb-room-class-row, .gpb-room-class-add { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.gpb-room-class-row input, .gpb-room-class-add input { min-height: 38px; border: 1px solid #cfd6dd; border-radius: 6px; padding: 0 10px; font: inherit; }
+.gpb-room-class-row button, .gpb-room-class-add button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 38px; border: 1px solid #cfd6dd; border-radius: 6px; background: #fff; padding: 0 11px; color: #33404c; font-weight: 750; cursor: pointer; }
+.gpb-room-class-row button { width: 38px; padding: 0; color: #b42318; }
+.gpb-room-class-add { border-top: 1px solid #e1e7eb; margin-top: 3px; padding-top: 11px; }
+.gpb-room-class-add button { border-color: #b9d8ce; color: #0f6d59; }
+
 .gpb-create-footer {
   justify-content: flex-end;
   border-top: 1px solid #d8dee5;

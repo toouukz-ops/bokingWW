@@ -712,6 +712,9 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
       const customSleepingPlaceOptions = Array.isArray(settings?.customSleepingPlaceOptions)
         ? settings.customSleepingPlaceOptions.filter((item: unknown): item is string => typeof item === "string" && item.trim().length > 0)
         : [];
+      const roomClassOptions = Array.isArray(settings?.roomClassOptions)
+        ? Array.from(new Set(settings.roomClassOptions.filter((item: unknown): item is string => typeof item === "string" && item.trim().length > 0).map((item: string) => item.trim())))
+        : ["Эконом", "Стандарт", "Стандарт +", "Семейный", "Полулюкс", "Люкс"];
       const customHolidayDates = Array.isArray(settings?.customHolidayDates)
         ? settings.customHolidayDates.filter((date: unknown): date is string => typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)).sort()
         : [];
@@ -774,6 +777,7 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
         customAmenityOptions,
         customFoodOptions,
         customSleepingPlaceOptions,
+        roomClassOptions,
         chatBotPrompt: typeof settings?.chatBotPrompt === "string" && settings.chatBotPrompt.trim() ? settings.chatBotPrompt : DEFAULT_CHAT_BOT_PROMPT,
         chatBotObjectDescription: typeof settings?.chatBotObjectDescription === "string" && settings.chatBotObjectDescription.trim() ? settings.chatBotObjectDescription : DEFAULT_CHAT_BOT_OBJECT_DESCRIPTION,
         chatBotExamples: typeof settings?.chatBotExamples === "string" && settings.chatBotExamples.trim() ? settings.chatBotExamples : DEFAULT_CHAT_BOT_EXAMPLES,

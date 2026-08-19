@@ -213,6 +213,7 @@ export interface PaymentSettings {
   customAmenityOptions: string[];
   customFoodOptions: string[];
   customSleepingPlaceOptions: string[];
+  roomClassOptions: string[];
   chatBotPrompt: string;
   chatBotObjectDescription: string;
   chatBotExamples: string;

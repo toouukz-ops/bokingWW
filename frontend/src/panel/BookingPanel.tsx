@@ -437,7 +437,7 @@ const AMENITY_OPTIONS = [
 ];
 const DEFAULT_GROUPS = ["Блок А", "Блок Б"];
 const FLOOR_OPTIONS = ["1 этаж", "2 этаж", "3 этаж"];
-const ROOM_CLASS_OPTIONS = ["Эконом", "Стандарт", "Стандарт +", "Полулюкс", "Люкс"];
+const DEFAULT_ROOM_CLASS_OPTIONS = ["Эконом", "Стандарт", "Стандарт +", "Семейный", "Полулюкс", "Люкс"];
 const FOOD_OPTIONS = ["Завтрак", "Обед", "Ужин", "Кофе", "Чай", "Коктейли", "Мини-бар", "Питьевая вода"];
 const BATHROOM_OPTIONS: Array<{ value: Room["bathroomType"]; label: string; description: string }> = [
   {
@@ -1124,6 +1124,7 @@ export function BookingPanel() {
   const [weatherLatitude, setWeatherLatitude] = useState(43.2389);
   const [weatherLongitude, setWeatherLongitude] = useState(76.8897);
   const [customHolidayDates, setCustomHolidayDates] = useState<string[]>([]);
+  const [roomClassOptions, setRoomClassOptions] = useState<string[]>(DEFAULT_ROOM_CLASS_OPTIONS);
   const [inventoryAirBeds, setInventoryAirBeds] = useState(0);
   const [inventoryRollaways, setInventoryRollaways] = useState(3);
   const [inventoryAirBedPrice, setInventoryAirBedPrice] = useState(0);
@@ -2811,6 +2812,7 @@ export function BookingPanel() {
     setCustomAmenityOptions(settings.customAmenityOptions);
     setCustomFoodOptions(settings.customFoodOptions);
     setCustomSleepingPlaceOptions(settings.customSleepingPlaceOptions);
+    setRoomClassOptions(settings.roomClassOptions);
     setChatBotPrompt(settings.chatBotPrompt);
     setChatBotObjectDescription(settings.chatBotObjectDescription);
     setChatBotExamples(settings.chatBotExamples);
@@ -2883,6 +2885,7 @@ export function BookingPanel() {
       customAmenityOptions,
       customFoodOptions,
       customSleepingPlaceOptions,
+      roomClassOptions,
       chatBotPrompt,
       chatBotObjectDescription,
       chatBotExamples,
@@ -9386,6 +9389,7 @@ export function BookingPanel() {
         customFoodOptions={customFoodOptions}
         customHolidayDates={customHolidayDates}
         customSleepingPlaceOptions={customSleepingPlaceOptions}
+        roomClassOptions={roomClassOptions}
         defaultCheckInTime={defaultCheckInTime}
         defaultCheckOutTime={DEFAULT_CHECK_OUT_TIME}
         dynamicPricingEnabled={dynamicPricingEnabled}
@@ -9408,6 +9412,11 @@ export function BookingPanel() {
           const nextOptions = normalizeStringOptions(options);
           setCustomSleepingPlaceOptions(nextOptions);
           await savePaymentSettings(buildPaymentSettingsPatch({ customSleepingPlaceOptions: nextOptions }));
+        }}
+        onRoomClassOptionsChange={async (options) => {
+          const nextOptions = normalizeStringOptions(options);
+          setRoomClassOptions(nextOptions);
+          await savePaymentSettings(buildPaymentSettingsPatch({ roomClassOptions: nextOptions }));
         }}
         onDynamicPricingChange={async (patch) => {
           const nextEnabled = patch.dynamicPricingEnabled ?? dynamicPricingEnabled;
@@ -16795,6 +16804,7 @@ function RoomCatalogModal({
   customFoodOptions,
   customHolidayDates,
   customSleepingPlaceOptions,
+  roomClassOptions,
   defaultCheckInTime,
   defaultCheckOutTime,
   dynamicPricingEnabled,
@@ -16804,6 +16814,7 @@ function RoomCatalogModal({
   onCustomFoodOptionsChange,
   onCustomHolidayDatesChange,
   onCustomSleepingPlaceOptionsChange,
+  onRoomClassOptionsChange,
   onDynamicPricingChange,
   onClose
 }: {
@@ -16811,6 +16822,7 @@ function RoomCatalogModal({
   customFoodOptions: string[];
   customHolidayDates: string[];
   customSleepingPlaceOptions: string[];
+  roomClassOptions: string[];
   defaultCheckInTime: string;
   defaultCheckOutTime: string;
   dynamicPricingEnabled: boolean;
@@ -16820,6 +16832,7 @@ function RoomCatalogModal({
   onCustomFoodOptionsChange: (options: string[]) => Promise<void>;
   onCustomHolidayDatesChange: (dates: string[]) => Promise<void>;
   onCustomSleepingPlaceOptionsChange: (options: string[]) => Promise<void>;
+  onRoomClassOptionsChange: (options: string[]) => Promise<void>;
   onDynamicPricingChange: (patch: Partial<Pick<PaymentSettings, "dynamicPricingEnabled" | "dynamicPricingMarginPercent" | "dynamicPricingSeasonEnd">>) => Promise<void>;
   onClose: () => void;
 }) {
@@ -16839,6 +16852,7 @@ function RoomCatalogModal({
   const [deleteRoomTarget, setDeleteRoomTarget] = useState<Room | null>(null);
   const [isAmenityCreateOpen, setIsAmenityCreateOpen] = useState(false);
   const [isFoodCreateOpen, setIsFoodCreateOpen] = useState(false);
+  const [isRoomClassManagerOpen, setIsRoomClassManagerOpen] = useState(false);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const autoSaveTimerRef = useRef<number | null>(null);
@@ -17258,14 +17272,14 @@ function RoomCatalogModal({
                         <input value={activeRoom.number} onChange={(event) => updateActiveRoom({ number: event.target.value })} />
                       </label>
                       {activeRoom.category === "guest-room" ? (
-                        <label>
-                          Класс
-                          <select value={activeRoom.occupancyLabel} onChange={(event) => updateActiveRoomClass(event.target.value)}>
-                            <option value="">Не указан</option>
-                            {ROOM_CLASS_OPTIONS.map((option) => (
-                              <option key={option} value={option}>{option}</option>
-                            ))}
-                          </select>
+                        <label>Класс
+                          <span className="gpb-managed-select-row">
+                            <select value={activeRoom.occupancyLabel} onChange={(event) => updateActiveRoomClass(event.target.value)}>
+                              <option value="">Не указан</option>
+                              {Array.from(new Set([...roomClassOptions, activeRoom.occupancyLabel].filter(Boolean))).map((option) => <option key={option} value={option}>{option}</option>)}
+                            </select>
+                            <button type="button" title="Редактировать названия" onClick={() => setIsRoomClassManagerOpen(true)}><Pencil size={15} /></button>
+                          </span>
                         </label>
                       ) : null}
                       <label>
@@ -17762,10 +17776,12 @@ function RoomCatalogModal({
             defaultGroup={activeGroup}
             groupSuggestions={getGroupSuggestions(rooms)}
             nextNumber={getNextRoomNumber(rooms)}
+            roomClassOptions={roomClassOptions}
             onClose={() => setIsCreateOpen(false)}
             onCreate={createCatalogObject}
           />
         ) : null}
+        {isRoomClassManagerOpen ? <RoomClassManagerModal options={roomClassOptions} onClose={() => setIsRoomClassManagerOpen(false)} onSave={onRoomClassOptionsChange} /> : null}
         {isAmenityCreateOpen ? (
           <CreateNameModal
             title="Добавить удобство"
@@ -18241,16 +18257,52 @@ type CreateCatalogObjectInput = {
   roomClass: string;
 };
 
+function RoomClassManagerModal({ options, onClose, onSave }: { options: string[]; onClose: () => void; onSave: (options: string[]) => Promise<void> }) {
+  const [items, setItems] = useState(options);
+  const [newName, setNewName] = useState("");
+  const [state, setState] = useState<"idle" | "saving" | "error">("idle");
+
+  function addItem() {
+    const name = newName.trim();
+    if (!name || items.some((item) => item.toLowerCase() === name.toLowerCase())) return;
+    setItems((current) => [...current, name]);
+    setNewName("");
+  }
+
+  async function save() {
+    const normalized = Array.from(new Set(items.map((item) => item.trim()).filter(Boolean)));
+    setState("saving");
+    try {
+      await onSave(normalized);
+      onClose();
+    } catch {
+      setState("error");
+    }
+  }
+
+  return <div className="gpb-create-backdrop"><div className="gpb-create-modal gpb-room-class-modal" role="dialog" aria-modal="true">
+    <header className="gpb-create-header"><div><strong>Названия категорий</strong><span>Добавляйте, переименовывайте и удаляйте варианты.</span></div><button type="button" onClick={onClose}><X size={20} /></button></header>
+    <div className="gpb-room-class-list">
+      {items.map((item, index) => <div className="gpb-room-class-row" key={`${index}-${item}`}><input aria-label="Название категории" value={item} onChange={(event) => setItems((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} /><button type="button" title="Удалить" onClick={() => setItems((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={15} /></button></div>)}
+      <div className="gpb-room-class-add"><input value={newName} placeholder="Новое название" onChange={(event) => setNewName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addItem(); } }} /><button type="button" onClick={addItem}><Plus size={15} /> Добавить</button></div>
+      {state === "error" ? <div className="gpb-auth-error">Не удалось сохранить названия.</div> : null}
+    </div>
+    <footer className="gpb-create-footer"><button className="gpb-secondary" type="button" onClick={onClose}>Отмена</button><button className="gpb-primary" type="button" disabled={state === "saving"} onClick={() => void save()}>{state === "saving" ? "Сохраняю…" : "Сохранить"}</button></footer>
+  </div></div>;
+}
+
 function CreateObjectModal({
   defaultGroup,
   groupSuggestions,
   nextNumber,
+  roomClassOptions,
   onClose,
   onCreate
 }: {
   defaultGroup: string;
   groupSuggestions: string[];
   nextNumber: string;
+  roomClassOptions: string[];
   onClose: () => void;
   onCreate: (input: CreateCatalogObjectInput) => void;
 }) {
@@ -18318,7 +18370,7 @@ function CreateObjectModal({
               Класс
               <select value={roomClass} onChange={(event) => setRoomClass(event.target.value)}>
                 <option value="">Не указан</option>
-                {ROOM_CLASS_OPTIONS.map((option) => (
+                {roomClassOptions.map((option) => (
                   <option key={option} value={option}>{option}</option>
                 ))}
               </select>

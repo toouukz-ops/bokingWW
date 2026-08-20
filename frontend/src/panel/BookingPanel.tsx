@@ -1069,7 +1069,7 @@ export function BookingPanel() {
   const [pricePdfPeriodDiscountApplied, setPricePdfPeriodDiscountApplied] = useState(false);
   const [packageDiscountWasApplied, setPackageDiscountWasApplied] = useState(false);
   const [discountManualOverride, setDiscountManualOverride] = useState(false);
-  const [breakfastIncluded, setBreakfastIncluded] = useState(true);
+  const [breakfastIncluded, setBreakfastIncluded] = useState(false);
   const [manualTotalAmount, setManualTotalAmount] = useState(0);
   const [manualSaleOpen, setManualSaleOpen] = useState(false);
   const [bookingNewChatOpen, setBookingNewChatOpen] = useState(false);
@@ -3570,7 +3570,7 @@ export function BookingPanel() {
     setPeriodDiscountEnabled(draft.periodDiscountEnabled ?? false);
     setPricePdfPeriodDiscountApplied(Boolean(draft.pricePdfPeriodDiscountApplied));
     setPackageDiscountWasApplied(false);
-    setBreakfastIncluded(draft.breakfastIncluded ?? true);
+    setBreakfastIncluded(draft.breakfastIncluded ?? false);
     setManualTotalAmount(draft.manualTotalAmount ?? 0);
     const shouldRestoreManualSale = Boolean(draft.manualSaleOpen && window.localStorage.getItem(MANUAL_SALE_MODE_KEY) === "true");
     setManualSaleOpen(shouldRestoreManualSale);
@@ -3619,7 +3619,7 @@ export function BookingPanel() {
     setHourlyHours(2);
     setDiscountPercent(0);
     setDiscountManualOverride(false);
-    setBreakfastIncluded(true);
+    setBreakfastIncluded(false);
     setPackageDiscountEnabled(false);
     setPeriodDiscountEnabled(false);
     setPackageDiscountWasApplied(false);
@@ -3677,6 +3677,7 @@ export function BookingPanel() {
     setPeriodDiscountEnabled(false);
     setPricePdfPeriodDiscountApplied(false);
     setPackageDiscountWasApplied(false);
+    setBreakfastIncluded(false);
     setManualTotalAmount(0);
     setManualSaleOpen(false);
     window.localStorage.removeItem(MANUAL_SALE_MODE_KEY);
@@ -3717,6 +3718,7 @@ export function BookingPanel() {
         packageDiscountEnabled: false,
         periodDiscountEnabled: false,
         pricePdfPeriodDiscountApplied: false,
+        breakfastIncluded: false,
         manualTotalAmount: 0,
         manualSaleOpen: false,
         manualSaleAmount: 0,
@@ -11380,7 +11382,7 @@ function buildGuestDatabaseRow(
       getDraftExtraInventoryCounts(latestDraft).airBeds + getDraftExtraInventoryCounts(latestDraft).rollaways,
       latestDraft.hourlyHours,
       latestDraft.discountPercent,
-      latestDraft.breakfastIncluded ?? true,
+      latestDraft.breakfastIncluded ?? false,
       breakfastPricePerPerson
     )
     : null;

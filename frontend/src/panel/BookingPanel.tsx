@@ -11015,6 +11015,19 @@ function GuestDatabaseModal({
     setClearRowTarget(null);
   }
 
+  function exportGuestDatabase() {
+    const csv = buildGuestDatabaseCsv(rows);
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `baza-gostey-${formatDateInput(new Date())}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   return (
     <div className="gpb-modal-backdrop">
       <div className="gpb-catalog-modal gpb-empty-guests-modal" role="dialog" aria-modal="true" aria-label="База гостей">
@@ -11024,6 +11037,9 @@ function GuestDatabaseModal({
             <span>Контакты, согласования, брони и оплаты в одной строке.</span>
           </div>
           <div className="gpb-catalog-header-actions">
+            <button type="button" onClick={exportGuestDatabase} disabled={!rows.length}>
+              <Download size={16} /> Выгрузить базу
+            </button>
             <button type="button" onClick={() => setIsClearFieldsConfirmOpen(true)} disabled={isClearingFields}>
               {isClearingFields ? "Очищаю..." : "Очистить поля"}
             </button>
@@ -11815,6 +11831,51 @@ const GUEST_DATABASE_COLUMNS = [
 
 type GuestDatabaseColumn = typeof GUEST_DATABASE_COLUMNS[number];
 type GuestDatabaseRow = ReturnType<typeof buildGuestDatabaseRow>;
+
+const GUEST_DATABASE_EXPORT_COLUMNS: Array<{ label: string; value: (row: GuestDatabaseRow) => string | number }> = [
+  { label: "Телефон", value: (row) => row.phone },
+  { label: "Обращение", value: (row) => row.appeal },
+  { label: "Дата обращения", value: (row) => row.inquiryDate },
+  { label: "Статус", value: (row) => row.statusValue },
+  { label: "Заезд", value: (row) => row.checkInValue },
+  { label: "Выезд", value: (row) => row.checkOutValue },
+  { label: "Ночей", value: (row) => row.nightsValue },
+  { label: "Номера", value: (row) => row.rooms },
+  { label: "ID номеров", value: (row) => row.roomIds.join(", ") },
+  { label: "Питание", value: (row) => row.food },
+  { label: "Спальных мест", value: (row) => row.sleepingPlacesValue },
+  { label: "Цена", value: (row) => row.priceValue },
+  { label: "Скидка, %", value: (row) => row.discountValue },
+  { label: "Цена со скидкой", value: (row) => row.discountedPriceValue },
+  { label: "Предоплата", value: (row) => row.prepaymentValue },
+  { label: "Предоплата получена", value: (row) => row.prepaymentReceivedLabel },
+  { label: "Остаток", value: (row) => row.balanceValue },
+  { label: "Остаток оплачен", value: (row) => row.balancePaid },
+  { label: "Способ оплаты", value: (row) => row.paymentMethod },
+  { label: "Въехал", value: (row) => row.checkedIn },
+  { label: "Выехал", value: (row) => row.checkedOut },
+  { label: "Дополнительные продажи", value: (row) => row.addOnSalesValue },
+  { label: "Итого продаж", value: (row) => row.totalSalesValue },
+  { label: "ID бронирования", value: (row) => row.reservationId },
+  { label: "Ключ черновика", value: (row) => row.draftKey }
+];
+
+function buildGuestDatabaseCsv(rows: GuestDatabaseRow[]) {
+  const lines = [GUEST_DATABASE_EXPORT_COLUMNS.map((column) => escapeGuestDatabaseCsvCell(column.label)).join(";")];
+  for (const row of rows) {
+    lines.push(GUEST_DATABASE_EXPORT_COLUMNS.map((column, index) => {
+      const value = column.value(row);
+      const raw = String(value ?? "");
+      const text = index === 0 && raw ? `="${raw.replaceAll('"', '""')}"` : /^[=+@]/.test(raw) ? `'${raw}` : raw;
+      return escapeGuestDatabaseCsvCell(text);
+    }).join(";"));
+  }
+  return lines.join("\r\n");
+}
+
+function escapeGuestDatabaseCsvCell(value: string) {
+  return `"${value.replaceAll('"', '""')}"`;
+}
 
 function getUniqueGuestContactsByPhone(contacts: GuestContact[]) {
   const byPhone = new Map<string, GuestContact>();

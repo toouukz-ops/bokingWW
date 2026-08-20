@@ -94,7 +94,7 @@ const publicApiPaths = new Set([
   "/api/public/menu",
   "/api/public/menu-orders"
 ]);
-const BUILT_IN_MIN_EXTENSION_VERSION = "1.0.267";
+const BUILT_IN_MIN_EXTENSION_VERSION = "1.0.268";
 const MIN_EXTENSION_VERSION = compareVersions(String(process.env.MIN_EXTENSION_VERSION || ""), BUILT_IN_MIN_EXTENSION_VERSION) > 0
   ? String(process.env.MIN_EXTENSION_VERSION)
   : BUILT_IN_MIN_EXTENSION_VERSION;

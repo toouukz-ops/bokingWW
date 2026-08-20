@@ -1033,6 +1033,7 @@ export function BookingPanel() {
   const [guestChildren, setGuestChildren] = useState(0);
   const [adminCommentVoiceState, setAdminCommentVoiceState] = useState<"idle" | "listening" | "unsupported">("idle");
   const [defaultCheckInTime, setDefaultCheckInTime] = useState(DEFAULT_CHECK_IN_TIME);
+  const [defaultCheckOutTime, setDefaultCheckOutTime] = useState(DEFAULT_CHECK_OUT_TIME);
   const [guestFirstName, setGuestFirstName] = useState("");
   const [guestPhone, setGuestPhone] = useState("");
   const [guestPhonePrefix, setGuestPhonePrefix] = useState("+7");
@@ -1521,11 +1522,11 @@ export function BookingPanel() {
       checkIn,
       checkOut,
       defaultCheckInTime,
-      DEFAULT_CHECK_OUT_TIME,
+      defaultCheckOutTime,
       currentHoldOwnerId,
       currentHoldOwnerPhone
     ),
-    [activeRoomHolds, checkIn, checkOut, currentHoldOwnerId, currentHoldOwnerPhone, defaultCheckInTime, pricePdfCandidateRooms, reservations]
+    [activeRoomHolds, checkIn, checkOut, currentHoldOwnerId, currentHoldOwnerPhone, defaultCheckInTime, defaultCheckOutTime, pricePdfCandidateRooms, reservations]
   );
   const pricePdfAvailabilitySummary = useMemo(() => {
     const selectedRoomIdSet = new Set(pricePdfRoomIds);
@@ -1718,8 +1719,8 @@ export function BookingPanel() {
 
   useEffect(() => {
     if (hasHourlyBookingObject) return;
-    setCheckOutTime((currentTime) => currentTime === DEFAULT_CHECK_OUT_TIME ? currentTime : DEFAULT_CHECK_OUT_TIME);
-  }, [checkIn, checkOut, hasHourlyBookingObject, selectedBookingRoomIds]);
+    setCheckOutTime((currentTime) => currentTime === defaultCheckOutTime ? currentTime : defaultCheckOutTime);
+  }, [checkIn, checkOut, defaultCheckOutTime, hasHourlyBookingObject, selectedBookingRoomIds]);
 
   useEffect(() => {
     setRoomDateOverrides((currentOverrides) => {
@@ -2818,6 +2819,7 @@ export function BookingPanel() {
     setChatBotExamples(settings.chatBotExamples);
     saveCustomCatalogOptionsToLocal(settings.customAmenityOptions, settings.customFoodOptions);
     setDefaultCheckInTime(settings.defaultCheckInTime);
+    setDefaultCheckOutTime(settings.defaultCheckOutTime);
     setWeatherLocationName(settings.weatherLocationName);
     setWeatherLatitude(settings.weatherLatitude);
     setWeatherLongitude(settings.weatherLongitude);
@@ -2890,7 +2892,7 @@ export function BookingPanel() {
       chatBotObjectDescription,
       chatBotExamples,
       defaultCheckInTime,
-      defaultCheckOutTime: DEFAULT_CHECK_OUT_TIME,
+      defaultCheckOutTime,
       weatherLocationName,
       weatherLatitude,
       weatherLongitude,
@@ -2930,7 +2932,7 @@ export function BookingPanel() {
     const phone = resolvePanelGuestPhone();
     const draftGuestName = resolveGuestNameForPhone(guestFirstName, phone);
     const draftCheckInTime = hasHourlyBookingObject ? checkInTime : defaultCheckInTime;
-    const draftCheckOutTime = hasHourlyBookingObject ? checkOutTime : DEFAULT_CHECK_OUT_TIME;
+    const draftCheckOutTime = hasHourlyBookingObject ? checkOutTime : defaultCheckOutTime;
 
     return {
       waChatId: activeChat?.waChatId || undefined,
@@ -3536,7 +3538,7 @@ export function BookingPanel() {
     setCheckIn(restoredCheckIn);
     setCheckOut(restoredCheckOut);
     setCheckInTime(draft.checkInTime || defaultCheckInTime);
-    setCheckOutTime(draft.hourlyHours && draft.hourlyHours > 2 ? draft.checkOutTime || DEFAULT_CHECK_OUT_TIME : DEFAULT_CHECK_OUT_TIME);
+    setCheckOutTime(draft.hourlyHours && draft.hourlyHours > 2 ? draft.checkOutTime || defaultCheckOutTime : draft.checkOutTime || defaultCheckOutTime);
     setBookingComment(draft.comment ?? "");
     setAdminComment(draft.adminComment ?? draft.lastReservation?.adminComment ?? "");
     setGuestAdults(clampNumber(Math.round(draft.adults ?? draft.lastReservation?.adults ?? 0), 0, 99));
@@ -3595,7 +3597,7 @@ export function BookingPanel() {
     setCheckIn(getDefaultCheckInDate());
     setCheckOut(getDefaultCheckOutDate());
     setCheckInTime(defaultCheckInTime);
-    setCheckOutTime(DEFAULT_CHECK_OUT_TIME);
+    setCheckOutTime(defaultCheckOutTime);
     setBookingComment("");
     setAdminComment("");
     setGuestAdults(0);
@@ -3655,7 +3657,7 @@ export function BookingPanel() {
     setCheckIn(nextCheckIn);
     setCheckOut(nextCheckOut);
     setCheckInTime(defaultCheckInTime);
-    setCheckOutTime(DEFAULT_CHECK_OUT_TIME);
+    setCheckOutTime(defaultCheckOutTime);
     setBookingComment("");
     setAdminComment("");
     setGuestAdults(0);
@@ -3694,7 +3696,7 @@ export function BookingPanel() {
         checkIn: nextCheckIn,
         checkOut: nextCheckOut,
         checkInTime: defaultCheckInTime,
-        checkOutTime: DEFAULT_CHECK_OUT_TIME,
+        checkOutTime: defaultCheckOutTime,
         comment: "",
         adminComment: "",
         guestFirstName,
@@ -3982,7 +3984,7 @@ export function BookingPanel() {
           break;
         }
 
-        const sent = await sendRoomToActiveWhatsAppChat(room, defaultCheckInTime, DEFAULT_CHECK_OUT_TIME, checkIn);
+        const sent = await sendRoomToActiveWhatsAppChat(room, defaultCheckInTime, defaultCheckOutTime, checkIn);
         if (!sent) {
           allSent = false;
         }
@@ -4010,7 +4012,7 @@ export function BookingPanel() {
     suppressActiveChatSyncRef.current = true;
     setSendState("sending");
     try {
-      const sent = await sendRoomPhotosToActiveWhatsAppChat(selectedRoom, defaultCheckInTime, DEFAULT_CHECK_OUT_TIME, checkIn);
+      const sent = await sendRoomPhotosToActiveWhatsAppChat(selectedRoom, defaultCheckInTime, defaultCheckOutTime, checkIn);
       if (sent) {
         await markCatalogStatus("room-sent");
       }
@@ -4200,7 +4202,7 @@ export function BookingPanel() {
         checkIn,
         checkOut,
         checkInTime: defaultCheckInTime,
-        checkOutTime: DEFAULT_CHECK_OUT_TIME,
+        checkOutTime: defaultCheckOutTime,
         discountPercent: packageDiscountPercent,
         giftText: packageGiftText,
         galleryPhotoDescriptions: objectGalleryPhotoDescriptions,
@@ -4634,7 +4636,7 @@ export function BookingPanel() {
     setSelectedRoomId(room.id);
     setSendState("sending");
     try {
-      const sent = await sendRoomToActiveWhatsAppChat(room, defaultCheckInTime, DEFAULT_CHECK_OUT_TIME, checkIn);
+      const sent = await sendRoomToActiveWhatsAppChat(room, defaultCheckInTime, defaultCheckOutTime, checkIn);
       if (sent) {
         await markCatalogStatus("room-sent", { selectedRoomId: room.id });
       }
@@ -4672,7 +4674,7 @@ export function BookingPanel() {
     const phone = resolvePanelGuestPhone();
     const chat = activeChat ?? createActiveChatFromProfile({ name: guestFirstName || phone, phone });
     const currentCheckInTime = hasHourlyBookingObject ? checkInTime : defaultCheckInTime;
-    const currentCheckOutTime = hasHourlyBookingObject ? checkOutTime : DEFAULT_CHECK_OUT_TIME;
+    const currentCheckOutTime = hasHourlyBookingObject ? checkOutTime : defaultCheckOutTime;
     setCatalogStatus(catalogStatus);
     setCatalogStatusAt(nextCatalogStatusAt);
     setAgreementSent(false);
@@ -4800,7 +4802,7 @@ export function BookingPanel() {
       checkIn: item.checkIn,
       checkOut: item.checkOut,
       checkInTime: isHourlyBookingObject(room) ? item.checkInTime || reservation.checkInTime : DEFAULT_CHECK_IN_TIME,
-      checkOutTime: isHourlyBookingObject(room) ? item.checkOutTime || reservation.checkOutTime : DEFAULT_CHECK_OUT_TIME,
+      checkOutTime: isHourlyBookingObject(room) ? item.checkOutTime || reservation.checkOutTime : reservation.checkOutTime || defaultCheckOutTime,
       ownerId: currentHoldOwnerId,
       ownerTitle: activeChat?.title ?? "",
       guestName: reservation.guestFirstName || getGuestNameFallbackFromPhone(normalizedPhone) || activeChat?.title || "",
@@ -4869,7 +4871,7 @@ export function BookingPanel() {
       checkIn: dateRange.checkIn,
       checkOut: dateRange.checkOut,
       checkInTime: isHourlyBookingObject(room) ? checkInTime : DEFAULT_CHECK_IN_TIME,
-      checkOutTime: isHourlyBookingObject(room) ? checkOutTime : DEFAULT_CHECK_OUT_TIME,
+      checkOutTime: isHourlyBookingObject(room) ? checkOutTime : defaultCheckOutTime,
       ownerId: currentHoldOwnerId,
       ownerTitle: activeChat?.title ?? "",
       guestName: guestFirstName || getGuestNameFallbackFromPhone(normalizedPhone) || activeChat?.title || "",
@@ -5089,6 +5091,14 @@ export function BookingPanel() {
     setLastReservation(null);
     setAgreementSent(false);
     await savePaymentSettings(buildPaymentSettingsPatch({ defaultCheckInTime: value }));
+  }
+
+  async function handleDefaultCheckOutTimeChange(value: string) {
+    setDefaultCheckOutTime(value);
+    if (!hasHourlyBookingObject) setCheckOutTime(value);
+    setLastReservation(null);
+    setAgreementSent(false);
+    await savePaymentSettings(buildPaymentSettingsPatch({ defaultCheckOutTime: value }));
   }
 
   async function handlePaymentMethodChange(methodId: string, value: string) {
@@ -6416,7 +6426,7 @@ export function BookingPanel() {
     const reservationGuestName = resolveReservationGuestName(guestFirstName, reservationPhone);
     const isManualSale = isManualSaleMode;
     const reservationCheckInTime = hasHourlyBookingObject ? checkInTime : defaultCheckInTime;
-    const reservationCheckOutTime = hasHourlyBookingObject ? addHoursToTimeInput(reservationCheckInTime, hourlyHours) : DEFAULT_CHECK_OUT_TIME;
+    const reservationCheckOutTime = hasHourlyBookingObject ? addHoursToTimeInput(reservationCheckInTime, hourlyHours) : defaultCheckOutTime;
     const lockedFinancials = getLockedReservationFinancials(
       lastReservation,
       proposalRooms,
@@ -7833,7 +7843,7 @@ export function BookingPanel() {
     }
     setAgreementSent(false);
     setPrepaymentAlreadyPaid(Boolean(confirmedReservation.prepaymentReceivedAt));
-    const inserted = await insertTextIntoActiveWhatsAppChat(buildReservationPaymentConfirmationMessage(confirmedReservation, rooms, defaultCheckInTime));
+    const inserted = await insertTextIntoActiveWhatsAppChat(buildReservationPaymentConfirmationMessage(confirmedReservation, rooms, defaultCheckInTime, defaultCheckOutTime));
     setSendState(inserted ? "sent" : "error");
     window.setTimeout(() => setSendState("idle"), 2600);
   }
@@ -9336,7 +9346,7 @@ export function BookingPanel() {
           checkIn={checkIn}
           checkOut={checkOut}
           defaultCheckInTime={defaultCheckInTime}
-          defaultCheckOutTime={DEFAULT_CHECK_OUT_TIME}
+          defaultCheckOutTime={defaultCheckOutTime}
           discountPercent={packageDiscountPercent}
           giftText={packageGiftText}
           includeGallery={includeGalleryInPricePdf}
@@ -9391,7 +9401,7 @@ export function BookingPanel() {
         customSleepingPlaceOptions={customSleepingPlaceOptions}
         roomClassOptions={roomClassOptions}
         defaultCheckInTime={defaultCheckInTime}
-        defaultCheckOutTime={DEFAULT_CHECK_OUT_TIME}
+        defaultCheckOutTime={defaultCheckOutTime}
         dynamicPricingEnabled={dynamicPricingEnabled}
         dynamicPricingMarginPercent={dynamicPricingMarginPercent}
         dynamicPricingSeasonEnd={dynamicPricingSeasonEnd}
@@ -9554,6 +9564,7 @@ export function BookingPanel() {
         <SettingsModal
           companyRequisites={companyRequisites}
           defaultCheckInTime={defaultCheckInTime}
+          defaultCheckOutTime={defaultCheckOutTime}
           linkMethods={linkMethods}
           menuAdminPhone={menuAdminPhone}
           menuCookPhone={menuCookPhone}
@@ -9607,6 +9618,7 @@ export function BookingPanel() {
           onCompanyRequisiteDelete={handleCompanyRequisiteDelete}
           onCompanyRequisitesSave={handleCompanyRequisitesSave}
           onDefaultCheckInTimeChange={handleDefaultCheckInTimeChange}
+          onDefaultCheckOutTimeChange={handleDefaultCheckOutTimeChange}
           onLinkMethodChange={handleLinkMethodChange}
           onLinkMethodDelete={handleLinkMethodDelete}
           onLinkSettingsSave={handleLinkSettingsSave}
@@ -13387,6 +13399,7 @@ function removeRecordKey<T>(record: Record<string, T>, key: string) {
 function SettingsModal({
   companyRequisites,
   defaultCheckInTime,
+  defaultCheckOutTime,
   linkMethods,
   menuAdminPhone,
   menuCookPhone,
@@ -13440,6 +13453,7 @@ function SettingsModal({
   onCompanyRequisiteDelete,
   onCompanyRequisitesSave,
   onDefaultCheckInTimeChange,
+  onDefaultCheckOutTimeChange,
   onLinkMethodChange,
   onLinkMethodDelete,
   onLinkSettingsSave,
@@ -13487,6 +13501,7 @@ function SettingsModal({
 }: {
   companyRequisites: Record<string, string>;
   defaultCheckInTime: string;
+  defaultCheckOutTime: string;
   linkMethods: Record<string, string>;
   menuAdminPhone: string;
   menuCookPhone: string;
@@ -13540,6 +13555,7 @@ function SettingsModal({
   onCompanyRequisiteDelete: (fieldId: string) => void;
   onCompanyRequisitesSave: () => void;
   onDefaultCheckInTimeChange: (value: string) => void;
+  onDefaultCheckOutTimeChange: (value: string) => void;
   onLinkMethodChange: (methodId: string, value: string) => void;
   onLinkMethodDelete: (methodId: string) => void;
   onLinkSettingsSave: () => void;
@@ -14873,10 +14889,7 @@ function SettingsModal({
                     Время заезда
                     <input type="time" value={defaultCheckInTime} onChange={(event) => onDefaultCheckInTimeChange(event.target.value)} />
                   </label>
-                  <div className="gpb-fixed-checkout-time">
-                    <span>Выезд</span>
-                    <strong>{DEFAULT_CHECK_OUT_TIME}</strong>
-                  </div>
+                  <label>Время выезда<input type="time" value={defaultCheckOutTime} onChange={(event) => onDefaultCheckOutTimeChange(event.target.value)} /></label>
                 </div>
               </section>
 
@@ -27566,7 +27579,7 @@ function buildReservationTotalMessage(reservation: Reservation, rooms: Room[]) {
   return lines.join("\n").trim();
 }
 
-function buildReservationPaymentConfirmationMessage(reservation: Reservation, rooms: Room[], defaultStayCheckInTime = DEFAULT_CHECK_IN_TIME) {
+function buildReservationPaymentConfirmationMessage(reservation: Reservation, rooms: Room[], defaultStayCheckInTime = DEFAULT_CHECK_IN_TIME, defaultStayCheckOutTime = DEFAULT_CHECK_OUT_TIME) {
   const paidAmount = getReservationPaidAmount(reservation);
   const balance = Math.max(0, reservation.total - paidAmount);
   const paymentLabel = getManualSalePaymentLabel(reservation.paymentMethod ?? "");
@@ -27585,7 +27598,7 @@ function buildReservationPaymentConfirmationMessage(reservation: Reservation, ro
     "Подтверждение брони",
     `Номера: ${formatReservationConfirmationRooms(reservation, rooms)}`,
     hasDifferentPeriods || !firstNightlyItem ? "" : `Заезд: ${formatKazakhDate(firstNightlyItem.checkIn || reservation.checkIn)} ${defaultStayCheckInTime || DEFAULT_CHECK_IN_TIME}`,
-    hasDifferentPeriods || !firstNightlyItem ? "" : `Выезд: ${formatKazakhDate(firstNightlyItem.checkOut || reservation.checkOut)} ${DEFAULT_CHECK_OUT_TIME}`,
+    hasDifferentPeriods || !firstNightlyItem ? "" : `Выезд: ${formatKazakhDate(firstNightlyItem.checkOut || reservation.checkOut)} ${reservation.checkOutTime || defaultStayCheckOutTime}`,
     serviceLines,
     formatReservationGuestCountText(reservation),
     `Итого: ${formatPrice(reservation.total)}`,

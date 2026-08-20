@@ -29,7 +29,7 @@ Set these backend environment variables and redeploy:
 ```text
 AUTH_REQUIRED=true
 AUTH_SESSION_HOURS=12
-MIN_EXTENSION_VERSION=1.0.268
+MIN_EXTENSION_VERSION=1.0.269
 EXTENSION_UPDATE_URL=
 ```
 

@@ -1034,6 +1034,7 @@ export function BookingPanel() {
   const [adminCommentVoiceState, setAdminCommentVoiceState] = useState<"idle" | "listening" | "unsupported">("idle");
   const [defaultCheckInTime, setDefaultCheckInTime] = useState(DEFAULT_CHECK_IN_TIME);
   const [defaultCheckOutTime, setDefaultCheckOutTime] = useState(DEFAULT_CHECK_OUT_TIME);
+  const [bookingDefaultsRevision, setBookingDefaultsRevision] = useState("no-breakfast-default-v1");
   const [guestFirstName, setGuestFirstName] = useState("");
   const [guestPhone, setGuestPhone] = useState("");
   const [guestPhonePrefix, setGuestPhonePrefix] = useState("+7");
@@ -2820,6 +2821,7 @@ export function BookingPanel() {
     saveCustomCatalogOptionsToLocal(settings.customAmenityOptions, settings.customFoodOptions);
     setDefaultCheckInTime(settings.defaultCheckInTime);
     setDefaultCheckOutTime(settings.defaultCheckOutTime);
+    setBookingDefaultsRevision(settings.bookingDefaultsRevision);
     setWeatherLocationName(settings.weatherLocationName);
     setWeatherLatitude(settings.weatherLatitude);
     setWeatherLongitude(settings.weatherLongitude);
@@ -2865,6 +2867,7 @@ export function BookingPanel() {
   function buildPaymentSettingsPatch(overrides: Partial<PaymentSettings> = {}) {
     return {
       paymentLink,
+      bookingDefaultsRevision,
       paymentMethods,
       linkMethods,
       companyRequisites,
@@ -2937,6 +2940,7 @@ export function BookingPanel() {
     return {
       waChatId: activeChat?.waChatId || undefined,
       selectedRoomId,
+      bookingDefaultsRevision,
       selectedBookingRoomIds,
       roomDateOverrides,
       checkIn,
@@ -3532,13 +3536,18 @@ export function BookingPanel() {
       : restoredSelectedBookingRoomIds.includes(draft.selectedRoomId)
         ? draft.selectedRoomId
         : restoredSelectedBookingRoomIds[0] ?? "";
+    const restoredHasHourlyBookingObject = restoredSelectedBookingRoomIds.some((roomId) => {
+      const room = pricedRooms.find((candidate) => candidate.id === roomId);
+      return Boolean(room && isHourlyBookingObject(room));
+    });
+    const bookingDefaultsChanged = !restoredHasActiveReservation && draft.bookingDefaultsRevision !== bookingDefaultsRevision;
     setSelectedRoomId(shouldResetPastBookingFields ? "" : restoredSelectedRoomId);
     setSelectedBookingRoomIds(shouldResetPastBookingFields ? [] : restoredSelectedBookingRoomIds);
     setRoomDateOverrides(shouldResetPastBookingFields ? {} : draft.roomDateOverrides ?? buildRoomDateOverridesFromReservation(draft.lastReservation));
     setCheckIn(restoredCheckIn);
     setCheckOut(restoredCheckOut);
-    setCheckInTime(draft.checkInTime || defaultCheckInTime);
-    setCheckOutTime(draft.hourlyHours && draft.hourlyHours > 2 ? draft.checkOutTime || defaultCheckOutTime : draft.checkOutTime || defaultCheckOutTime);
+    setCheckInTime(restoredHasActiveReservation || restoredHasHourlyBookingObject || !bookingDefaultsChanged ? draft.checkInTime || defaultCheckInTime : defaultCheckInTime);
+    setCheckOutTime(restoredHasActiveReservation || restoredHasHourlyBookingObject || !bookingDefaultsChanged ? draft.checkOutTime || defaultCheckOutTime : defaultCheckOutTime);
     setBookingComment(draft.comment ?? "");
     setAdminComment(draft.adminComment ?? draft.lastReservation?.adminComment ?? "");
     setGuestAdults(clampNumber(Math.round(draft.adults ?? draft.lastReservation?.adults ?? 0), 0, 99));
@@ -3556,22 +3565,27 @@ export function BookingPanel() {
     setExtraInventoryChargeEnabled(Boolean(draft.extraInventoryChargeEnabled ?? draft.lastReservation?.extraInventoryChargeEnabled));
     setExtraInventoryManual(Boolean(draft.extraInventoryManual));
     setExtraInventoryByRoomId(draft.extraInventoryByRoomId ?? buildExtraInventoryMapFromDraft(draft));
-    if (typeof draft.inventoryExtraPlacePrice === "number") setInventoryExtraPlacePrice(draft.inventoryExtraPlacePrice);
     setHourlyHours(Math.max(2, draft.hourlyHours ?? 2));
     const isLegacyAutoPeriodDiscount = draft.periodDiscountEnabled === undefined &&
       !draft.packageDiscountEnabled &&
       !draft.lastReservation &&
       draft.discountPercent > 0 &&
       (draft.discountPercent === packagePeriodDiscountPercent || draft.discountPercent === packageDiscountPercent);
-    const restoredDiscountPercent = isLegacyAutoPeriodDiscount ? 0 : draft.discountPercent;
+    const restoredDiscountPercent = restoredHasActiveReservation
+      ? draft.lastReservation?.discountPercent ?? draft.discountPercent
+      : bookingDefaultsChanged && draft.packageDiscountEnabled
+        ? packageDiscountPercent
+        : bookingDefaultsChanged && draft.periodDiscountEnabled && isPeriodDiscountEligible
+          ? packagePeriodDiscountPercent
+          : isLegacyAutoPeriodDiscount ? 0 : draft.discountPercent;
     setDiscountPercent(restoredDiscountPercent);
     setDiscountManualOverride(Boolean(restoredDiscountPercent && !draft.packageDiscountEnabled && !draft.periodDiscountEnabled));
-    setPackageDiscountEnabled(draft.packageDiscountEnabled ?? false);
-    setPeriodDiscountEnabled(draft.periodDiscountEnabled ?? false);
+    setPackageDiscountEnabled(restoredHasActiveReservation ? Boolean(draft.packageDiscountEnabled) : Boolean(draft.packageDiscountEnabled && packageDiscountPercent > 0));
+    setPeriodDiscountEnabled(restoredHasActiveReservation ? Boolean(draft.periodDiscountEnabled) : Boolean(draft.periodDiscountEnabled && isPeriodDiscountEligible && packagePeriodDiscountPercent > 0));
     setPricePdfPeriodDiscountApplied(Boolean(draft.pricePdfPeriodDiscountApplied));
     setPackageDiscountWasApplied(false);
-    setBreakfastIncluded(draft.breakfastIncluded ?? false);
-    setManualTotalAmount(draft.manualTotalAmount ?? 0);
+    setBreakfastIncluded(restoredHasActiveReservation ? draft.lastReservation?.breakfastIncluded ?? draft.breakfastIncluded ?? true : bookingDefaultsChanged ? false : draft.breakfastIncluded ?? false);
+    setManualTotalAmount(bookingDefaultsChanged ? 0 : draft.manualTotalAmount ?? 0);
     const shouldRestoreManualSale = Boolean(draft.manualSaleOpen && window.localStorage.getItem(MANUAL_SALE_MODE_KEY) === "true");
     setManualSaleOpen(shouldRestoreManualSale);
     setBookingNewChatOpen(false);
@@ -3691,6 +3705,7 @@ export function BookingPanel() {
     setSendState("idle");
     if (activeChat) {
       await saveCachedChatBookingDraft(activeChat.id, {
+        bookingDefaultsRevision,
         selectedRoomId: "",
         selectedBookingRoomIds: [],
         roomDateOverrides: {},
@@ -5088,19 +5103,23 @@ export function BookingPanel() {
   }
 
   async function handleDefaultCheckInTimeChange(value: string) {
+    const nextRevision = new Date().toISOString();
+    setBookingDefaultsRevision(nextRevision);
     setDefaultCheckInTime(value);
     setCheckInTime(value);
     setLastReservation(null);
     setAgreementSent(false);
-    await savePaymentSettings(buildPaymentSettingsPatch({ defaultCheckInTime: value }));
+    await savePaymentSettings(buildPaymentSettingsPatch({ bookingDefaultsRevision: nextRevision, defaultCheckInTime: value }));
   }
 
   async function handleDefaultCheckOutTimeChange(value: string) {
+    const nextRevision = new Date().toISOString();
+    setBookingDefaultsRevision(nextRevision);
     setDefaultCheckOutTime(value);
     if (!hasHourlyBookingObject) setCheckOutTime(value);
     setLastReservation(null);
     setAgreementSent(false);
-    await savePaymentSettings(buildPaymentSettingsPatch({ defaultCheckOutTime: value }));
+    await savePaymentSettings(buildPaymentSettingsPatch({ bookingDefaultsRevision: nextRevision, defaultCheckOutTime: value }));
   }
 
   async function handlePaymentMethodChange(methodId: string, value: string) {
@@ -5412,11 +5431,14 @@ export function BookingPanel() {
   }
 
   async function handleInventorySettingsChange(nextSettings: { airBedPrice: number; airBeds: number; rollawayPrice: number; rollaways: number }) {
+    const nextRevision = new Date().toISOString();
+    setBookingDefaultsRevision(nextRevision);
     setInventoryAirBeds(nextSettings.airBeds);
     setInventoryRollaways(nextSettings.rollaways);
     setInventoryAirBedPrice(nextSettings.airBedPrice);
     setInventoryRollawayPrice(nextSettings.rollawayPrice);
     await savePaymentSettings(buildPaymentSettingsPatch({
+      bookingDefaultsRevision: nextRevision,
       inventoryAirBeds: nextSettings.airBeds,
       inventoryRollaways: nextSettings.rollaways,
       inventoryAirBedPrice: nextSettings.airBedPrice,
@@ -5476,6 +5498,8 @@ export function BookingPanel() {
     includeAmenities: boolean;
     minRooms: number;
   }) {
+    const nextRevision = new Date().toISOString();
+    setBookingDefaultsRevision(nextRevision);
     setPackageDiscountPercent(nextSettings.discountPercent);
     setInventoryExtraPlaceAdultPercent(nextSettings.extraPlaceAdultPercent);
     setInventoryExtraPlaceTeenPercent(nextSettings.extraPlaceTeenPercent);
@@ -5488,6 +5512,7 @@ export function BookingPanel() {
     setPackageIncludeAmenities(nextSettings.includeAmenities);
     setPackageMinRooms(nextSettings.minRooms);
     await savePaymentSettings(buildPaymentSettingsPatch({
+      bookingDefaultsRevision: nextRevision,
       packageDiscountPercent: nextSettings.discountPercent,
       inventoryExtraPlaceAdultPercent: nextSettings.extraPlaceAdultPercent,
       inventoryExtraPlaceTeenPercent: nextSettings.extraPlaceTeenPercent,
@@ -5507,6 +5532,8 @@ export function BookingPanel() {
     periodDiscountFrom: string;
     periodDiscountTo: string;
   }>) {
+    const nextRevision = new Date().toISOString();
+    setBookingDefaultsRevision(nextRevision);
     if (pricePdfPeriodDiscountApplied) {
       setPricePdfPeriodDiscountApplied(false);
       setPeriodDiscountEnabled(false);
@@ -5521,6 +5548,7 @@ export function BookingPanel() {
     setPackagePeriodDiscountFrom(nextFrom);
     setPackagePeriodDiscountTo(nextTo);
     await savePaymentSettings(buildPaymentSettingsPatch({
+      bookingDefaultsRevision: nextRevision,
       packagePeriodDiscountPercent: nextPercent,
       packagePeriodDiscountFrom: nextFrom,
       packagePeriodDiscountTo: nextTo

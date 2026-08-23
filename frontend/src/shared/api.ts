@@ -752,6 +752,7 @@ function normalizePaymentSettings(settings: any): PaymentSettings {
         ? settings.pricePdfLinkIds.filter((id: unknown): id is string => typeof id === "string" && id.trim().length > 0)
         : [];
       return {
+        bookingDefaultsRevision: typeof settings?.bookingDefaultsRevision === "string" && settings.bookingDefaultsRevision ? settings.bookingDefaultsRevision : "no-breakfast-default-v1",
         paymentLink: typeof settings?.paymentLink === "string" ? settings.paymentLink : "",
         paymentMethods,
         linkMethods,

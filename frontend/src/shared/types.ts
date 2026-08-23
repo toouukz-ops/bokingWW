@@ -190,6 +190,7 @@ export interface AiReplySuggestions {
 }
 
 export interface PaymentSettings {
+  bookingDefaultsRevision: string;
   paymentLink: string;
   paymentMethods: Record<string, string>;
   linkMethods: Record<string, string>;
@@ -362,6 +363,7 @@ export interface ExpenseEntry {
 }
 
 export interface ChatBookingDraft {
+  bookingDefaultsRevision?: string;
   waChatId?: string;
   manualStatus?: ManualChatStatus;
   manualStatusAt?: string;

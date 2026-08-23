@@ -26907,6 +26907,13 @@ function formatRoomPriceLine(room: Room) {
   const holidayPrice = room.holidayPrice || weekendPrice;
   const priceLabel = isHourlyObject(room) ? "Цена за час" : "Цена";
 
+  if (!isHourlyObject(room) && weekdayPrice === weekendPrice) {
+    return [
+      `Цена номера: ${formatPrice(weekdayPrice)}`,
+      holidayPrice !== weekdayPrice ? `Праздники: ${formatPrice(holidayPrice)}` : ""
+    ].filter(Boolean).join("\n");
+  }
+
   if (weekdayPrice === weekendPrice && weekdayPrice === holidayPrice) {
     return `${priceLabel}: ${formatPrice(weekdayPrice)}`;
   }
@@ -26942,7 +26949,19 @@ function getRoomDayTypePriceLines(room: Room, checkIn: string, checkOut: string,
   const labels: Record<"weekday" | "weekend" | "holiday", string> = compact
     ? { weekday: "Будни", weekend: "Выходные", holiday: "Праздники" }
     : { weekday: "Будни", weekend: "Выходные", holiday: "Праздники" };
-  return getPriceTypesInRange(checkIn, checkOut).map((type) => `${labels[type]}: ${formatPrice(getPriceForType(room, type))}`);
+  const selectedTypes = getPriceTypesInRange(checkIn, checkOut);
+  const weekdayPrice = getPriceForType(room, "weekday");
+  const weekendPrice = getPriceForType(room, "weekend");
+  if (!isHourlyObject(room) && weekdayPrice === weekendPrice) {
+    const lines = selectedTypes.some((type) => type === "weekday" || type === "weekend")
+      ? [`Цена номера: ${formatPrice(weekdayPrice)}`]
+      : [];
+    if (selectedTypes.includes("holiday") && getPriceForType(room, "holiday") !== weekdayPrice) {
+      lines.push(`Праздники: ${formatPrice(getPriceForType(room, "holiday"))}`);
+    }
+    return lines;
+  }
+  return selectedTypes.map((type) => `${labels[type]}: ${formatPrice(getPriceForType(room, type))}`);
 }
 
 function getPriceProposalRoomPriceLines(room: Room, checkIn: string, checkOut: string, groupPeriodTotals: boolean) {
@@ -27002,10 +27021,14 @@ function getSocialPricePriceRows(
   if (activeDiscountPercent > 0) {
     rows.push({ label: "Без скидки", value: formatPrice(basePrice), tone: "secondary" });
   }
-  rows.push(
-    { label: "Будни", value: formatPrice(weekdayPrice), tone: "secondary" },
-    { label: "Выходные", value: formatPrice(weekendPrice), tone: "secondary" }
-  );
+  if (weekdayPrice === weekendPrice) {
+    rows.push({ label: "Цена номера", value: formatPrice(weekdayPrice), tone: "secondary" });
+  } else {
+    rows.push(
+      { label: "Будни", value: formatPrice(weekdayPrice), tone: "secondary" },
+      { label: "Выходные", value: formatPrice(weekendPrice), tone: "secondary" }
+    );
+  }
   return rows;
 }
 

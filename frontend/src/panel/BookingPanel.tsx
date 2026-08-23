@@ -27211,6 +27211,10 @@ function buildWhatsAppPreview(room: Room, checkInTime = DEFAULT_CHECK_IN_TIME, c
   const amenities = getVisibleAmenities(room);
   const foodLine = food.length ? `\nПитание: ${food.join(", ")}` : "";
   const sleepingPlaces = formatSleepingPlaces(room.sleepingPlaces);
+  const stayCapacity = isStayBookingObject(room) ? getRoomTotalSleepingCapacity(room) : 0;
+  const stayCapacityLine = stayCapacity > 0
+    ? `\nВместимость: ${formatCapacityTitle(stayCapacity)} / Мест: ${formatPlaceCount(stayCapacity)}`
+    : "";
   const sleepingLine = sleepingPlaces ? `\nМеста: ${sleepingPlaces}` : "";
   const extraSleepingPlaces = formatConfiguredExtraSleepingPlaces(room.sleepingPlaces);
   const extraSleepingLine = extraSleepingPlaces ? `\nДопместа: ${extraSleepingPlaces}` : "";
@@ -27221,7 +27225,7 @@ function buildWhatsAppPreview(room: Room, checkInTime = DEFAULT_CHECK_IN_TIME, c
   const minimumDuration = room.objectType === "sauna" ? "\nМинимум 2 часа" : "";
   const times = shouldShowStayTimes(room) ? `\nЗаезд с ${checkInTime}, выезд до ${checkOutTime}` : "";
   const titleLine = getCatalogCardTitle(room);
-  return `${titleLine}${capacityLine}${sleepingLine}${extraSleepingLine}${foodLine}${amenitiesLine}${minimumDuration}${times}\n${price}`;
+  return `${titleLine}${capacityLine}${stayCapacityLine}${sleepingLine}${extraSleepingLine}${foodLine}${amenitiesLine}${minimumDuration}${times}\n${price}`;
 }
 
 function buildReservationMessage(reservation: Reservation, rooms: Room[]) {

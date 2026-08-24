@@ -24546,9 +24546,46 @@ function formatAdminDayGroupLine(group: AdminDayEntryGroup) {
 function getAdminDayGroupBalance(group: AdminDayEntryGroup) {
   const items = group.entries.map((entry) => entry.item);
   if (items.length) {
-    return items.reduce((sum, item) => sum + getReservationItemBalance(item), 0);
+    const reservationItems = getReservationItems(group.reservation);
+    const paidByItemId = distributeActualReservationPaymentByItem(group.reservation, reservationItems);
+    return items.reduce((sum, item) => {
+      const actualPaidAmount = paidByItemId.get(item.id) ?? 0;
+      return sum + Math.max(0, item.total - actualPaidAmount);
+    }, 0);
   }
   return getReservationBalance(group.reservation);
+}
+
+function distributeActualReservationPaymentByItem(reservation: Reservation, items: ReservationItem[]) {
+  const result = new Map<string, number>();
+  if (!items.length) return result;
+
+  let remainingPaidAmount = getReservationPaidAmount(reservation);
+  for (const item of items) {
+    if (remainingPaidAmount <= 0) break;
+    const explicitlyPaidAmount = item.balancePaidAt
+      ? item.total
+      : clampNumber(item.paidAmount ?? 0, 0, item.total);
+    const acceptedAmount = Math.min(remainingPaidAmount, explicitlyPaidAmount);
+    if (acceptedAmount > 0) result.set(item.id, acceptedAmount);
+    remainingPaidAmount -= acceptedAmount;
+  }
+
+  const unpaidItems = items.filter((item) => (result.get(item.id) ?? 0) < item.total);
+  const unpaidTotal = unpaidItems.reduce((sum, item) => sum + Math.max(0, item.total - (result.get(item.id) ?? 0)), 0);
+  let distributedAmount = 0;
+  unpaidItems.forEach((item, index) => {
+    if (remainingPaidAmount <= 0 || unpaidTotal <= 0) return;
+    const itemUnpaid = Math.max(0, item.total - (result.get(item.id) ?? 0));
+    const proportionalAmount = index === unpaidItems.length - 1
+      ? remainingPaidAmount - distributedAmount
+      : Math.round(remainingPaidAmount * itemUnpaid / unpaidTotal);
+    const acceptedAmount = clampNumber(proportionalAmount, 0, itemUnpaid);
+    result.set(item.id, (result.get(item.id) ?? 0) + acceptedAmount);
+    distributedAmount += acceptedAmount;
+  });
+
+  return result;
 }
 
 function formatAdminReservationComment(reservation: Reservation, balance: number) {
